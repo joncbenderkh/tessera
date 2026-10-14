@@ -75,8 +75,10 @@ Use the local toolchain: `export PATH=/usr/local/go/bin:$PATH`.
 - Vet: `go vet ./...`
 - Format check: `gofmt -l .` (must print nothing).
 - Lint: `go run honnef.co/go/tools/cmd/staticcheck@v0.8.2 ./...`
-- CI (`.github/workflows/ci.yml`) runs all of these, plus a `go generate`
-  drift check and an SPDX header check, on the `go.mod` minimum and stable Go.
+- CI (`.github/workflows/ci.yml`) builds, tests, vets, and checks the
+  `CGO_ENABLED=0` build on both the `go.mod` minimum and stable Go. On
+  stable only, it also runs the format check, staticcheck, a `go generate`
+  drift check, and an SPDX header check. It does not run the host.
 - Plugins and `sdk/` must also build with `CGO_ENABLED=0`.
 
 The host needs Gio's system packages. On Fedora: `wayland-devel`,
