@@ -87,12 +87,26 @@ The host needs Gio's system packages. On Fedora: `wayland-devel`,
 `vulkan-loader-devel`. Build with `-tags nox11` or `-tags nowayland` to drop a
 backend.
 
+## Releasing
+
+1. Bump `./VERSION` in a PR and merge it.
+2. Tag the merge commit on `main` and push the tag:
+   `git tag v$(cat VERSION) && git push origin v$(cat VERSION)`.
+
+`.github/workflows/release.yml` fails unless the tag equals `v` + `VERSION`.
+It builds the host natively on linux/amd64, linux/arm64, darwin/arm64, and
+windows/amd64, cross-builds every `plugins/*` main package with
+`CGO_ENABLED=0` for the same targets, and publishes the archives with
+`SHA256SUMS` and generated notes as a GitHub release. On PRs that touch
+the workflow it runs the builds without publishing. The macOS host is a
+bare binary, not a signed `.app` bundle.
+
 ## Status
 
 The module and source skeleton exist (#4): the host opens an empty Gio
 window, and `proto/`, `sdk/`, and `plugins/` are placeholders. The backlog
-is tracked as GitHub issues. CI is in place (#5); next are the release
-workflow (#6), the config format (#7), and the plugin protocol (#8).
+is tracked as GitHub issues. CI (#5) and the release workflow (#6) are in
+place; next are the config format (#7) and the plugin protocol (#8).
 
 ## Git workflow
 
