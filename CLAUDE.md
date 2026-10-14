@@ -20,8 +20,7 @@ on) are plugins that use the same protocol as third-party ones.
   mirror it.
 - **Language / stack:** Go 1.24+, the minimum set by `gioui.org` v0.10.3
   (latest as of 2026-10-14, whose `go.mod` declares `go 1.24.0`). The
-  local system toolchain is go1.23.4. `GOTOOLCHAIN=auto` downloads a newer
-  toolchain on demand, but installing Go 1.24+ is cleaner.
+  local toolchain is go1.27.2 (`/usr/local/go`).
 - **GUI:** [Gio](https://gioui.org) (`gioui.org`), immediate mode. Gio needs
   cgo on Linux (Wayland/X11, EGL/Vulkan, xkbcommon), so the host binary is
   **not** `CGO_ENABLED=0`. CI needs the system dev packages, and
