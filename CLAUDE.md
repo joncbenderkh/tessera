@@ -70,7 +70,7 @@ dialogs). Edit mode must be able to re-enable any disabled panel.
 
 Use the local toolchain: `export PATH=/usr/local/go/bin:$PATH`.
 
-- Build the host: `go build ./cmd/tessera`; `tessera --version`.
+- Build the host: `go build ./cmd/tessera`; `./tessera --version`.
 - Test: `go test ./...`
 - Vet: `go vet ./...`
 - Format check: `gofmt -l .` (must print nothing).
