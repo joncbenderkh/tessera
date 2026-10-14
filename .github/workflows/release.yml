@@ -1,0 +1,164 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  pull_request:
+    paths: [".github/workflows/release.yml"]
+
+permissions:
+  contents: read
+
+env:
+  GOTOOLCHAIN: local
+
+jobs:
+  version:
+    name: Resolve version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Check the tag matches VERSION
+        id: version
+        run: |
+          version=$(tr -d '[:space:]' < VERSION)
+          if [ "$GITHUB_REF_TYPE" = tag ] && [ "$GITHUB_REF_NAME" != "v$version" ]; then
+            echo "::error::tag $GITHUB_REF_NAME does not match VERSION $version"
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+  host:
+    name: Host (${{ matrix.goos }}/${{ matrix.goarch }})
+    needs: version
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { runner: ubuntu-latest, goos: linux, goarch: amd64 }
+          - { runner: ubuntu-24.04-arm, goos: linux, goarch: arm64 }
+          - { runner: macos-latest, goos: darwin, goarch: arm64 }
+          - { runner: windows-latest, goos: windows, goarch: amd64 }
+    defaults:
+      run:
+        shell: bash
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+      GOOS: ${{ matrix.goos }}
+      GOARCH: ${{ matrix.goarch }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version: stable
+
+      - name: Install Gio system packages
+        if: matrix.goos == 'linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            gcc pkg-config libwayland-dev libx11-dev libx11-xcb-dev \
+            libxkbcommon-x11-dev libgles2-mesa-dev libegl1-mesa-dev \
+            libffi-dev libxcursor-dev libxfixes-dev libvulkan-dev
+
+      - name: Build
+        run: |
+          ldflags="-s -w"
+          ext=""
+          if [ "$GOOS" = windows ]; then ldflags="$ldflags -H windowsgui"; ext=.exe; fi
+          mkdir -p "stage" dist
+          go build -trimpath -ldflags "$ldflags" -o "stage/tessera$ext" ./cmd/tessera
+          cp LICENSE stage/
+
+      - name: Smoke test
+        if: matrix.goos != 'windows'
+        run: test "$(stage/tessera --version)" = "tessera $VERSION"
+
+      - name: Package
+        run: |
+          name="tessera_${VERSION}_${GOOS}_${GOARCH}"
+          if [ "$GOOS" = windows ]; then
+            (cd stage && 7z a -tzip "../dist/$name.zip" .)
+          else
+            tar -C stage -czf "dist/$name.tar.gz" .
+          fi
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: host-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: dist/*
+          if-no-files-found: error
+
+  plugins:
+    name: First-party plugins
+    needs: version
+    runs-on: ubuntu-latest
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+      CGO_ENABLED: "0"
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version: stable
+
+      - name: Build and package for every target
+        run: |
+          mapfile -t plugins < <(go list -f '{{if eq .Name "main"}}{{.Dir}}{{end}}' ./plugins/...)
+          if [ ${#plugins[@]} -eq 0 ]; then
+            echo "No first-party plugins yet; nothing to build."
+            exit 0
+          fi
+          mkdir -p dist
+          for target in linux/amd64 linux/arm64 darwin/arm64 windows/amd64; do
+            export GOOS=${target%/*} GOARCH=${target#*/}
+            ext=""; [ "$GOOS" = windows ] && ext=.exe
+            stage=$(mktemp -d)
+            for dir in "${plugins[@]}"; do
+              go build -trimpath -ldflags "-s -w" -o "$stage/$(basename "$dir")$ext" "$dir"
+            done
+            cp LICENSE "$stage/"
+            name="tessera-plugins_${VERSION}_${GOOS}_${GOARCH}"
+            if [ "$GOOS" = windows ]; then
+              (cd "$stage" && zip -qr "$GITHUB_WORKSPACE/dist/$name.zip" .)
+            else
+              tar -C "$stage" -czf "dist/$name.tar.gz" .
+            fi
+          done
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: plugins
+          path: dist/*
+          if-no-files-found: ignore
+
+  publish:
+    name: Publish release
+    needs: [version, host, plugins]
+    if: github.ref_type == 'tag'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Checksums
+        working-directory: dist
+        run: sha256sum -- * > SHA256SUMS && cat SHA256SUMS
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" dist/* \
+            --repo "$GITHUB_REPOSITORY" --verify-tag --generate-notes \
+            --title "tessera ${{ needs.version.outputs.version }}"
