@@ -10,6 +10,13 @@ built-in panels and only handles layout, rendering, configuration, and
 plugin lifecycle. Even the first-party panels (clock, system stats, and so
 on) are plugins that use the same protocol as third-party ones.
 
+**The content area holds nothing but plugin panels.** That includes
+greetings, headings, captions, and explanatory text: if it appears in the
+grid, a plugin provides it and the user can disable it. The host owns only
+the window header (app name, layout selector, plugin status, edit-layout
+toggle, theme toggle) and transient UI (edit-mode controls, toasts,
+dialogs). Edit mode must be able to re-enable any disabled panel.
+
 ## Decisions
 
 - **License:** GPL-3.0-or-later. `LICENSE` at repo root;
