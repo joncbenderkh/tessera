@@ -56,19 +56,38 @@ dialogs). Edit mode must be able to re-enable any disabled panel.
   undecided; pick it at scaffold time.
 - **Module path:** `github.com/joncbenderkh/tessera`.
 
-## Intended layout (not yet created)
+## Layout
 
+- `version.go`: package `tessera`, which embeds `./VERSION` as
+  `tessera.Version`.
 - `cmd/tessera`: the host (Gio window, layout, plugin manager).
 - `proto/`: the plugin protocol (`.proto`) and generated Go code.
 - `sdk/`: the Go helper library plugin authors import, which hides the
   go-plugin/gRPC boilerplate.
 - `plugins/<name>`: first-party panels, each its own `main` package.
 
+## Commands
+
+Use the local toolchain: `export PATH=/usr/local/go/bin:$PATH`.
+
+- Build the host: `go build ./cmd/tessera`; `tessera --version`.
+- Test: `go test ./...`
+- Vet: `go vet ./...`
+- Format check: `gofmt -l .` (must print nothing).
+- Plugins and `sdk/` must also build with `CGO_ENABLED=0`.
+
+The host needs Gio's system packages. On Fedora: `wayland-devel`,
+`libxkbcommon-devel`, `libxkbcommon-x11-devel`, `libX11-devel`,
+`libXcursor-devel`, `libXfixes-devel`, `libglvnd-devel`,
+`vulkan-loader-devel`. Build with `-tags nox11` or `-tags nowayland` to drop a
+backend.
+
 ## Status
 
-Only the repository, `LICENSE`, and this file exist. The source scaffold,
-CI (`.github/workflows/ci.yml`), and the tag-driven release workflow come
-next, in a session opened in this directory, using the `new-project` skill.
+The module and source skeleton exist (#4): the host opens an empty Gio
+window, and `proto/`, `sdk/`, and `plugins/` are placeholders. The backlog
+is tracked as GitHub issues, starting with CI (#5), the release workflow
+(#6), the config format (#7), and the plugin protocol (#8).
 
 ## Git workflow
 
