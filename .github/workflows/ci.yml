@@ -1,0 +1,86 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  GOTOOLCHAIN: local
+  SPDX_HEADER: "// SPDX-License-Identifier: GPL-3.0-or-later"
+
+jobs:
+  build:
+    name: Build and test (Go ${{ matrix.go }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - go: minimum
+            go-version-file: go.mod
+          - go: stable
+            go-version: stable
+            lint: true
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version: ${{ matrix.go-version }}
+          go-version-file: ${{ matrix.go-version-file }}
+
+      - name: Install Gio system packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            gcc pkg-config libwayland-dev libx11-dev libx11-xcb-dev \
+            libxkbcommon-x11-dev libgles2-mesa-dev libegl1-mesa-dev \
+            libffi-dev libxcursor-dev libxfixes-dev libvulkan-dev
+
+      - name: Build
+        run: go build ./...
+
+      - name: Build everything except the host without cgo
+        env:
+          CGO_ENABLED: "0"
+        run: go list -e ./... | grep -v '/cmd/tessera$' | xargs go build
+
+      - name: Test
+        run: go test ./...
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Check formatting
+        if: matrix.lint
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "::error::gofmt needed on:"; echo "$unformatted"; exit 1
+          fi
+
+      - name: Staticcheck
+        if: matrix.lint
+        run: go run honnef.co/go/tools/cmd/staticcheck@v0.8.2 ./...
+
+      - name: Check generated code is up to date
+        if: matrix.lint
+        run: |
+          go generate ./...
+          git diff --exit-code
+          test -z "$(git status --porcelain)"
+
+      - name: Check SPDX headers
+        if: matrix.lint
+        run: |
+          missing=0
+          for f in $(git ls-files '*.go' '*.proto'); do
+            if [ "$(head -n 1 "$f")" != "$SPDX_HEADER" ]; then
+              echo "::error file=$f,line=1::missing SPDX header"; missing=1
+            fi
+          done
+          exit $missing

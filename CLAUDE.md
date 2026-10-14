@@ -74,6 +74,9 @@ Use the local toolchain: `export PATH=/usr/local/go/bin:$PATH`.
 - Test: `go test ./...`
 - Vet: `go vet ./...`
 - Format check: `gofmt -l .` (must print nothing).
+- Lint: `go run honnef.co/go/tools/cmd/staticcheck@v0.8.2 ./...`
+- CI (`.github/workflows/ci.yml`) runs all of these, plus a `go generate`
+  drift check and an SPDX header check, on the `go.mod` minimum and stable Go.
 - Plugins and `sdk/` must also build with `CGO_ENABLED=0`.
 
 The host needs Gio's system packages. On Fedora: `wayland-devel`,
@@ -86,8 +89,8 @@ backend.
 
 The module and source skeleton exist (#4): the host opens an empty Gio
 window, and `proto/`, `sdk/`, and `plugins/` are placeholders. The backlog
-is tracked as GitHub issues, starting with CI (#5), the release workflow
-(#6), the config format (#7), and the plugin protocol (#8).
+is tracked as GitHub issues. CI is in place (#5); next are the release
+workflow (#6), the config format (#7), and the plugin protocol (#8).
 
 ## Git workflow
 
