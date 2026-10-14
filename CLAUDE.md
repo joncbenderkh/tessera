@@ -18,9 +18,10 @@ on) are plugins that use the same protocol as third-party ones.
 - **Version:** starts at `0.1.0`. `./VERSION` is the single source of truth,
   embedded at build time (`//go:embed VERSION`); release tags `vX.Y.Z`
   mirror it.
-- **Language / stack:** Go. The minimum Go version comes from whatever
-  `gioui.org` requires when the project is scaffolded. The local toolchain
-  (go1.23.4 as of 2026-10-14) is probably too old for it.
+- **Language / stack:** Go 1.24+, the minimum set by `gioui.org` v0.10.3
+  (latest as of 2026-10-14, whose `go.mod` declares `go 1.24.0`). The
+  local system toolchain is go1.23.4. `GOTOOLCHAIN=auto` downloads a newer
+  toolchain on demand, but installing Go 1.24+ is cleaner.
 - **GUI:** [Gio](https://gioui.org) (`gioui.org`), immediate mode. Gio needs
   cgo on Linux (Wayland/X11, EGL/Vulkan, xkbcommon), so the host binary is
   **not** `CGO_ENABLED=0`. CI needs the system dev packages, and
