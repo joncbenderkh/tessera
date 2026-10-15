@@ -186,6 +186,33 @@ func TestCloseKillsUnresponsivePlugin(t *testing.T) {
 	}
 }
 
+func TestCloseStopsHandshake(t *testing.T) {
+	dir := install(t, "slow-start")
+	logger, _ := newLogger()
+	m := Start(config.Config{Panels: []config.Panel{{ID: "s", Plugin: "slow-start", W: 1, H: 1}}}, dir, logger)
+	time.Sleep(300 * time.Millisecond) // until it is in the handshake
+	start := time.Now()
+	m.Close()
+	if d := time.Since(start); d > time.Second {
+		t.Errorf("Close took %v", d)
+	}
+}
+
+func TestLaunchCanceled(t *testing.T) {
+	dir := install(t, "slow-start")
+	logger, _ := newLogger()
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	_, err := Launch(ctx, dir, "slow-start", ignore, logger)
+	if err == nil || !strings.Contains(err.Error(), "context deadline exceeded") {
+		t.Fatalf("got %v, want a deadline error", err)
+	}
+	if d := time.Since(start); d > time.Second {
+		t.Errorf("Launch took %v", d)
+	}
+}
+
 func TestLineWriter(t *testing.T) {
 	var got []string
 	w := &lineWriter{output: func(line string) { got = append(got, line) }}
@@ -195,6 +222,13 @@ func TestLineWriter(t *testing.T) {
 	w.Flush()
 	if want := []string{"one", "two", "three"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("got %q, want %q", got, want)
+	}
+
+	got = nil
+	w.Write(bytes.Repeat([]byte("x"), 2*maxLine+1))
+	w.Flush()
+	if len(got) != 3 || len(got[0]) != maxLine || len(got[1]) != maxLine || got[2] != "x" {
+		t.Fatalf("a line of 2*maxLine+1 bytes: got pieces of %d bytes", len(got))
 	}
 }
 

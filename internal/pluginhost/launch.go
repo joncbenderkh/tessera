@@ -7,7 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"os/exec"
+	"path/filepath"
 	"slices"
 	"sync"
 	"time"
@@ -62,41 +62,42 @@ type Instance struct {
 	Info    *tesserav1.DescribeResponse
 	Client  tesserav1.PanelServiceClient
 	client  *plugin.Client
-	cmd     *exec.Cmd
+	runner  *procRunner
 	outputs []*lineWriter
 }
 
 // Launch starts the plugin called name in dir, checks its versions, and
 // describes it. Each line the plugin writes goes to output: from its
 // stderr pipe, and from the stdout and stderr a go-plugin plugin
-// forwards over the GRPCStdio service. On error, no process is left
-// running.
+// forwards over the GRPCStdio service. Canceling ctx stops the launch,
+// the handshake included. On error, no process is left running.
 func Launch(ctx context.Context, dir, name string, output func(line string), logger *log.Logger) (*Instance, error) {
 	path, err := find(dir, name)
 	if err != nil {
 		return nil, err
 	}
-	cmd := exec.Command(path)
-	ownProcessGroup(cmd)
-	inst := &Instance{cmd: cmd}
+	inst := &Instance{runner: &procRunner{path: path}}
 	for range 3 {
 		inst.outputs = append(inst.outputs, &lineWriter{output: output})
 	}
 	inst.client = plugin.NewClient(&plugin.ClientConfig{
 		HandshakeConfig:  handshake,
 		Plugins:          plugin.PluginSet{"panel": panelPlugin{}},
-		Cmd:              cmd,
+		RunnerFunc:       inst.runner.runnerFunc,
 		AllowedProtocols: []plugin.Protocol{plugin.ProtocolGRPC},
 		AutoMTLS:         true,
 		StartTimeout:     startTimeout,
 		Stderr:           inst.outputs[0],
 		SyncStdout:       inst.outputs[1],
 		SyncStderr:       inst.outputs[2],
-		Logger: quietStderr{hclog.New(&hclog.LoggerOptions{
-			Name:   "plugin " + name,
-			Output: logger.Writer(),
-			Level:  hclog.Warn,
-		})},
+		Logger: quietStderr{
+			Logger: hclog.New(&hclog.LoggerOptions{
+				Name:   "plugin " + name,
+				Output: logger.Writer(),
+				Level:  hclog.Warn,
+			}),
+			stderr: filepath.Base(path),
+		},
 	})
 	if err := inst.start(ctx, name); err != nil {
 		inst.Close()
@@ -106,7 +107,24 @@ func Launch(ctx context.Context, dir, name string, output func(line string), log
 }
 
 func (inst *Instance) start(ctx context.Context, name string) error {
-	rpc, err := inst.client.Client()
+	type started struct {
+		rpc plugin.ClientProtocol
+		err error
+	}
+	done := make(chan started, 1)
+	go func() {
+		rpc, err := inst.client.Client()
+		done <- started{rpc, err}
+	}()
+	var s started
+	select {
+	case s = <-done:
+	case <-ctx.Done():
+		inst.runner.kill() // Client returns once the plugin is gone
+		<-done
+		return fmt.Errorf("plugin %q: %w", name, ctx.Err())
+	}
+	rpc, err := s.rpc, s.err
 	if err != nil {
 		return fmt.Errorf("plugin %q failed to start (this host speaks protocol %d): %w", name, tesserav1.ProtocolVersion, err)
 	}
@@ -149,10 +167,11 @@ func Describe(ctx context.Context, dir, name string, output func(line string), l
 }
 
 // Close shuts the plugin down: Shutdown, then a kill if it is still
-// running 2 seconds later. If that has not finished within killTimeout,
-// because the plugin never answers Shutdown or a child of it holds its
-// stderr open, Close kills the plugin's process group (on Windows, the
-// plugin alone). It returns within killTimeout plus reapTimeout.
+// running 2 seconds later. Then it kills the plugin's process group (on
+// Windows, the plugin alone): at once if the plugin has exited, to end
+// children it left behind, or after killTimeout if go-plugin is still
+// waiting, on a plugin that never answers Shutdown or a child holding
+// its stderr open. It returns within killTimeout plus reapTimeout.
 func (inst *Instance) Close() {
 	defer func() {
 		for _, w := range inst.outputs {
@@ -166,12 +185,11 @@ func (inst *Instance) Close() {
 	}()
 	select {
 	case <-done:
+		inst.runner.kill()
 		return
 	case <-time.After(killTimeout):
 	}
-	if p := inst.cmd.Process; p != nil {
-		killGroup(p) // the exit unblocks Shutdown, and EOF the stderr reader
-	}
+	inst.runner.kill() // the exit unblocks Shutdown, and EOF the stderr reader
 	select {
 	case <-done:
 	case <-time.After(reapTimeout):
@@ -182,15 +200,24 @@ func (inst *Instance) Close() {
 func (inst *Instance) Exited() bool { return inst.client.Exited() }
 
 // quietStderr is go-plugin's logger minus the sub-logger it re-logs
-// plugin stderr lines through, since Launch passes those on raw.
-type quietStderr struct{ hclog.Logger }
+// plugin stderr lines through, which it names after the executable,
+// since Launch passes those lines on raw.
+type quietStderr struct {
+	hclog.Logger
+	stderr string
+}
 
 func (l quietStderr) Named(name string) hclog.Logger {
-	if name == "stdio" { // errors of the GRPCStdio client
-		return l.Logger.Named(name)
+	if name == l.stderr {
+		return hclog.NewNullLogger()
 	}
-	return hclog.NewNullLogger()
+	return l.Logger.Named(name)
 }
+
+// maxLine caps a buffered line, so a plugin that never writes a
+// newline cannot grow the host's memory; longer lines are passed on in
+// pieces.
+const maxLine = 64 << 10
 
 // lineWriter passes each complete line written to it to output.
 type lineWriter struct {
@@ -209,6 +236,10 @@ func (w *lineWriter) Write(b []byte) (int, error) {
 			continue
 		}
 		w.line = append(w.line, c)
+		if len(w.line) == maxLine {
+			w.output(string(w.line))
+			w.line = w.line[:0]
+		}
 	}
 	return len(b), nil
 }

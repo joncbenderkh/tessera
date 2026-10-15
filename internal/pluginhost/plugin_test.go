@@ -38,6 +38,9 @@ func TestMain(m *testing.M) {
 }
 
 func servePlugin(mode string) {
+	if mode == "slow-start" {
+		time.Sleep(time.Minute) // never reaches the handshake in a test
+	}
 	hs := handshake
 	switch mode {
 	case "proto-two":
@@ -71,6 +74,7 @@ func (testPlugin) GRPCClient(context.Context, *plugin.GRPCBroker, *grpc.ClientCo
 // plugin's file name:
 //
 //   - misnamed: Describe reports the name "other".
+//   - slow-start: no handshake for a minute.
 //   - proto-two: the handshake offers protocol 2.
 //   - plaintext: serves without mutual TLS.
 //   - view-nine: Describe picks view schema 9.

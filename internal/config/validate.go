@@ -67,6 +67,11 @@ func (c Config) Validate() error {
 			errs = append(errs, fmt.Errorf("%s: w and h must be at least 1, got %dx%d", name, p.W, p.H))
 			continue
 		}
+		// Plugins receive the size as two uint32s.
+		if int64(p.W) > math.MaxUint32 || int64(p.H) > math.MaxUint32 {
+			errs = append(errs, fmt.Errorf("%s: w and h must be at most %d, got %dx%d", name, uint32(math.MaxUint32), p.W, p.H))
+			continue
+		}
 		if p.X < 0 || p.Y < 0 {
 			errs = append(errs, fmt.Errorf("%s: x and y must not be negative, got (%d, %d)", name, p.X, p.Y))
 			continue

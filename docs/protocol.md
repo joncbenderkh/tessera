@@ -50,9 +50,11 @@ languages can follow its documented handshake:
    output it forwards over `GRPCStdio`, go to the host's log for that
    panel.
 
-On Unix each plugin runs in a process group of its own, and a forced
-kill takes the whole group, so a child process that holds the plugin's
-stderr open cannot keep the host from exiting. On Linux the kernel also
+A plugin's stdin is empty, and an output line longer than 64 KiB is
+logged in pieces. On Unix each plugin runs in a process group of its
+own, which is killed once the plugin has exited or been killed, so a
+child process that holds the plugin's stderr open cannot keep the host
+from exiting, and children left behind do not outlive it. On Linux the kernel also
 kills a plugin whose host dies without shutting it down. On Windows only
 the plugin itself is killed, and on macOS and Windows a plugin outlives
 a host that crashes.
