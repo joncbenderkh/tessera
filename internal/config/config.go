@@ -38,7 +38,7 @@ type Grid struct {
 }
 
 // Settings are a panel's plugin settings, resolved by YAML 1.2's core
-// schema; see extractSettings.
+// schema; see extractPanels.
 type Settings map[string]any
 
 // Panel places one plugin instance on the grid. X and Y are the zero-based
@@ -93,7 +93,7 @@ func Parse(data []byte) (Config, error) {
 	if err := rejectSharing(file); err != nil {
 		return Config{}, err
 	}
-	settings, err := extractSettings(file)
+	fields, err := extractPanels(file)
 	if err != nil {
 		return Config{}, err
 	}
@@ -105,11 +105,18 @@ func Parse(data []byte) (Config, error) {
 			return Config{}, err
 		}
 	}
-	if len(settings) != len(c.Panels) {
+	if len(fields) != len(c.Panels) {
 		return Config{}, errors.New("panels: syntax tree and decoded config disagree")
 	}
-	for i, s := range settings {
-		c.Panels[i].Settings = s
+	for i, f := range fields {
+		p := &c.Panels[i]
+		p.Settings = f.Settings
+		if f.ID != nil {
+			p.ID = *f.ID
+		}
+		if f.Plugin != nil {
+			p.Plugin = *f.Plugin
+		}
 	}
 	if err := c.Validate(); err != nil {
 		return Config{}, err
@@ -160,8 +167,8 @@ func Marshal(c Config) ([]byte, error) {
 		fmt.Fprintf(&b, "    x: %d\n    y: %d\n    w: %d\n    h: %d\n", p.X, p.Y, p.W, p.H)
 		if len(p.Settings) > 0 {
 			b.WriteString("    settings:\n")
-			if err := writeMap(&b, p.Settings, 6); err != nil {
-				return nil, fmt.Errorf("panel %q: settings.%w", p.ID, err)
+			if err := writeMap(&b, p.Settings, 6, "settings"); err != nil {
+				return nil, fmt.Errorf("panel %q: %w", p.ID, err)
 			}
 		}
 	}

@@ -36,7 +36,7 @@ var (
 
 // rejectSharing rejects aliases anywhere, and merge keys outside
 // settings, which would let settings come from a part of the tree that
-// extractSettings does not read.
+// extractPanels does not read.
 func rejectSharing(file *ast.File) error {
 	var err error
 	for _, doc := range file.Docs {
@@ -72,10 +72,19 @@ func (v sharingCheck) Visit(n ast.Node) ast.Visitor {
 	return v
 }
 
-// extractSettings resolves each panel's settings from the syntax tree by
+// panelFields are the parts of a panel read from the syntax tree rather
+// than by the YAML decoder. ID and Plugin are nil unless written as a
+// plain or quoted scalar.
+type panelFields struct {
+	Settings   Settings
+	ID, Plugin *string
+}
+
+// extractPanels resolves each panel's settings from the syntax tree by
 // the core schema and removes them from the tree, so the YAML decoder
-// never sees them. It returns one entry per panel, nil for none.
-func extractSettings(file *ast.File) ([]Settings, error) {
+// never sees them. It also takes id and plugin as written: the decoder
+// would turn "plugin: 017" into "15". It returns one entry per panel.
+func extractPanels(file *ast.File) ([]panelFields, error) {
 	if len(file.Docs) == 0 || file.Docs[0].Body == nil {
 		return nil, nil
 	}
@@ -83,11 +92,19 @@ func extractSettings(file *ast.File) ([]Settings, error) {
 	if !ok {
 		return nil, nil
 	}
-	out := make([]Settings, len(panels.Values))
+	out := make([]panelFields, len(panels.Values))
 	for i, entry := range panels.Values {
 		m, ok := unwrap(entry).(*ast.MappingNode)
 		if !ok {
-			continue // a one-key or non-mapping entry; the decoder reports it
+			continue // a one-key or non-mapping entry; Validate reports it
+		}
+		for _, pair := range m.Values {
+			switch keyText(pair.Key) {
+			case "id":
+				out[i].ID = asWritten(pair.Value)
+			case "plugin":
+				out[i].Plugin = asWritten(pair.Value)
+			}
 		}
 		for j, pair := range m.Values {
 			if keyText(pair.Key) != "settings" {
@@ -101,12 +118,27 @@ func extractSettings(file *ast.File) ([]Settings, error) {
 			if v != nil && !ok {
 				return nil, fmt.Errorf("line %d: panels[%d].settings must be a mapping", line(pair), i)
 			}
-			out[i] = settings
+			out[i].Settings = settings
 			m.Values = slices.Delete(m.Values, j, j+1)
 			break
 		}
 	}
 	return out, nil
+}
+
+// asWritten returns the text of an untagged, non-null scalar.
+func asWritten(n ast.Node) *string {
+	for a, ok := n.(*ast.AnchorNode); ok; a, ok = n.(*ast.AnchorNode) {
+		n = a.Value
+	}
+	switch s := n.(type) {
+	case *ast.NullNode, *ast.TagNode:
+		return nil
+	case ast.ScalarNode:
+		text := scalarText(s)
+		return &text
+	}
+	return nil
 }
 
 // value returns the value of key in the mapping n, or nil.
@@ -148,12 +180,10 @@ func unwrap(n ast.Node) ast.Node {
 // keyText is a scalar key's text as written, unquoted.
 func keyText(key ast.Node) string {
 	switch k := unwrap(key).(type) {
-	case *ast.StringNode:
-		return k.Value
 	case *ast.MergeKeyNode:
 		return "<<"
 	case ast.ScalarNode:
-		return k.GetToken().Value
+		return scalarText(k)
 	}
 	return ""
 }
@@ -196,7 +226,7 @@ func resolve(n ast.Node) (any, error) {
 			return nil, fmt.Errorf("line %d: !!str applies only to scalars", line(m))
 		}
 		if s.GetToken().Type == token.ImplicitNullType {
-			return "", nil // "a: !!str" with nothing after the tag
+			return "", nil // "{a: !!str}", or a last key ending in the tag
 		}
 		return scalarText(s), nil
 	case *ast.MappingNode, *ast.MappingValueNode:
@@ -275,6 +305,9 @@ func resolvePlain(s string, line int) (any, error) {
 		if err != nil && !errors.Is(err, strconv.ErrRange) {
 			return nil, err
 		}
+		if mantissa, _, _ := strings.Cut(strings.ToLower(s), "e"); f == 0 && strings.ContainsAny(mantissa, "123456789") {
+			return nil, fmt.Errorf("line %d: %s is too small for a double, which would make it 0", line, s)
+		}
 		return f, nil
 	case coreInf.MatchString(s):
 		return nil, fmt.Errorf("line %d: %s must be a finite number", line, s)
@@ -287,36 +320,41 @@ func resolvePlain(s string, line int) (any, error) {
 // them back as themselves.
 var plainSafe = regexp.MustCompile(`^[A-Za-z_]([A-Za-z0-9_ ./+-]*[A-Za-z0-9_./+-])?$`)
 
-func writeMap(b *strings.Builder, m map[string]any, indent int) error {
+// writeMap writes m at indent; path names m in errors, the way
+// checkSettings does.
+func writeMap(b *strings.Builder, m map[string]any, indent int, path string) error {
 	for _, k := range slices.Sorted(maps.Keys(m)) {
+		if !utf8.ValidString(k) {
+			return fmt.Errorf("%s: key %q is not valid UTF-8", path, k)
+		}
 		b.WriteString(strings.Repeat(" ", indent) + scalarString(k) + ":")
-		if err := writeValue(b, m[k], indent); err != nil {
-			return fmt.Errorf("%s: %w", k, err)
+		if err := writeValue(b, m[k], indent, path+"."+k); err != nil {
+			return err
 		}
 	}
 	return nil
 }
 
-func writeValue(b *strings.Builder, v any, indent int) error {
+func writeValue(b *strings.Builder, v any, indent int, path string) error {
 	switch v := v.(type) {
 	case Settings:
-		return writeValue(b, map[string]any(v), indent)
+		return writeValue(b, map[string]any(v), indent, path)
 	case map[string]any:
 		if len(v) == 0 {
 			b.WriteString(" {}\n")
 			return nil
 		}
 		b.WriteString("\n")
-		return writeMap(b, v, indent+2)
+		return writeMap(b, v, indent+2, path)
 	case []any:
 		if len(v) == 0 {
 			b.WriteString(" []\n")
 			return nil
 		}
 		b.WriteString("\n")
-		for _, e := range v {
+		for i, e := range v {
 			b.WriteString(strings.Repeat(" ", indent+2) + "-")
-			if err := writeValue(b, e, indent+2); err != nil {
+			if err := writeValue(b, e, indent+2, fmt.Sprintf("%s[%d]", path, i)); err != nil {
 				return err
 			}
 		}
@@ -324,7 +362,7 @@ func writeValue(b *strings.Builder, v any, indent int) error {
 	}
 	text, err := scalar(v)
 	if err != nil {
-		return err
+		return fmt.Errorf("%s: %w", path, err)
 	}
 	b.WriteString(" " + text + "\n")
 	return nil

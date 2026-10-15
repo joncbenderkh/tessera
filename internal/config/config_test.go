@@ -94,6 +94,8 @@ func TestParseRejectsSettings(t *testing.T) {
 		{"{*other : 1}", "aliases are not supported"},
 		{"1e400", "out of range for a double"},
 		{"-.5e999", "out of range for a double"},
+		{"1e-400", "too small for a double"},
+		{"-0.5e-999", "too small for a double"},
 		{"99999999999999999999", "beyond ±2^53"},
 		{"9007199254740993", "beyond ±2^53"},
 		{"-9007199254740993", "beyond ±2^53"},
@@ -123,6 +125,10 @@ func TestParseResolvesSettingsByCoreSchema(t *testing.T) {
 		{"{!!str 017: x}", map[string]any{"017": "x"}},
 		{"!!str", ""},
 		{"!!str null", "null"},
+		{"{a: !!str, b: 1}", map[string]any{"a": "", "b": int64(1)}},
+		{"0e5", 0.0},
+		{"5e-324", 5e-324},
+		{"\n        ? |-\n          block\n        : x", map[string]any{"block": "x"}},
 		{"1e5", 100000.0},
 		{"+.5", 0.5},
 		{"1_000", "1_000"},
@@ -162,6 +168,20 @@ func TestParseResolvesDecoratedSettingsKey(t *testing.T) {
 		}
 		if got := c.Panels[1].Settings["show_seconds"]; got != int64(17) {
 			t.Errorf("%s: got %#v, want 17", key, got)
+		}
+	}
+}
+
+func TestParseReadsIDAndPluginAsWritten(t *testing.T) {
+	for _, text := range []string{"017", "0x1f", "0b101", "1e5", "7zip"} {
+		data := strings.Replace(example, "id: clock\n    plugin: clock", "id: "+text+"\n    plugin: "+text, 1)
+		c, err := Parse([]byte(data))
+		if err != nil {
+			t.Errorf("%s: unexpected error: %v", text, err)
+			continue
+		}
+		if p := c.Panels[1]; p.ID != text || p.Plugin != text {
+			t.Errorf("%s: got id %q, plugin %q", text, p.ID, p.Plugin)
 		}
 	}
 }
@@ -226,6 +246,9 @@ func TestValidateMatchesMarshal(t *testing.T) {
 		}
 		if err == nil || !strings.Contains(err.Error(), "settings.v") || !strings.Contains(err.Error(), tt.want) {
 			t.Errorf("%#v: expected %q at settings.v, got %v", tt.value, tt.want, err)
+		}
+		if _, merr := Marshal(c); merr == nil || !strings.Contains(err.Error(), merr.Error()) {
+			t.Errorf("%#v: Marshal error %v differs from Validate's %v", tt.value, merr, err)
 		}
 	}
 }

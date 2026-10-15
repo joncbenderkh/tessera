@@ -43,8 +43,8 @@ panels:
 | `version` | Schema version. Must be `1`. |
 | `grid.columns` | Number of grid columns, at least 1. |
 | `grid.row_height` | Height of one grid row, at least 1. |
-| `panels[].id` | Unique name for this panel. One plugin can back several panels. |
-| `panels[].plugin` | Name of the plugin that provides the panel: lowercase letters, digits, and hyphens, starting with a letter or digit, at most 64 characters, and not a Windows device name such as `con` or `com1`. |
+| `panels[].id` | Unique name for this panel, read as written (`017` stays `017`). One plugin can back several panels. |
+| `panels[].plugin` | Name of the plugin that provides the panel: lowercase letters, digits, and hyphens, starting with a letter or digit, at most 64 characters, and not a Windows device name such as `con` or `com1`. Read as written, like `id`. |
 | `panels[].enabled` | `false` hides the panel. Defaults to `true`. |
 | `panels[].x`, `y` | Zero-based column and row of the panel's top-left cell. |
 | `panels[].w`, `h` | Width and height in cells, each at least 1. |
@@ -62,7 +62,7 @@ reads them strictly by YAML 1.2's core schema, whatever the rest of the
 YAML tooling does: `017` is 17, `1e5` is a number, `1_000`, `0b101`,
 `yes`, and dates are strings, and `<<` is an ordinary key. Tags other
 than `!!str` (on keys too), `.inf` and `.nan`, and floats beyond a
-double are errors, and so are integers beyond ±2^53, which a plugin
-would receive rounded. Quote a value to pass it as a string. When
+double, too large or so small it would become 0, are errors, and so
+are integers beyond ±2^53, which a plugin would receive rounded. Quote a value to pass it as a string. When
 tessera rewrites the file, it quotes every key and string that would
 otherwise read back as something else.
