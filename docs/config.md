@@ -63,6 +63,7 @@ YAML tooling does: `017` is 17, `1e5` is a number, `1_000`, `0b101`,
 `yes`, and dates are strings, and `<<` is an ordinary key. Tags other
 than `!!str` (on keys too), `.inf` and `.nan`, and floats beyond a
 double, too large or so small it would become 0, are errors, and so
-are integers beyond ±2^53, which a plugin would receive rounded. Quote a value to pass it as a string. When
+are integers beyond ±2^53, which a plugin would receive rounded.
+Quote a value to pass it as a string. When
 tessera rewrites the file, it quotes every key and string that would
 otherwise read back as something else.
