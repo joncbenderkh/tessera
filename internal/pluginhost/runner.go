@@ -33,6 +33,7 @@ type procRunner struct {
 	proc     *os.Process
 	canceled bool
 	exited   bool          // reaped: its PID, and so its group ID, may be reused
+	reaping  bool          // Wait is reaping it without watch
 	watched  chan struct{} // closed by watch; Wait reaps only after it
 }
 
@@ -89,23 +90,30 @@ func (r *procRunner) watch() {
 	}
 }
 
-// kill kills the plugin's process group, unless Wait has reaped the
-// plugin, and stops a pending Start.
+// kill kills the plugin's process group and stops a pending Start.
+// Once Wait may have reaped the plugin it kills only the plugin itself,
+// which os.Process guards against PID reuse, and once Wait has reaped
+// it nothing.
 func (r *procRunner) kill() {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.canceled = true
-	if r.proc != nil && !r.exited {
+	switch {
+	case r.proc == nil || r.exited:
+	case r.reaping:
+		_ = r.proc.Kill()
+	default:
 		killGroup(r.proc)
 	}
 }
 
-// Wait reaps the plugin. With watch (Linux), the plugin has exited and
-// its group been killed once watched closes, so it is marked exited
-// before the reap and kill never reaches a released group ID. Elsewhere
-// Wait cannot know the plugin has exited before reaping it: a kill in
-// the moment between the reap and marking it could reach a reused ID,
-// and children it left in its group are killed only by Close.
+// Wait reaps the plugin. With watch (Linux, macOS, the BSDs), the
+// plugin has exited and its group been killed once watched closes, so
+// it is marked exited before the reap and kill never reaches a released
+// group ID. Elsewhere (Windows; other Unix systems, where children it
+// left in its group are killed only by a forced Close) Wait cannot know
+// the plugin has exited before reaping it, so kill stops reaching the
+// group as soon as the reap may begin.
 func (r *procRunner) Wait(context.Context) error {
 	if r.watched != nil {
 		<-r.watched
@@ -114,6 +122,9 @@ func (r *procRunner) Wait(context.Context) error {
 		r.mu.Unlock()
 		return r.cmd.Wait()
 	}
+	r.mu.Lock()
+	r.reaping = true
+	r.mu.Unlock()
 	err := r.cmd.Wait()
 	r.mu.Lock()
 	r.exited = true

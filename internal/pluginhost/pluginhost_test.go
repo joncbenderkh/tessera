@@ -257,7 +257,7 @@ func gone(pid int) bool {
 
 func TestExitKillsChildren(t *testing.T) {
 	if !canAwaitExit {
-		t.Skip("children of an exited plugin are killed only by Close on this OS")
+		t.Skip("children of an exited plugin are killed only by a forced Close on this OS")
 	}
 	dir := install(t, "exits")
 	logger, _ := newLogger()
@@ -275,6 +275,23 @@ func TestExitKillsChildren(t *testing.T) {
 	}
 	if pid := child.get(); pid == 0 || !gone(pid) {
 		t.Errorf("child %d of an exited plugin still running before Close", pid)
+	}
+}
+
+func TestCloseKillsDetachedChildren(t *testing.T) {
+	if !canFreeze || !canAwaitExit {
+		t.Skip("children of a plugin that exits on Shutdown survive on this OS")
+	}
+	dir := install(t, "detached")
+	logger, _ := newLogger()
+	var child childPID
+	inst, err := Launch(context.Background(), dir, "detached", child.output, logger)
+	if err != nil {
+		t.Fatal(err)
+	}
+	inst.Close()
+	if pid := child.get(); pid == 0 || !gone(pid) {
+		t.Errorf("child %d of a plugin that exited on Shutdown still running", pid)
 	}
 }
 

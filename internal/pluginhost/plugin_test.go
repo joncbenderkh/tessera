@@ -97,6 +97,8 @@ func (testPlugin) GRPCClient(context.Context, *plugin.GRPCBroker, *grpc.ClientCo
 //   - forks: Describe starts a long-lived child that shares the
 //     plugin's stderr, and reports its PID there.
 //   - exits: as forks, then the plugin exits on its own.
+//   - detached: as forks, but the child holds none of the plugin's
+//     output, so the plugin exits promptly on Shutdown.
 //   - floods-stdout: after Describe, writes 1 MiB to stdout with no
 //     newline, then reports "flooded" on stderr.
 //
@@ -122,10 +124,12 @@ func (s *server) Describe(ctx context.Context, _ *tesserav1.DescribeRequest) (*t
 	case "slow-describe":
 		<-ctx.Done()
 		return nil, ctx.Err()
-	case "forks", "exits":
+	case "forks", "exits", "detached":
 		child := exec.Command(os.Args[0])
 		child.Env = []string{sleeperKey + "=1"}
-		child.Stderr = rawStderr
+		if s.mode != "detached" {
+			child.Stderr = rawStderr
+		}
 		if err := child.Start(); err != nil {
 			return nil, err
 		}

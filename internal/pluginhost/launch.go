@@ -127,6 +127,8 @@ func (inst *Instance) start(ctx context.Context, name string) error {
 		return fmt.Errorf("plugin %q: %w", name, ctx.Err())
 	}
 	rpc, err := s.rpc, s.err
+	// go-plugin (v1.8.0) reports a protocol mismatch only in its error
+	// text; TestLaunchRejects pins the wording.
 	if err != nil && strings.Contains(err.Error(), "incompatible API version") {
 		return fmt.Errorf("plugin %q does not speak protocol %d: %w", name, tesserav1.ProtocolVersion, err)
 	}
@@ -172,11 +174,12 @@ func Describe(ctx context.Context, dir, name string, output func(line string), l
 }
 
 // Close shuts the plugin down: Shutdown, then a kill if it is still
-// running 2 seconds later. Then it kills the plugin's process group (on
-// Windows, the plugin alone): at once if the plugin has exited, to end
-// children it left behind, or after killTimeout if go-plugin is still
-// waiting, on a plugin that never answers Shutdown or a child holding
-// its stderr open. It returns within killTimeout plus reapTimeout.
+// running 2 seconds later. If go-plugin is still waiting after
+// killTimeout, on a plugin that never answers Shutdown or a child
+// holding its stderr open, Close kills the plugin's process group (on
+// Windows, the plugin alone). Where watch runs, the group of a plugin
+// that exits is killed as it exits, so its children go with it.
+// It returns within killTimeout plus reapTimeout.
 func (inst *Instance) Close() {
 	defer func() {
 		for _, w := range inst.outputs {
