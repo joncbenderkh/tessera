@@ -44,7 +44,7 @@ panels:
 | `grid.columns` | Number of grid columns, at least 1. |
 | `grid.row_height` | Height of one grid row, at least 1. |
 | `panels[].id` | Unique name for this panel. One plugin can back several panels. |
-| `panels[].plugin` | Name of the plugin that provides the panel. |
+| `panels[].plugin` | Name of the plugin that provides the panel: lowercase letters, digits, and hyphens, starting with a letter or digit, at most 64 characters. |
 | `panels[].enabled` | `false` hides the panel. Defaults to `true`. |
 | `panels[].x`, `y` | Zero-based column and row of the panel's top-left cell. |
 | `panels[].w`, `h` | Width and height in cells, each at least 1. |

@@ -84,9 +84,11 @@ func (x *DescribeRequest) GetViewVersions() []uint32 {
 // DescribeResponse identifies the plugin.
 type DescribeResponse struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// Stable plugin name, such as "clock". Config files refer to it. It must
-	// equal the executable's file name without extension; otherwise the
-	// host stops the plugin and shows an error tile.
+	// Stable plugin name, such as "clock". Config files refer to it. It is
+	// 1 to 64 lowercase letters, digits, and hyphens, starting with a
+	// letter or digit, and must equal the executable's file name without
+	// extension; otherwise the host stops the plugin and shows an error
+	// tile.
 	Name string `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
 	// Plugin version in semver form, such as "0.1.0".
 	Version string `protobuf:"bytes,2,opt,name=version,proto3" json:"version,omitempty"`
@@ -349,8 +351,9 @@ func (*ConfigureResponse) Descriptor() ([]byte, []int) {
 type WatchRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// The longest the plugin may go without sending a WatchResponse. The
-	// host always sets it, and restarts the plugin if the stream stays
-	// silent for twice this long.
+	// host sets it to at least one second, and restarts the plugin if the
+	// stream stays silent for twice this long. Unset or not positive means
+	// no heartbeat is required.
 	HeartbeatInterval *durationpb.Duration `protobuf:"bytes,1,opt,name=heartbeat_interval,json=heartbeatInterval,proto3" json:"heartbeat_interval,omitempty"`
 	unknownFields     protoimpl.UnknownFields
 	sizeCache         protoimpl.SizeCache

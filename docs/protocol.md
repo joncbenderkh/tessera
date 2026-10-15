@@ -22,16 +22,25 @@ gRPC protocol, so a plugin built with go-plugin works unchanged and other
 languages can follow its documented handshake:
 
 1. The host starts the plugin with `TESSERA_PLUGIN_MAGIC_COOKIE` set to
-   the value in `proto/tessera/v1/version.go`, and
-   `PLUGIN_PROTOCOL_VERSIONS` listing the protocol versions it supports.
-   A plugin started without the cookie was run by hand: it prints a short
-   message and exits.
-2. The plugin listens on a local address and prints one line to stdout:
-   `1|<protocol version>|tcp|127.0.0.1:<port>|grpc` (or `unix|<path>`).
-3. The host connects and makes `PanelService` calls. As go-plugin
-   requires, the plugin also serves the standard gRPC health service
+   the value in `proto/tessera/v1/version.go`,
+   `PLUGIN_PROTOCOL_VERSIONS` listing the protocol versions it supports,
+   and `PLUGIN_CLIENT_CERT` holding a fresh PEM certificate. A plugin
+   started without the cookie was run by hand: it prints a short message
+   and exits.
+2. The plugin listens on a unix socket (on Windows, TCP on 127.0.0.1),
+   generates its own certificate, and prints one line to stdout:
+   `1|<protocol version>|unix|<path>|grpc|<certificate>`, where the
+   certificate is its DER encoding in unpadded standard base64.
+3. The host connects over mutual TLS, each side trusting only the other's
+   certificate, and makes `PanelService` calls. As go-plugin requires,
+   the plugin also serves the standard gRPC health service
    (`grpc.health.v1.Health`) and reports the service name `plugin` as
    serving. The plugin's stderr goes to the host's log for that panel.
+
+Mutual TLS is what go-plugin calls AutoMTLS, and the host always enables
+it: without it, any local process could connect to a plugin, read its
+view, and trigger its actions. That matters most for TCP, which every
+local user can reach, but it covers unix sockets as well.
 
 The host-side launcher is #12; the Go SDK that hides all of this is #18.
 
@@ -76,8 +85,7 @@ host                                    plugin
   time its content changes, starting with the current one. When nothing
   changes for `heartbeat_interval`, it sends a `WatchResponse` without a
   view, so a silent stream means a hung plugin. The host holds one stream
-  per plugin; a new Watch supersedes the open one, which the plugin
-  should end.
+  per plugin and cancels it before opening another.
 - **Render** is the fallback for plugins that cannot push. If Watch
   returns `UNIMPLEMENTED`, the host polls Render, waiting
   `RenderResponse.poll_interval` (or its default) between calls.
@@ -95,6 +103,9 @@ an error tile meanwhile (#13).
 
 A plugin's `DescribeResponse.name` must equal its executable's file name
 without extension, which is how the config's `plugin:` field finds it.
+Names are 1 to 64 lowercase letters, digits, and hyphens, starting with a
+letter or digit, so they can never name a path outside the plugins
+directory.
 
 ## Settings
 

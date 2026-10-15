@@ -6,6 +6,7 @@ import (
 	"context"
 	"net"
 	"testing"
+	"time"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -13,6 +14,7 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/grpc/test/bufconn"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/durationpb"
 	"google.golang.org/protobuf/types/known/structpb"
 
 	tesserav1 "github.com/joncbenderkh/tessera/proto/tessera/v1"
@@ -54,15 +56,29 @@ func (c *counter) view(n int) *tesserav1.View {
 	}
 }
 
-func (c *counter) Watch(_ *tesserav1.WatchRequest, stream grpc.ServerStreamingServer[tesserav1.WatchResponse]) error {
+func (c *counter) Watch(req *tesserav1.WatchRequest, stream grpc.ServerStreamingServer[tesserav1.WatchResponse]) error {
+	var heartbeat <-chan time.Time
+	if d := req.GetHeartbeatInterval().AsDuration(); d > 0 {
+		ticker := time.NewTicker(d)
+		defer ticker.Stop()
+		heartbeat = ticker.C
+	}
 	for n := 0; ; n++ {
 		if err := stream.Send(&tesserav1.WatchResponse{View: c.view(n)}); err != nil {
 			return err
 		}
-		select {
-		case <-stream.Context().Done():
-			return nil
-		case <-c.clicks:
+	idle:
+		for {
+			select {
+			case <-stream.Context().Done():
+				return nil
+			case <-c.clicks:
+				break idle
+			case <-heartbeat:
+				if err := stream.Send(&tesserav1.WatchResponse{}); err != nil {
+					return err
+				}
+			}
 		}
 	}
 }
@@ -138,8 +154,35 @@ func TestPanelLifecycle(t *testing.T) {
 		}
 	}
 
+	if _, err := client.HandleEvent(ctx, &tesserav1.HandleEventRequest{}); err != nil {
+		t.Fatalf("event with nothing set: got %v, want OK", err)
+	}
 	if _, err := client.Render(ctx, &tesserav1.RenderRequest{}); status.Code(err) != codes.Unimplemented {
 		t.Fatalf("Render on a streaming-only plugin: got %v, want Unimplemented", err)
+	}
+}
+
+func TestWatchHeartbeat(t *testing.T) {
+	client := dial(t, &counter{clicks: make(chan struct{})})
+	stream, err := client.Watch(t.Context(), &tesserav1.WatchRequest{HeartbeatInterval: durationpb.New(time.Millisecond)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := stream.Recv()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.GetView() == nil {
+		t.Fatal("first response is a heartbeat, want the current view")
+	}
+	for range 2 {
+		beat, err := stream.Recv()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if beat.GetView() != nil {
+			t.Fatalf("idle stream sent a view, want a heartbeat: %v", beat)
+		}
 	}
 }
 

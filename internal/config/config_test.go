@@ -91,6 +91,8 @@ func TestValidate(t *testing.T) {
 		{"valid", []Panel{panel("a", 0, 0, 2, 1), panel("b", 2, 0, 2, 2)}, ""},
 		{"duplicate id", []Panel{panel("a", 0, 0, 1, 1), panel("a", 1, 0, 1, 1)}, "not unique"},
 		{"missing id", []Panel{panel("", 0, 0, 1, 1)}, "id is required"},
+		{"plugin path", []Panel{{ID: "a", Plugin: "../../bin/sh", W: 1, H: 1}}, "lowercase letters"},
+		{"plugin name with hyphen", []Panel{{ID: "a", Plugin: "system-stats", W: 1, H: 1}}, ""},
 		{"zero span", []Panel{panel("a", 0, 0, 0, 1)}, "at least 1"},
 		{"negative position", []Panel{panel("a", -1, 0, 1, 1)}, "must not be negative"},
 		{"past last column", []Panel{panel("a", 3, 0, 2, 1)}, "4 columns"},

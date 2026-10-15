@@ -103,7 +103,8 @@ message Stat {
 message Gauge {
   // Label under the arc, such as "Disk usage".
   string label = 1;
-  // The current value. The host clamps it to [min, max].
+  // The current value. The host clamps it to [min, max]. If value, min,
+  // or max is NaN or infinite, the host renders the gauge as missing.
   double value = 2;
   // Lower bound of the arc.
   double min = 3;
@@ -129,7 +130,7 @@ message Sparkline {
   // Label above the chart.
   string label = 1;
   // The samples, oldest first, evenly spaced in time. Empty renders an
-  // empty-state message.
+  // empty-state message. A NaN or infinite sample is a gap in the line.
   repeated double samples = 2;
   // Bottom of the y axis. Unset means the smallest sample.
   optional double min = 3;
@@ -171,7 +172,7 @@ message Table {
   // The rows, in display order.
   repeated TableRow rows = 2;
   // Index of the column that shows the sort indicator. Ignored when
-  // sort_order is unspecified.
+  // sort_order is unspecified or the index is past the last column.
   uint32 sort_column = 3;
   // Direction of the sort indicator.
   SortOrder sort_order = 4;
@@ -260,7 +261,8 @@ message Stack {
 
 // StackItem is one child of a stack.
 message StackItem {
-  // The child widget.
+  // The child widget. Unset is empty space: nothing at natural size, or
+  // its share of the remaining space when weighted.
   Widget widget = 1;
   // Zero gives the child its natural size along the axis. A positive
   // weight shares the remaining space with the other weighted children

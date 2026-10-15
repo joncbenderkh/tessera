@@ -772,7 +772,8 @@ type Gauge struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Label under the arc, such as "Disk usage".
 	Label string `protobuf:"bytes,1,opt,name=label,proto3" json:"label,omitempty"`
-	// The current value. The host clamps it to [min, max].
+	// The current value. The host clamps it to [min, max]. If value, min,
+	// or max is NaN or infinite, the host renders the gauge as missing.
 	Value float64 `protobuf:"fixed64,2,opt,name=value,proto3" json:"value,omitempty"`
 	// Lower bound of the arc.
 	Min float64 `protobuf:"fixed64,3,opt,name=min,proto3" json:"min,omitempty"`
@@ -894,7 +895,7 @@ type Sparkline struct {
 	// Label above the chart.
 	Label string `protobuf:"bytes,1,opt,name=label,proto3" json:"label,omitempty"`
 	// The samples, oldest first, evenly spaced in time. Empty renders an
-	// empty-state message.
+	// empty-state message. A NaN or infinite sample is a gap in the line.
 	Samples []float64 `protobuf:"fixed64,2,rep,packed,name=samples,proto3" json:"samples,omitempty"`
 	// Bottom of the y axis. Unset means the smallest sample.
 	Min *float64 `protobuf:"fixed64,3,opt,name=min,proto3,oneof" json:"min,omitempty"`
@@ -1007,7 +1008,7 @@ type Table struct {
 	// The rows, in display order.
 	Rows []*TableRow `protobuf:"bytes,2,rep,name=rows,proto3" json:"rows,omitempty"`
 	// Index of the column that shows the sort indicator. Ignored when
-	// sort_order is unspecified.
+	// sort_order is unspecified or the index is past the last column.
 	SortColumn uint32 `protobuf:"varint,3,opt,name=sort_column,json=sortColumn,proto3" json:"sort_column,omitempty"`
 	// Direction of the sort indicator.
 	SortOrder SortOrder `protobuf:"varint,4,opt,name=sort_order,json=sortOrder,proto3,enum=tessera.v1.SortOrder" json:"sort_order,omitempty"`
@@ -1410,7 +1411,8 @@ func (x *Stack) GetItems() []*StackItem {
 // StackItem is one child of a stack.
 type StackItem struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// The child widget.
+	// The child widget. Unset is empty space: nothing at natural size, or
+	// its share of the remaining space when weighted.
 	Widget *Widget `protobuf:"bytes,1,opt,name=widget,proto3" json:"widget,omitempty"`
 	// Zero gives the child its natural size along the axis. A positive
 	// weight shares the remaining space with the other weighted children

@@ -47,9 +47,9 @@ type PanelServiceClient interface {
 	// Watch streams a new view whenever the panel's content changes,
 	// starting with the current view, and a heartbeat when nothing changed
 	// within WatchRequest.heartbeat_interval. The host holds at most one
-	// stream per plugin: a new Watch supersedes the open one, which the
-	// plugin should end. A plugin that cannot push returns UNIMPLEMENTED,
-	// and the host polls Render instead.
+	// stream per plugin and cancels it before opening another, so a plugin
+	// may assume one Watch at a time. A plugin that cannot push returns
+	// UNIMPLEMENTED, and the host polls Render instead.
 	Watch(ctx context.Context, in *WatchRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[WatchResponse], error)
 	// Render returns the current view. It is the polling fallback for
 	// plugins that do not implement Watch.
@@ -147,9 +147,9 @@ type PanelServiceServer interface {
 	// Watch streams a new view whenever the panel's content changes,
 	// starting with the current view, and a heartbeat when nothing changed
 	// within WatchRequest.heartbeat_interval. The host holds at most one
-	// stream per plugin: a new Watch supersedes the open one, which the
-	// plugin should end. A plugin that cannot push returns UNIMPLEMENTED,
-	// and the host polls Render instead.
+	// stream per plugin and cancels it before opening another, so a plugin
+	// may assume one Watch at a time. A plugin that cannot push returns
+	// UNIMPLEMENTED, and the host polls Render instead.
 	Watch(*WatchRequest, grpc.ServerStreamingServer[WatchResponse]) error
 	// Render returns the current view. It is the polling fallback for
 	// plugins that do not implement Watch.
