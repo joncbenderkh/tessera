@@ -1,0 +1,188 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
+syntax = "proto3";
+
+package tessera.v1;
+
+import "google/protobuf/duration.proto";
+import "google/protobuf/struct.proto";
+import "tessera/v1/view.proto";
+
+option go_package = "github.com/joncbenderkh/tessera/proto/tessera/v1;tesserav1";
+
+// PanelService is what every panel plugin serves. The host launches one
+// plugin process per panel in the config and calls, in order: Describe,
+// Configure, then Watch (or Render, if Watch is unimplemented). It calls
+// Configure again whenever the panel's settings or size change, and
+// HandleEvent when the user interacts with the panel. These later calls
+// run concurrently with the open Watch, so a plugin guards shared state,
+// but the host makes them one at a time and in order. To fill the panel
+// picker, the host may also launch a plugin, call only Describe, and shut
+// it down.
+service PanelService {
+  // Describe is the handshake: the plugin names itself and picks the view
+  // schema version it will speak.
+  rpc Describe(DescribeRequest) returns (DescribeResponse);
+
+  // Configure passes the panel's settings and size. The plugin returns
+  // INVALID_ARGUMENT with a readable message if it rejects the settings;
+  // it then keeps its previous settings, if any. The host shows the
+  // message in an error tile, cancels any open Watch or stops polling,
+  // and makes no Watch or Render call until a later Configure succeeds.
+  rpc Configure(ConfigureRequest) returns (ConfigureResponse);
+
+  // Watch streams a new view whenever the panel's content changes,
+  // starting with the current view (the first response always carries
+  // one; a plugin still fetching data sends widgets marked loading), and
+  // a heartbeat when nothing changed
+  // within WatchRequest.heartbeat_interval. The host reads at most one
+  // stream per plugin and cancels it before opening another, but the
+  // cancelled handler may still be returning when the next one starts,
+  // so a plugin keeps per-stream state local to the handler. A stream
+  // that ends without the host cancelling it is a protocol failure,
+  // with two exceptions: a plugin that cannot push returns UNIMPLEMENTED
+  // before its first response, and the host polls Render instead; and a
+  // view over the size or depth limit in docs/protocol.md ends the
+  // stream, and the host shows an error tile without restarting the
+  // plugin.
+  rpc Watch(WatchRequest) returns (stream WatchResponse);
+
+  // Render returns the current view. It is the polling fallback for
+  // plugins that do not implement Watch.
+  rpc Render(RenderRequest) returns (RenderResponse);
+
+  // HandleEvent delivers one user input event. A request with no event
+  // set is ignored and answered with OK. A plugin that implements
+  // Watch reflects the effect by sending a new view on the stream; a
+  // polled plugin is rendered again right after the event.
+  rpc HandleEvent(HandleEventRequest) returns (HandleEventResponse);
+}
+
+// DescribeRequest tells the plugin what the host supports.
+message DescribeRequest {
+  // The host's version, such as "0.1.0". For logs and diagnostics only.
+  string host_version = 1;
+  // The view schema versions the host can render, such as [1]. Never
+  // empty.
+  repeated uint32 view_versions = 2;
+}
+
+// DescribeResponse identifies the plugin.
+message DescribeResponse {
+  // Stable plugin name, such as "clock". Config files refer to it. It is
+  // 1 to 64 lowercase letters, digits, and hyphens, starting with a
+  // letter or digit, and must equal the executable's file name (the name
+  // itself on Unix, the name plus ".exe" on Windows; the host ignores
+  // other files in the plugins directory). Otherwise the host stops the
+  // plugin and shows an error tile.
+  string name = 1;
+  // Plugin version in semver form, such as "0.1.0".
+  string version = 2;
+  // One-line description shown in the panel picker.
+  string description = 3;
+  // The plugin protocol version the plugin speaks. Must equal the
+  // version agreed in the transport handshake; otherwise the host stops
+  // the plugin and shows an error tile.
+  uint32 protocol_version = 4;
+  // The view schema version the plugin will send. Must be one of
+  // DescribeRequest.view_versions; otherwise the host stops the plugin
+  // and shows an error tile.
+  uint32 view_version = 5;
+  // JSON Schema (draft 2020-12) for the panel's settings, as a JSON
+  // document. Empty means the panel takes no settings.
+  string config_schema = 6;
+  // The size, in grid cells, a new panel gets when the user adds it.
+  // Unset, or a zero dimension, means 1.
+  GridSize default_size = 7;
+}
+
+// GridSize is a panel's size in grid cells.
+message GridSize {
+  // Width in grid columns, at least 1.
+  uint32 columns = 1;
+  // Height in grid rows, at least 1.
+  uint32 rows = 2;
+}
+
+// ConfigureRequest carries the panel's settings and size.
+message ConfigureRequest {
+  // The panel's id from the config file. Unique within a layout.
+  string panel_id = 1;
+  // The panel's settings from the config file, unvalidated by the host
+  // until the configuration UI validates them against config_schema.
+  google.protobuf.Struct settings = 2;
+  // The panel's current size in grid cells.
+  GridSize size = 3;
+}
+
+// ConfigureResponse acknowledges the settings.
+message ConfigureResponse {}
+
+// WatchRequest opens the view stream.
+message WatchRequest {
+  // The longest the plugin may go without sending a WatchResponse. The
+  // host sets it to at least one second, and restarts the plugin if the
+  // stream stays silent for twice this long. Unset or not positive means
+  // no heartbeat is required.
+  google.protobuf.Duration heartbeat_interval = 1;
+}
+
+// WatchResponse is one view update.
+message WatchResponse {
+  // The panel's complete new view, in the negotiated view schema version.
+  // It replaces the previous one. None set makes the response a
+  // heartbeat, which keeps the current view. A later view schema version
+  // adds its own field here.
+  oneof content {
+    // The view in view schema version 1.
+    View view = 1;
+  }
+}
+
+// RenderRequest asks for the current view.
+message RenderRequest {}
+
+// RenderResponse is the current view.
+message RenderResponse {
+  // The panel's complete current view, in the negotiated view schema
+  // version. A later view schema version adds its own field here.
+  oneof content {
+    // The view in view schema version 1.
+    View view = 1;
+  }
+  // How long the host should wait before polling again. Unset or zero
+  // means the host's default interval. The host may clamp it.
+  google.protobuf.Duration poll_interval = 2;
+}
+
+// HandleEventRequest is one user input event.
+message HandleEventRequest {
+  // What happened.
+  oneof event {
+    // The user activated a row or item that has an action_id.
+    ActivateEvent activate = 1;
+    // The user scrolled a table or list.
+    ScrollEvent scroll = 2;
+  }
+}
+
+// ActivateEvent reports a click, tap, or Enter on an actionable row or
+// item.
+message ActivateEvent {
+  // The action_id of the activated row or item, unique within the view.
+  string action_id = 1;
+}
+
+// ScrollEvent reports which rows of a table or list are visible, so the
+// plugin can send more when the user nears the end.
+message ScrollEvent {
+  // The id of the scrolled Widget.
+  string widget_id = 1;
+  // Index of the first visible row or item.
+  uint32 first_visible = 2;
+  // Number of rows or items visible.
+  uint32 visible_count = 3;
+}
+
+// HandleEventResponse acknowledges the event.
+message HandleEventResponse {}

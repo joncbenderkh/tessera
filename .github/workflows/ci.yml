@@ -67,6 +67,13 @@ jobs:
         if: matrix.lint
         run: go run honnef.co/go/tools/cmd/staticcheck@v0.8.2 ./...
 
+      - name: Lint protocol
+        if: matrix.lint
+        working-directory: proto
+        run: |
+          go run github.com/bufbuild/buf/cmd/buf@v1.74.0 lint
+          go run github.com/bufbuild/buf/cmd/buf@v1.74.0 format -d --exit-code
+
       - name: Check generated code is up to date
         if: matrix.lint
         run: |

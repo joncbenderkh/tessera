@@ -1,0 +1,286 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
+syntax = "proto3";
+
+package tessera.v1;
+
+option go_package = "github.com/joncbenderkh/tessera/proto/tessera/v1;tesserav1";
+
+// View is everything a panel shows, in view schema version 1. The host
+// draws the tile frame and title; the plugin supplies the content as a
+// tree of widgets. Plugins cannot draw directly.
+message View {
+  // The panel title in the tile header, such as "CPU & memory".
+  string title = 1;
+  // The panel content. Unset renders an empty panel.
+  Widget body = 2;
+}
+
+// Widget is one node of the view tree.
+message Widget {
+  // Optional id, unique within the view. Scroll events name the widget
+  // by it, and the host uses it to keep scroll position across updates.
+  // If several widgets share an id, the first in depth-first order keeps
+  // it and the others are treated as having none.
+  string id = 1;
+  // When true, the host draws a loading placeholder in the widget's shape
+  // instead of its content. With no kind set, it draws nothing.
+  bool loading = 2;
+  // The widget itself. Unset renders nothing.
+  oneof kind {
+    // A run of text.
+    Text text = 10;
+    // A single headline number.
+    Stat stat = 11;
+    // A value on a bounded arc.
+    Gauge gauge = 12;
+    // A small line chart of recent samples.
+    Sparkline sparkline = 13;
+    // Rows and columns.
+    Table table = 14;
+    // A vertical list of items.
+    List list = 15;
+    // Children laid out in a row or column.
+    Stack stack = 16;
+  }
+}
+
+// Tone colors text by meaning, in the host's theme.
+enum Tone {
+  // The default foreground color.
+  TONE_UNSPECIFIED = 0;
+  // Secondary text.
+  TONE_MUTED = 1;
+  // The theme accent.
+  TONE_ACCENT = 2;
+  // Healthy or good.
+  TONE_OK = 3;
+  // Needs attention.
+  TONE_WARN = 4;
+  // Failed or critical.
+  TONE_ERROR = 5;
+}
+
+// TextSize picks a step on the host's type scale.
+enum TextSize {
+  // Body text, 12 px.
+  TEXT_SIZE_UNSPECIFIED = 0;
+  // Small text, 11 px.
+  TEXT_SIZE_SMALL = 1;
+  // Large text, 14 px.
+  TEXT_SIZE_LARGE = 2;
+  // Display text, 36 px, such as a clock face.
+  TEXT_SIZE_DISPLAY = 3;
+}
+
+// Text is a run of text. It wraps to the available width.
+message Text {
+  // The text.
+  string value = 1;
+  // Type scale step.
+  TextSize size = 2;
+  // Color by meaning.
+  Tone tone = 3;
+  // Use the monospace font.
+  bool monospace = 4;
+}
+
+// Stat is a headline number with its unit and context, such as
+// "24.8 %" with "−2.1 pp · last sample".
+message Stat {
+  // Label above the value, such as "CPU utilization".
+  string label = 1;
+  // The value, already formatted by the plugin, such as "24.8". Empty
+  // renders as an em dash (missing value).
+  string value = 2;
+  // Unit after the value, such as "%" or "GB".
+  string unit = 3;
+  // Context line below the value, such as a delta or a total.
+  string caption = 4;
+  // Color of the caption.
+  Tone caption_tone = 5;
+}
+
+// Gauge shows a value between min and max on a 260° arc.
+message Gauge {
+  // Label under the arc, such as "Disk usage".
+  string label = 1;
+  // The current value. The host clamps it to [min, max]. If value, min,
+  // or max is NaN or infinite, the host renders the gauge as missing.
+  double value = 2;
+  // Lower bound of the arc.
+  double min = 3;
+  // Upper bound of the arc. Unset means 100. If it is not greater than
+  // min, the host renders the gauge as missing.
+  optional double max = 4;
+  // Unit after the value, such as "%".
+  string unit = 5;
+  // The value as shown in the middle of the arc, already formatted.
+  // Empty means the host formats value itself.
+  string display = 6;
+  // From this value up, the arc uses the warning color. NaN counts as
+  // unset. A threshold outside [min, max] draws no tick but still colors
+  // the arc: below min, always; above max, never.
+  optional double warn_at = 7;
+  // From this value up, the arc uses the error color. Takes precedence
+  // over warn_at. NaN counts as unset. A threshold outside [min, max]
+  // draws no tick but still colors the arc: below min, always; above
+  // max, never.
+  optional double error_at = 8;
+  // Context line below the gauge, such as "320 GB free".
+  string caption = 9;
+}
+
+// Sparkline is a small line chart of recent samples.
+message Sparkline {
+  // Label above the chart.
+  string label = 1;
+  // The samples, oldest first, evenly spaced in time. A NaN or infinite
+  // sample is a gap in the line. Samples outside [min, max] are clamped
+  // to it. No finite samples renders an empty-state message; a single
+  // one is drawn as a dot.
+  repeated double samples = 2;
+  // Bottom of the y axis. Unset, NaN, or infinite means the smallest
+  // finite sample.
+  optional double min = 3;
+  // Top of the y axis. Unset, NaN, or infinite means the largest finite
+  // sample. If the range is empty (max not greater than min, as when all
+  // samples are equal), the line is drawn at mid-height.
+  optional double max = 4;
+  // Unit of the samples, for accessibility text.
+  string unit = 5;
+  // Caption at the left end of the x axis, such as "60s ago".
+  string start_label = 6;
+  // Caption at the right end of the x axis, such as "now".
+  string end_label = 7;
+  // Color of the line and fill.
+  Tone tone = 8;
+}
+
+// Align is horizontal alignment within a table column.
+enum Align {
+  // Align to the start (left in left-to-right text).
+  ALIGN_UNSPECIFIED = 0;
+  // Align to the end, for numbers.
+  ALIGN_END = 1;
+}
+
+// SortOrder is the sort indicator on a table column.
+enum SortOrder {
+  // No sort indicator.
+  SORT_ORDER_UNSPECIFIED = 0;
+  // Ascending.
+  SORT_ORDER_ASCENDING = 1;
+  // Descending.
+  SORT_ORDER_DESCENDING = 2;
+}
+
+// Table shows rows and columns. The plugin sorts the rows; the host only
+// draws the sort indicator.
+message Table {
+  // The columns, in display order.
+  repeated TableColumn columns = 1;
+  // The rows, in display order.
+  repeated TableRow rows = 2;
+  // Index of the column that shows the sort indicator. Ignored when
+  // sort_order is unspecified or the index is past the last column.
+  uint32 sort_column = 3;
+  // Direction of the sort indicator.
+  SortOrder sort_order = 4;
+  // Shown instead of the rows when there are none.
+  string empty_text = 5;
+}
+
+// TableColumn is one table column.
+message TableColumn {
+  // Header text.
+  string title = 1;
+  // Alignment of the header and cells.
+  Align align = 2;
+  // Share of the table width relative to the other columns. Zero counts
+  // as 1.
+  uint32 weight = 3;
+}
+
+// TableRow is one table row.
+message TableRow {
+  // Cell text, one per column. Missing cells render empty; extra cells
+  // are ignored.
+  repeated string cells = 1;
+  // If set, the row is selectable and activating it sends an
+  // ActivateEvent with this id. Unique within the view: the first
+  // row or item in depth-first order keeps a repeated id, and later ones
+  // are not actionable.
+  string action_id = 2;
+}
+
+// List is a vertical list of items, such as upcoming events.
+message List {
+  // The items, in display order.
+  repeated ListItem items = 1;
+  // Shown instead of the items when there are none.
+  string empty_text = 2;
+}
+
+// ListItem is one list entry.
+message ListItem {
+  // Short text before the title, such as a time ("10:00").
+  string leading = 1;
+  // Main text.
+  string title = 2;
+  // Secondary text under the title.
+  string detail = 3;
+  // If set, the item shows a chevron and activating it sends an
+  // ActivateEvent with this id. Unique within the view: the first
+  // row or item in depth-first order keeps a repeated id, and later ones
+  // are not actionable.
+  string action_id = 4;
+}
+
+// Axis is the direction a stack lays out its children.
+enum Axis {
+  // Top to bottom.
+  AXIS_UNSPECIFIED = 0;
+  // Start to end (left to right in left-to-right text).
+  AXIS_HORIZONTAL = 1;
+}
+
+// Spacing picks a step on the host's spacing scale.
+enum Spacing {
+  // 12 px.
+  SPACING_UNSPECIFIED = 0;
+  // No space.
+  SPACING_NONE = 1;
+  // 4 px.
+  SPACING_EXTRA_SMALL = 2;
+  // 8 px.
+  SPACING_SMALL = 3;
+  // 16 px.
+  SPACING_LARGE = 4;
+  // 24 px.
+  SPACING_EXTRA_LARGE = 5;
+}
+
+// Stack lays out its children in a row or column. It is the only layout
+// widget; nest stacks for grids.
+message Stack {
+  // Direction of the layout.
+  Axis axis = 1;
+  // Space between children.
+  Spacing gap = 2;
+  // Draw a divider line between children.
+  bool dividers = 3;
+  // The children, in order.
+  repeated StackItem items = 4;
+}
+
+// StackItem is one child of a stack.
+message StackItem {
+  // The child widget. Unset is empty space: nothing at natural size, or
+  // its share of the remaining space when weighted.
+  Widget widget = 1;
+  // Zero gives the child its natural size along the axis. A positive
+  // weight shares the remaining space with the other weighted children
+  // in proportion.
+  uint32 weight = 2;
+}
