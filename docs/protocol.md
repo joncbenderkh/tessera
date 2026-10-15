@@ -50,6 +50,13 @@ languages can follow its documented handshake:
    output it forwards over `GRPCStdio`, go to the host's log for that
    panel.
 
+On Unix each plugin runs in a process group of its own, and a forced
+kill takes the whole group, so a child process that holds the plugin's
+stderr open cannot keep the host from exiting. On Linux the kernel also
+kills a plugin whose host dies without shutting it down. On Windows only
+the plugin itself is killed, and on macOS and Windows a plugin outlives
+a host that crashes.
+
 Mutual TLS is what go-plugin calls AutoMTLS, and the host always enables
 it: without it, any local process could connect to a plugin, read its
 view, and trigger its actions. That matters most for TCP, which every

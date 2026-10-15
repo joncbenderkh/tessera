@@ -48,10 +48,16 @@ func main() {
 	go func() {
 		<-signals
 		plugins.Close()
-		os.Exit(1)
+		os.Exit(0)
 	}()
 
 	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				plugins.Close()
+				panic(r)
+			}
+		}()
 		window := new(app.Window)
 		window.Option(app.Title("tessera"), app.Size(unit.Dp(1440), unit.Dp(900)))
 		err := run(window)

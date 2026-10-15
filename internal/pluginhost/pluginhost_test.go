@@ -35,6 +35,8 @@ func (b *syncBuffer) String() string {
 	return b.buf.String()
 }
 
+func ignore(string) {}
+
 func newLogger() (*log.Logger, *syncBuffer) {
 	var buf syncBuffer
 	return log.New(&buf, "", 0), &buf
@@ -146,7 +148,7 @@ func TestLaunchRejects(t *testing.T) {
 				t.Skip("no executable bit on Windows")
 			}
 			t.Parallel()
-			inst, err := Launch(context.Background(), dir, tt.name, &bytes.Buffer{}, logger)
+			inst, err := Launch(context.Background(), dir, tt.name, ignore, logger)
 			if err == nil {
 				inst.Close()
 				t.Fatal("expected an error")
@@ -160,29 +162,46 @@ func TestLaunchRejects(t *testing.T) {
 
 func TestCloseKillsUnresponsivePlugin(t *testing.T) {
 	if !canFreeze {
-		t.Skip("cannot stop a process on this OS")
+		t.Skip("cannot stop a process or reach its children on this OS")
 	}
-	dir := install(t, "frozen")
+	dir := install(t, "frozen", "forks")
 	logger, _ := newLogger()
-	inst, err := Launch(context.Background(), dir, "frozen", &bytes.Buffer{}, logger)
-	if err != nil {
-		t.Fatal(err)
+	for _, name := range []string{"frozen", "forks"} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			inst, err := Launch(context.Background(), dir, name, ignore, logger)
+			if err != nil {
+				t.Fatal(err)
+			}
+			time.Sleep(500 * time.Millisecond) // until frozen has stopped itself
+			start := time.Now()
+			inst.Close()
+			if d := time.Since(start); d > killTimeout+time.Second {
+				t.Errorf("Close took %v", d)
+			}
+			if !inst.Exited() {
+				t.Error("plugin still running after Close")
+			}
+		})
 	}
-	time.Sleep(500 * time.Millisecond) // until it has stopped itself
-	start := time.Now()
-	inst.Close()
-	if d := time.Since(start); d > killTimeout+2*time.Second {
-		t.Errorf("Close took %v", d)
-	}
-	if !inst.Exited() {
-		t.Error("plugin still running after Close")
+}
+
+func TestLineWriter(t *testing.T) {
+	var got []string
+	w := &lineWriter{output: func(line string) { got = append(got, line) }}
+	w.Write([]byte("one\ntw"))
+	w.Write([]byte("o\nthree"))
+	w.Flush()
+	w.Flush()
+	if want := []string{"one", "two", "three"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("got %q, want %q", got, want)
 	}
 }
 
 func TestDescribe(t *testing.T) {
 	dir := install(t, "clock")
 	logger, _ := newLogger()
-	info, err := Describe(context.Background(), dir, "clock", &bytes.Buffer{}, logger)
+	info, err := Describe(context.Background(), dir, "clock", ignore, logger)
 	if err != nil {
 		t.Fatal(err)
 	}

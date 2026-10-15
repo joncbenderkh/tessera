@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -25,6 +26,10 @@ import (
 // The test binary doubles as the test plugin: started by the host, it
 // serves PanelService, behaving as its file name says (see server).
 func TestMain(m *testing.M) {
+	if os.Getenv(sleeperKey) != "" {
+		time.Sleep(time.Minute) // the forks plugin's child
+		return
+	}
 	if os.Getenv(tesserav1.MagicCookieKey) != "" {
 		servePlugin(strings.TrimSuffix(filepath.Base(os.Args[0]), exeSuffix()))
 		return
@@ -73,6 +78,8 @@ func (testPlugin) GRPCClient(context.Context, *plugin.GRPCBroker, *grpc.ClientCo
 //   - rejects: Configure answers INVALID_ARGUMENT.
 //   - frozen: the process stops itself after Describe, so it never
 //     answers Shutdown.
+//   - forks: Describe starts a long-lived child that shares the
+//     plugin's stderr.
 //
 // Any other name is a well-behaved plugin of that name, which reports
 // each Configure on stderr.
@@ -96,6 +103,13 @@ func (s *server) Describe(ctx context.Context, _ *tesserav1.DescribeRequest) (*t
 	case "slow-describe":
 		<-ctx.Done()
 		return nil, ctx.Err()
+	case "forks":
+		child := exec.Command(os.Args[0])
+		child.Env = []string{sleeperKey + "=1"}
+		child.Stderr = os.NewFile(2, "stderr") // go-plugin has replaced os.Stderr
+		if err := child.Start(); err != nil {
+			return nil, err
+		}
 	case "frozen":
 		go func() {
 			time.Sleep(200 * time.Millisecond) // let the response out first
@@ -113,6 +127,9 @@ func (s *server) Configure(_ context.Context, req *tesserav1.ConfigureRequest) (
 		req.GetSize().GetColumns(), req.GetSize().GetRows())
 	return &tesserav1.ConfigureResponse{}, nil
 }
+
+// sleeperKey makes the test binary sleep instead of running tests.
+const sleeperKey = "TESSERA_TEST_SLEEPER"
 
 // install copies the test binary into a new plugins directory once per
 // name.

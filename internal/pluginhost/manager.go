@@ -8,7 +8,6 @@ package pluginhost
 import (
 	"context"
 	"fmt"
-	"io"
 	"log"
 	"sync"
 
@@ -50,10 +49,11 @@ type PanelState struct {
 
 // Manager runs one plugin process per enabled panel.
 type Manager struct {
-	ctx     context.Context
-	cancel  context.CancelFunc
-	wg      sync.WaitGroup
-	changed chan struct{}
+	ctx       context.Context
+	cancel    context.CancelFunc
+	wg        sync.WaitGroup
+	changed   chan struct{}
+	closeOnce sync.Once
 
 	mu     sync.Mutex
 	panels []*panel
@@ -87,8 +87,8 @@ func Start(cfg config.Config, dir string, logger *log.Logger) *Manager {
 }
 
 func (m *Manager) bringUp(pn *panel, p config.Panel, dir string, logger *log.Logger) {
-	stderr := &prefixWriter{prefix: fmt.Sprintf("[panel %s] ", p.ID), logger: logger}
-	inst, err := Launch(m.ctx, dir, p.Plugin, stderr, logger)
+	output := func(line string) { logger.Printf("[panel %s] %s", p.ID, line) }
+	inst, err := Launch(m.ctx, dir, p.Plugin, output, logger)
 	if err == nil {
 		err = configure(m.ctx, inst, p)
 		if err != nil {
@@ -104,7 +104,10 @@ func (m *Manager) bringUp(pn *panel, p config.Panel, dir string, logger *log.Log
 	defer m.mu.Unlock()
 	if m.closed {
 		if inst != nil {
-			go inst.Close() // Close is waiting on wg, not on this instance
+			// Close is waiting on wg, so it waits for this too.
+			m.mu.Unlock()
+			inst.Close()
+			m.mu.Lock()
 		}
 		return
 	}
@@ -156,13 +159,12 @@ func (m *Manager) States() []PanelState {
 func (m *Manager) Changed() <-chan struct{} { return m.changed }
 
 // Close stops launching and shuts every plugin down in parallel. It
-// returns once all plugin processes are gone.
-func (m *Manager) Close() {
+// returns once all plugin processes are gone, including when called
+// again while a first call is still shutting them down.
+func (m *Manager) Close() { m.closeOnce.Do(m.close) }
+
+func (m *Manager) close() {
 	m.mu.Lock()
-	if m.closed {
-		m.mu.Unlock()
-		return
-	}
 	m.closed = true
 	m.cancel()
 	var running []*Instance
@@ -185,28 +187,3 @@ func (m *Manager) Close() {
 	wg.Wait()
 	m.wg.Wait()
 }
-
-// prefixWriter logs each line written to it with a prefix. go-plugin
-// writes plugin stderr one line at a time.
-type prefixWriter struct {
-	prefix string
-	logger *log.Logger
-	mu     sync.Mutex
-	line   []byte
-}
-
-func (w *prefixWriter) Write(b []byte) (int, error) {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	for _, c := range b {
-		if c == '\n' {
-			w.logger.Print(w.prefix + string(w.line))
-			w.line = w.line[:0]
-			continue
-		}
-		w.line = append(w.line, c)
-	}
-	return len(b), nil
-}
-
-var _ io.Writer = (*prefixWriter)(nil)

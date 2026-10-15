@@ -6,10 +6,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"log"
 	"os/exec"
 	"slices"
+	"sync"
 	"time"
 
 	"github.com/hashicorp/go-hclog"
@@ -25,8 +25,12 @@ const (
 	startTimeout = 10 * time.Second
 	callTimeout  = 5 * time.Second
 	// killTimeout bounds go-plugin's Kill, which waits 2s for a graceful
-	// exit but can block for good on a plugin whose Shutdown never answers.
+	// exit but can block for good: on a plugin whose Shutdown never
+	// answers, or on a child of the plugin that keeps its stderr open.
 	killTimeout = 3 * time.Second
+	// reapTimeout bounds the wait for Kill after the plugin's process
+	// group has been killed.
+	reapTimeout = 2 * time.Second
 )
 
 // handshake is the transport handshake of docs/protocol.md.
@@ -55,23 +59,29 @@ func (panelPlugin) GRPCClient(_ context.Context, _ *plugin.GRPCBroker, conn *grp
 // Instance is one running plugin process that has passed the handshake
 // and Describe.
 type Instance struct {
-	Info   *tesserav1.DescribeResponse
-	Client tesserav1.PanelServiceClient
-	client *plugin.Client
-	cmd    *exec.Cmd
+	Info    *tesserav1.DescribeResponse
+	Client  tesserav1.PanelServiceClient
+	client  *plugin.Client
+	cmd     *exec.Cmd
+	outputs []*lineWriter
 }
 
 // Launch starts the plugin called name in dir, checks its versions, and
-// describes it. The plugin's output goes to stderr: its stderr pipe,
-// and the stdout and stderr a go-plugin plugin forwards over the
-// GRPCStdio service. On error, no process is left running.
-func Launch(ctx context.Context, dir, name string, stderr io.Writer, logger *log.Logger) (*Instance, error) {
+// describes it. Each line the plugin writes goes to output: from its
+// stderr pipe, and from the stdout and stderr a go-plugin plugin
+// forwards over the GRPCStdio service. On error, no process is left
+// running.
+func Launch(ctx context.Context, dir, name string, output func(line string), logger *log.Logger) (*Instance, error) {
 	path, err := find(dir, name)
 	if err != nil {
 		return nil, err
 	}
 	cmd := exec.Command(path)
+	ownProcessGroup(cmd)
 	inst := &Instance{cmd: cmd}
+	for range 3 {
+		inst.outputs = append(inst.outputs, &lineWriter{output: output})
+	}
 	inst.client = plugin.NewClient(&plugin.ClientConfig{
 		HandshakeConfig:  handshake,
 		Plugins:          plugin.PluginSet{"panel": panelPlugin{}},
@@ -79,14 +89,14 @@ func Launch(ctx context.Context, dir, name string, stderr io.Writer, logger *log
 		AllowedProtocols: []plugin.Protocol{plugin.ProtocolGRPC},
 		AutoMTLS:         true,
 		StartTimeout:     startTimeout,
-		Stderr:           stderr,
-		SyncStdout:       stderr,
-		SyncStderr:       stderr,
-		Logger: hclog.New(&hclog.LoggerOptions{
+		Stderr:           inst.outputs[0],
+		SyncStdout:       inst.outputs[1],
+		SyncStderr:       inst.outputs[2],
+		Logger: quietStderr{hclog.New(&hclog.LoggerOptions{
 			Name:   "plugin " + name,
 			Output: logger.Writer(),
-			Level:  hclog.Warn, // plugin stderr already reaches stderr
-		}),
+			Level:  hclog.Warn,
+		})},
 	})
 	if err := inst.start(ctx, name); err != nil {
 		inst.Close()
@@ -129,8 +139,8 @@ func (inst *Instance) start(ctx context.Context, name string) error {
 
 // Describe launches the plugin called name in dir only to describe it,
 // as the panel picker does, and shuts it down.
-func Describe(ctx context.Context, dir, name string, stderr io.Writer, logger *log.Logger) (*tesserav1.DescribeResponse, error) {
-	inst, err := Launch(ctx, dir, name, stderr, logger)
+func Describe(ctx context.Context, dir, name string, output func(line string), logger *log.Logger) (*tesserav1.DescribeResponse, error) {
+	inst, err := Launch(ctx, dir, name, output, logger)
 	if err != nil {
 		return nil, err
 	}
@@ -139,9 +149,16 @@ func Describe(ctx context.Context, dir, name string, stderr io.Writer, logger *l
 }
 
 // Close shuts the plugin down: Shutdown, then a kill if it is still
-// running 2 seconds later. It returns once the process is gone, within
-// killTimeout even if the plugin never answers Shutdown.
+// running 2 seconds later. If that has not finished within killTimeout,
+// because the plugin never answers Shutdown or a child of it holds its
+// stderr open, Close kills the plugin's process group (on Windows, the
+// plugin alone). It returns within killTimeout plus reapTimeout.
 func (inst *Instance) Close() {
+	defer func() {
+		for _, w := range inst.outputs {
+			w.Flush()
+		}
+	}()
 	done := make(chan struct{})
 	go func() {
 		inst.client.Kill()
@@ -153,10 +170,55 @@ func (inst *Instance) Close() {
 	case <-time.After(killTimeout):
 	}
 	if p := inst.cmd.Process; p != nil {
-		_ = p.Kill() // Kill returns once the exit unblocks Shutdown
+		killGroup(p) // the exit unblocks Shutdown, and EOF the stderr reader
 	}
-	<-done
+	select {
+	case <-done:
+	case <-time.After(reapTimeout):
+	}
 }
 
 // Exited reports whether the plugin process has exited.
 func (inst *Instance) Exited() bool { return inst.client.Exited() }
+
+// quietStderr is go-plugin's logger minus the sub-logger it re-logs
+// plugin stderr lines through, since Launch passes those on raw.
+type quietStderr struct{ hclog.Logger }
+
+func (l quietStderr) Named(name string) hclog.Logger {
+	if name == "stdio" { // errors of the GRPCStdio client
+		return l.Logger.Named(name)
+	}
+	return hclog.NewNullLogger()
+}
+
+// lineWriter passes each complete line written to it to output.
+type lineWriter struct {
+	output func(string)
+	mu     sync.Mutex
+	line   []byte
+}
+
+func (w *lineWriter) Write(b []byte) (int, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	for _, c := range b {
+		if c == '\n' {
+			w.output(string(w.line))
+			w.line = w.line[:0]
+			continue
+		}
+		w.line = append(w.line, c)
+	}
+	return len(b), nil
+}
+
+// Flush passes on a final line that has no newline.
+func (w *lineWriter) Flush() {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if len(w.line) > 0 {
+		w.output(string(w.line))
+		w.line = w.line[:0]
+	}
+}
