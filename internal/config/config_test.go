@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -183,6 +184,9 @@ func TestSaveRejectsInvalidConfig(t *testing.T) {
 }
 
 func TestSavePermissions(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows has no Unix permission bits; Go reports 0666 or 0444")
+	}
 	path := filepath.Join(t.TempDir(), FileName)
 	mode := func() os.FileMode {
 		t.Helper()
