@@ -4,6 +4,8 @@ on:
   push:
     branches: [main]
   pull_request:
+    # edited covers a change of base branch.
+    types: [opened, synchronize, reopened, edited]
 
 permissions:
   contents: read
@@ -34,8 +36,8 @@ jobs:
           echo "::error::pull requests must target main, not $BASE_REF"
           exit 1
 
-      # Depth 2 so that, on a pull request's merge commit, HEAD~1 is the
-      # main the change was merged with.
+      # Depth 2 so that HEAD~1 exists: on a pull request's merge commit,
+      # the main it was merged with; on main, the previous main.
       - uses: actions/checkout@v7
         with:
           fetch-depth: 2
@@ -86,11 +88,15 @@ jobs:
           go run github.com/bufbuild/buf/cmd/buf@v1.74.0 lint
           go run github.com/bufbuild/buf/cmd/buf@v1.74.0 format -d --exit-code
 
+      # The rules are pinned here rather than read from proto/buf.yaml,
+      # so a change cannot weaken the check that judges it.
       - name: Check protocol for breaking changes
-        if: matrix.lint && github.event_name == 'pull_request'
+        if: matrix.lint
+        working-directory: proto
         run: |
-          go run github.com/bufbuild/buf/cmd/buf@v1.74.0 breaking proto \
-            --against ".git#ref=HEAD~1,subdir=proto"
+          go run github.com/bufbuild/buf/cmd/buf@v1.74.0 breaking \
+            --config '{"version":"v2","breaking":{"use":["FILE"]}}' \
+            --against "../.git#ref=HEAD~1,subdir=proto"
 
       - name: Check generated code is up to date
         if: matrix.lint
