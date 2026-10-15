@@ -46,8 +46,8 @@ type PanelServiceClient interface {
 	// Configure passes the panel's settings and size. The plugin returns
 	// INVALID_ARGUMENT with a readable message if it rejects the settings;
 	// it then keeps its previous settings, if any. The host shows the
-	// message in an error tile and makes no Watch or Render call until a
-	// later Configure succeeds.
+	// message in an error tile, cancels any open Watch or stops polling,
+	// and makes no Watch or Render call until a later Configure succeeds.
 	Configure(ctx context.Context, in *ConfigureRequest, opts ...grpc.CallOption) (*ConfigureResponse, error)
 	// Watch streams a new view whenever the panel's content changes,
 	// starting with the current view, and a heartbeat when nothing changed
@@ -154,8 +154,8 @@ type PanelServiceServer interface {
 	// Configure passes the panel's settings and size. The plugin returns
 	// INVALID_ARGUMENT with a readable message if it rejects the settings;
 	// it then keeps its previous settings, if any. The host shows the
-	// message in an error tile and makes no Watch or Render call until a
-	// later Configure succeeds.
+	// message in an error tile, cancels any open Watch or stops polling,
+	// and makes no Watch or Render call until a later Configure succeeds.
 	Configure(context.Context, *ConfigureRequest) (*ConfigureResponse, error)
 	// Watch streams a new view whenever the panel's content changes,
 	// starting with the current view, and a heartbeat when nothing changed

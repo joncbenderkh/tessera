@@ -1166,7 +1166,7 @@ type TableRow struct {
 	// are ignored.
 	Cells []string `protobuf:"bytes,1,rep,name=cells,proto3" json:"cells,omitempty"`
 	// If set, the row is selectable and activating it sends an
-	// ActivateEvent with this id.
+	// ActivateEvent with this id. Unique within the view.
 	ActionId      string `protobuf:"bytes,2,opt,name=action_id,json=actionId,proto3" json:"action_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -1281,7 +1281,7 @@ type ListItem struct {
 	// Secondary text under the title.
 	Detail string `protobuf:"bytes,3,opt,name=detail,proto3" json:"detail,omitempty"`
 	// If set, the item shows a chevron and activating it sends an
-	// ActivateEvent with this id.
+	// ActivateEvent with this id. Unique within the view.
 	ActionId      string `protobuf:"bytes,4,opt,name=action_id,json=actionId,proto3" json:"action_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache

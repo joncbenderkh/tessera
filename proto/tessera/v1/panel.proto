@@ -25,8 +25,8 @@ service PanelService {
   // Configure passes the panel's settings and size. The plugin returns
   // INVALID_ARGUMENT with a readable message if it rejects the settings;
   // it then keeps its previous settings, if any. The host shows the
-  // message in an error tile and makes no Watch or Render call until a
-  // later Configure succeeds.
+  // message in an error tile, cancels any open Watch or stops polling,
+  // and makes no Watch or Render call until a later Configure succeeds.
   rpc Configure(ConfigureRequest) returns (ConfigureResponse);
 
   // Watch streams a new view whenever the panel's content changes,
@@ -156,7 +156,7 @@ message HandleEventRequest {
 // ActivateEvent reports a click, tap, or Enter on an actionable row or
 // item.
 message ActivateEvent {
-  // The action_id of the activated row or item.
+  // The action_id of the activated row or item, unique within the view.
   string action_id = 1;
 }
 

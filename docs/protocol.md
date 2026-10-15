@@ -40,10 +40,13 @@ languages can follow its documented handshake:
    plugin's certificate for the name `localhost`, so it needs that DNS
    name and the server and client authentication key usages; the plugin
    requires a client certificate and verifies it against
-   `PLUGIN_CLIENT_CERT`. As go-plugin requires,
-   the plugin also serves the standard gRPC health service
-   (`grpc.health.v1.Health`) and reports the service name `plugin` as
-   serving. The plugin's stderr goes to the host's log for that panel.
+   `PLUGIN_CLIENT_CERT`. As go-plugin requires, the plugin also serves
+   the standard gRPC health service (`grpc.health.v1.Health`), reporting
+   the service name `plugin` as serving, and go-plugin's
+   `plugin.GRPCController`, whose `Shutdown` makes the plugin exit; a
+   plugin still running 2 seconds later is killed. go-plugin's
+   `GRPCBroker` and `GRPCStdio` services are optional. The plugin's
+   stderr goes to the host's log for that panel.
 
 Mutual TLS is what go-plugin calls AutoMTLS, and the host always enables
 it: without it, any local process could connect to a plugin, read its
@@ -91,8 +94,9 @@ host                                    plugin
   change. A watching plugin then sends a fresh view on its open stream,
   and a polled plugin is rendered again right away. If the plugin
   answers `INVALID_ARGUMENT`, it keeps its previous settings, and the
-  host shows the message in an error tile; until a Configure succeeds,
-  the host makes no Watch or Render call.
+  host shows the message in an error tile and cancels any open Watch or
+  stops polling; until a Configure succeeds, it makes no Watch or Render
+  call.
 - **Watch** is the normal path: the plugin pushes a complete view each
   time its content changes, starting with the current one. When nothing
   changes for `heartbeat_interval`, it sends a `WatchResponse` without a
@@ -102,8 +106,8 @@ host                                    plugin
   per-stream state inside the handler.
 - **Render** is the fallback for plugins that cannot push. If Watch
   returns `UNIMPLEMENTED` before its first response, the host polls
-  Render, waiting
-  `RenderResponse.poll_interval` (or its default) between calls.
+  Render, waiting `RenderResponse.poll_interval` (or its default)
+  between calls.
 - **HandleEvent** delivers clicks and scrolls. A polled plugin is rendered
   again right after the event.
 
@@ -180,5 +184,6 @@ mockup.
 | `ActivateEvent` | The user clicks, taps, or presses Enter on a table row or list item that has an `action_id` | `action_id` |
 | `ScrollEvent` | The visible range of a table or list with an `id` changes | `widget_id`, `first_visible`, `visible_count` |
 
-Rows and items without an `action_id` are not interactive. Hover and
+Rows and items without an `action_id` are not interactive. The event
+carries only the `action_id`, so a view never reuses one. Hover and
 selection highlighting are drawn by the host and never reach the plugin.

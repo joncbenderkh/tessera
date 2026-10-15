@@ -632,7 +632,7 @@ func (*HandleEventRequest_Scroll) isHandleEventRequest_Event() {}
 // item.
 type ActivateEvent struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// The action_id of the activated row or item.
+	// The action_id of the activated row or item, unique within the view.
 	ActionId      string `protobuf:"bytes,1,opt,name=action_id,json=actionId,proto3" json:"action_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
