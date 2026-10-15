@@ -3,7 +3,9 @@
 tessera reads one YAML file: `tessera/config.yaml` in the user config
 directory. That is `$XDG_CONFIG_HOME/tessera/config.yaml`, or
 `~/.config/tessera/config.yaml`, on Linux. Pass `--config <path>` to use a
-different file. On first run, tessera writes a default config there.
+different file. On first run, tessera writes a default config there,
+readable only by you (mode 0600). Later saves keep the file's existing
+permissions.
 
 tessera reloads the file when it changes. Edit layout rewrites it, which
 drops any comments.
@@ -48,5 +50,5 @@ panels:
 | `panels[].settings` | Settings passed to the plugin. Their schema comes from the plugin. |
 
 Unknown fields are errors, so a misspelt key is reported rather than
-ignored. Enabled panels must fit within `grid.columns` and must not
-overlap; disabled panels may overlap anything.
+ignored. Every panel must fit within `grid.columns`. Enabled panels must
+not overlap; disabled panels may overlap anything.

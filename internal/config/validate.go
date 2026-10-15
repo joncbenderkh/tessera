@@ -5,6 +5,7 @@ package config
 import (
 	"errors"
 	"fmt"
+	"math"
 )
 
 // Validate checks the config's internal consistency. Plugin settings are
@@ -23,7 +24,7 @@ func (c Config) Validate() error {
 	}
 
 	seen := make(map[string]bool, len(c.Panels))
-	occupied := make(map[[2]int]string)
+	var placed []placement
 	for i, p := range c.Panels {
 		name := fmt.Sprintf("panels[%d]", i)
 		if p.ID != "" {
@@ -47,30 +48,38 @@ func (c Config) Validate() error {
 			errs = append(errs, fmt.Errorf("%s: x and y must not be negative, got (%d, %d)", name, p.X, p.Y))
 			continue
 		}
-		if c.Grid.Columns >= 1 && p.X+p.W > c.Grid.Columns {
-			errs = append(errs, fmt.Errorf("%s: spans columns %d-%d, but the grid has %d", name, p.X, p.X+p.W-1, c.Grid.Columns))
+		// Compared without computing X+W or Y+H, which can overflow.
+		if c.Grid.Columns >= 1 && (p.X >= c.Grid.Columns || p.W > c.Grid.Columns-p.X) {
+			errs = append(errs, fmt.Errorf("%s: x %d with w %d does not fit the grid's %d columns", name, p.X, p.W, c.Grid.Columns))
+			continue
+		}
+		if p.H > math.MaxInt-p.Y {
+			errs = append(errs, fmt.Errorf("%s: y %d with h %d is out of range", name, p.Y, p.H))
 			continue
 		}
 		if !p.IsEnabled() {
 			continue
 		}
-		if other, ok := claim(occupied, p, name); !ok {
+		if other, ok := overlapping(placed, p); ok {
 			errs = append(errs, fmt.Errorf("%s overlaps %s", name, other))
 		}
+		placed = append(placed, placement{p, name})
 	}
 	return errors.Join(errs...)
 }
 
-// claim marks the cells p covers as taken by name. If a cell is already
-// taken, it stops and returns the name of the panel holding it.
-func claim(occupied map[[2]int]string, p Panel, name string) (string, bool) {
-	for y := p.Y; y < p.Y+p.H; y++ {
-		for x := p.X; x < p.X+p.W; x++ {
-			if other, ok := occupied[[2]int{x, y}]; ok {
-				return other, false
-			}
-			occupied[[2]int{x, y}] = name
+type placement struct {
+	Panel
+	name string
+}
+
+// overlapping returns the name of the first placed panel whose rectangle
+// intersects p's.
+func overlapping(placed []placement, p Panel) (string, bool) {
+	for _, q := range placed {
+		if p.X < q.X+q.W && q.X < p.X+p.W && p.Y < q.Y+q.H && q.Y < p.Y+p.H {
+			return q.name, true
 		}
 	}
-	return "", true
+	return "", false
 }

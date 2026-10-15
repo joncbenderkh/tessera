@@ -3,6 +3,7 @@
 package config
 
 import (
+	"math"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -53,6 +54,27 @@ func TestParseRejectsUnknownFields(t *testing.T) {
 	}
 }
 
+func TestParseRejectsFractionalIntegers(t *testing.T) {
+	for _, tt := range []struct{ old, new string }{
+		{"version: 1", "version: 1.9"},
+		{"    x: 0\n", "    x: -0.5\n"},
+		{"    w: 4\n", "    w: 1e0\n"},
+	} {
+		data := strings.Replace(example, tt.old, tt.new, 1)
+		_, err := Parse([]byte(data))
+		if err == nil || !strings.Contains(err.Error(), "not an integer") {
+			t.Errorf("%s: expected a not-an-integer error, got %v", strings.TrimSpace(tt.new), err)
+		}
+	}
+}
+
+func TestParseRejectsExtraDocuments(t *testing.T) {
+	_, err := Parse([]byte(example + "---\ngrid: {row_hieght: 200}\n"))
+	if err == nil || !strings.Contains(err.Error(), "YAML documents") {
+		t.Fatalf("expected a multiple-documents error, got %v", err)
+	}
+}
+
 func TestValidate(t *testing.T) {
 	panel := func(id string, x, y, w, h int) Panel {
 		return Panel{ID: id, Plugin: "p", X: x, Y: y, W: w, H: h}
@@ -70,7 +92,11 @@ func TestValidate(t *testing.T) {
 		{"missing id", []Panel{panel("", 0, 0, 1, 1)}, "id is required"},
 		{"zero span", []Panel{panel("a", 0, 0, 0, 1)}, "at least 1"},
 		{"negative position", []Panel{panel("a", -1, 0, 1, 1)}, "must not be negative"},
-		{"past last column", []Panel{panel("a", 3, 0, 2, 1)}, "the grid has 4"},
+		{"past last column", []Panel{panel("a", 3, 0, 2, 1)}, "4 columns"},
+		{"x past the grid", []Panel{panel("a", 4, 0, 1, 1)}, "4 columns"},
+		{"x+w overflows", []Panel{panel("a", math.MaxInt, 0, 1, 1)}, "4 columns"},
+		{"y+h overflows", []Panel{panel("a", 0, math.MaxInt, 1, 1)}, "out of range"},
+		{"huge panels overlap", []Panel{panel("a", 0, 0, 1, math.MaxInt/2), panel("b", 0, 1_000_000_000, 1, 1)}, `overlaps panel "a"`},
 		{"overlap", []Panel{panel("a", 0, 0, 2, 2), panel("b", 1, 1, 1, 1)}, `overlaps panel "a"`},
 		{"disabled panels may overlap", []Panel{panel("a", 0, 0, 1, 1), disabled}, ""},
 	}
@@ -153,5 +179,32 @@ func TestSaveRejectsInvalidConfig(t *testing.T) {
 	}
 	if _, err := os.Stat(path); !os.IsNotExist(err) {
 		t.Fatalf("an invalid config must not be written, stat: %v", err)
+	}
+}
+
+func TestSavePermissions(t *testing.T) {
+	path := filepath.Join(t.TempDir(), FileName)
+	mode := func() os.FileMode {
+		t.Helper()
+		info, err := os.Stat(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return info.Mode().Perm()
+	}
+	if err := Save(path, Default()); err != nil {
+		t.Fatal(err)
+	}
+	if got := mode(); got != 0o600 {
+		t.Fatalf("new config has mode %o, want 600", got)
+	}
+	if err := os.Chmod(path, 0o640); err != nil {
+		t.Fatal(err)
+	}
+	if err := Save(path, Default()); err != nil {
+		t.Fatal(err)
+	}
+	if got := mode(); got != 0o640 {
+		t.Fatalf("replaced config has mode %o, want the existing 640", got)
 	}
 }

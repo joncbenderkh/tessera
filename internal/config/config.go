@@ -5,13 +5,16 @@
 package config
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"io/fs"
+	"math"
 	"os"
 	"path/filepath"
 
 	"github.com/goccy/go-yaml"
+	"github.com/goccy/go-yaml/parser"
 )
 
 // SchemaVersion is the config schema version this build reads and writes.
@@ -71,17 +74,51 @@ func DefaultPath() (string, error) {
 	return filepath.Join(dir, "tessera", FileName), nil
 }
 
-// Parse decodes and validates a config. Unknown fields are errors, so typos
-// surface instead of being silently ignored.
+// Parse decodes and validates a config. Unknown fields, fractional numbers
+// in integer fields, and extra YAML documents are errors, so mistakes
+// surface instead of being silently ignored or truncated.
 func Parse(data []byte) (Config, error) {
+	file, err := parser.ParseBytes(data, 0)
+	if err != nil {
+		return Config{}, err
+	}
+	if len(file.Docs) > 1 {
+		return Config{}, fmt.Errorf("found %d YAML documents, want one", len(file.Docs))
+	}
 	var c Config
-	if err := yaml.UnmarshalWithOptions(data, &c, yaml.Strict(), yaml.DisallowUnknownField()); err != nil {
+	if err := yaml.UnmarshalWithOptions(data, &c,
+		yaml.Strict(), yaml.DisallowUnknownField(), yaml.CustomUnmarshaler(decodeInt),
+	); err != nil {
 		return Config{}, err
 	}
 	if err := c.Validate(); err != nil {
 		return Config{}, err
 	}
 	return c, nil
+}
+
+// decodeInt accepts only YAML integers that fit an int. By default the
+// decoder truncates floats, so "x: -0.5" would silently become 0.
+func decodeInt(dst *int, data []byte) error {
+	var v any
+	if err := yaml.Unmarshal(data, &v); err != nil {
+		return err
+	}
+	switch n := v.(type) {
+	case int64:
+		if n < math.MinInt || n > math.MaxInt {
+			return fmt.Errorf("%d is out of range", n)
+		}
+		*dst = int(n)
+	case uint64:
+		if n > math.MaxInt {
+			return fmt.Errorf("%d is out of range", n)
+		}
+		*dst = int(n)
+	default:
+		return fmt.Errorf("%s is not an integer", bytes.TrimSpace(data))
+	}
+	return nil
 }
 
 // Marshal encodes a config as YAML.
@@ -120,7 +157,13 @@ func Save(path string, c Config) error {
 	return writeAtomic(path, data)
 }
 
+// writeAtomic keeps the permissions of the file it replaces. A new file is
+// private (0600), since plugin settings may hold credentials.
 func writeAtomic(path string, data []byte) (err error) {
+	perm := fs.FileMode(0o600)
+	if info, err := os.Stat(path); err == nil {
+		perm = info.Mode().Perm()
+	}
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
@@ -138,7 +181,7 @@ func writeAtomic(path string, data []byte) (err error) {
 	if _, err = tmp.Write(data); err != nil {
 		return err
 	}
-	if err = tmp.Chmod(0o644); err != nil {
+	if err = tmp.Chmod(perm); err != nil {
 		return err
 	}
 	if err = tmp.Sync(); err != nil {
