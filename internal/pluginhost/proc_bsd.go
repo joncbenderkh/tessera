@@ -5,6 +5,7 @@
 package pluginhost
 
 import (
+	"os"
 	"os/exec"
 	"syscall"
 )
@@ -15,3 +16,8 @@ import (
 func ownProcessGroup(cmd *exec.Cmd) {
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 }
+
+// canAwaitExit says awaitExit cannot wait without reaping here.
+const canAwaitExit = false
+
+func awaitExit(*os.Process) bool { return false }

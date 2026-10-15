@@ -52,12 +52,14 @@ languages can follow its documented handshake:
 
 A plugin's stdin is empty, and an output line longer than 64 KiB is
 logged in pieces. On Unix each plugin runs in a process group of its
-own, which is killed once the plugin has exited or been killed, so a
-child process that holds the plugin's stderr open cannot keep the host
-from exiting, and children left behind do not outlive it. On Linux the kernel also
-kills a plugin whose host dies without shutting it down. On Windows only
-the plugin itself is killed, and on macOS and Windows a plugin outlives
-a host that crashes.
+own, which the host kills when it shuts the plugin down and, on Linux,
+as soon as the plugin exits. Children that stay in that group
+therefore cannot outlive the plugin's shutdown or keep the host from
+exiting by holding the plugin's stderr open; a child that leaves the
+group is on its own. On Linux the kernel also kills a plugin whose
+host dies without shutting it down. On Windows only the plugin itself
+is killed, and on macOS and Windows a plugin outlives a host that
+crashes.
 
 Mutual TLS is what go-plugin calls AutoMTLS, and the host always enables
 it: without it, any local process could connect to a plugin, read its

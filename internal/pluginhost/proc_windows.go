@@ -14,3 +14,8 @@ func ownProcessGroup(*exec.Cmd) {}
 
 // killGroup kills the plugin.
 func killGroup(p *os.Process) { _ = p.Kill() }
+
+// canAwaitExit says awaitExit cannot wait without reaping here.
+const canAwaitExit = false
+
+func awaitExit(*os.Process) bool { return false }

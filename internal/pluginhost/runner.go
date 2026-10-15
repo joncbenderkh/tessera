@@ -20,9 +20,10 @@ import (
 // built-in runner, so the host controls how the process starts and
 // can kill it, with its process group, at any time: during the
 // handshake, which go-plugin does not let a context cancel, and after
-// a Shutdown that left children behind.
+// the plugin exits, to end children it left in its group.
 type procRunner struct {
 	path   string
+	tmpDir string // go-plugin's socket directory, which Close removes
 	cmd    *exec.Cmd
 	stdout io.ReadCloser
 	stderr io.ReadCloser
@@ -30,13 +31,16 @@ type procRunner struct {
 	mu       sync.Mutex
 	proc     *os.Process
 	canceled bool
+	exited   bool          // reaped: its PID, and so its group ID, may be reused
+	watched  chan struct{} // closed by watch; Wait reaps only after it
 }
 
 var _ runner.Runner = (*procRunner)(nil)
 
 // runnerFunc is go-plugin's ClientConfig.RunnerFunc for r. spec carries
 // the environment go-plugin prepared (cookie, certificate, socket dir).
-func (r *procRunner) runnerFunc(_ hclog.Logger, spec *exec.Cmd, _ string) (runner.Runner, error) {
+func (r *procRunner) runnerFunc(_ hclog.Logger, spec *exec.Cmd, tmpDir string) (runner.Runner, error) {
+	r.tmpDir = tmpDir
 	r.cmd = exec.Command(r.path)
 	r.cmd.Env = spec.Env
 	// No stdin: go-plugin would pass the host's, and a plugin in its own
@@ -62,23 +66,54 @@ func (r *procRunner) Start(context.Context) error {
 		return err
 	}
 	r.proc = r.cmd.Process
+	if canAwaitExit {
+		r.watched = make(chan struct{})
+		go r.watch()
+	}
 	return nil
 }
 
-// kill kills the plugin's process group and stops a pending Start.
-// Called after the plugin has exited, it reaches children left in the
-// group; the group ID could only belong to another process if the
-// plugin's PID were reused, by a new group leader, in between.
+// watch kills the plugin's process group as soon as the plugin exits,
+// ending children it left behind. go-plugin calls Wait only once the
+// plugin's stderr closes, so a child holding it open would otherwise
+// keep an exited plugin looking alive. The plugin is not reaped until
+// watch is done, so its group ID cannot have been reused.
+func (r *procRunner) watch() {
+	defer close(r.watched)
+	if awaitExit(r.proc) {
+		r.mu.Lock()
+		killGroup(r.proc)
+		r.mu.Unlock()
+	}
+}
+
+// kill kills the plugin's process group, unless Wait has reaped the
+// plugin, and stops a pending Start.
 func (r *procRunner) kill() {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.canceled = true
-	if r.proc != nil {
+	if r.proc != nil && !r.exited {
 		killGroup(r.proc)
 	}
 }
 
-func (r *procRunner) Wait(context.Context) error { return r.cmd.Wait() }
+// Wait reaps the plugin. Without watch (other than on Linux), it kills
+// the plugin's process group just after the reap, before the group ID
+// is likely to be reused.
+func (r *procRunner) Wait(context.Context) error {
+	if r.watched != nil {
+		<-r.watched
+	}
+	err := r.cmd.Wait()
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.watched == nil {
+		killGroup(r.proc)
+	}
+	r.exited = true
+	return err
+}
 
 func (r *procRunner) Kill(context.Context) error {
 	r.kill()

@@ -83,7 +83,8 @@ func (testPlugin) GRPCClient(context.Context, *plugin.GRPCBroker, *grpc.ClientCo
 //   - frozen: the process stops itself after Describe, so it never
 //     answers Shutdown.
 //   - forks: Describe starts a long-lived child that shares the
-//     plugin's stderr.
+//     plugin's stderr, and reports its PID there.
+//   - exits: as forks, then the plugin exits on its own.
 //
 // Any other name is a well-behaved plugin of that name, which reports
 // each Configure on stderr.
@@ -107,12 +108,20 @@ func (s *server) Describe(ctx context.Context, _ *tesserav1.DescribeRequest) (*t
 	case "slow-describe":
 		<-ctx.Done()
 		return nil, ctx.Err()
-	case "forks":
+	case "forks", "exits":
+		stderr := os.NewFile(2, "stderr") // go-plugin has replaced os.Stderr
 		child := exec.Command(os.Args[0])
 		child.Env = []string{sleeperKey + "=1"}
-		child.Stderr = os.NewFile(2, "stderr") // go-plugin has replaced os.Stderr
+		child.Stderr = stderr
 		if err := child.Start(); err != nil {
 			return nil, err
+		}
+		fmt.Fprintf(stderr, "child %d\n", child.Process.Pid)
+		if s.mode == "exits" {
+			go func() {
+				time.Sleep(200 * time.Millisecond)
+				os.Exit(0)
+			}()
 		}
 	case "frozen":
 		go func() {

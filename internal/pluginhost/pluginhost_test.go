@@ -5,6 +5,7 @@ package pluginhost
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"log"
 	"os"
 	"path/filepath"
@@ -136,7 +137,7 @@ func TestLaunchRejects(t *testing.T) {
 	logger, _ := newLogger()
 	for _, tt := range []struct{ name, want string }{
 		{"misnamed", `plugin "misnamed" calls itself "other"`},
-		{"proto-two", `plugin "proto-two" failed to start (this host speaks protocol 1)`},
+		{"proto-two", `plugin "proto-two" does not speak protocol 1: incompatible API version`},
 		{"plaintext", `plugin "plaintext": Describe: rpc error: code = Unavailable`},
 		{"view-nine", `plugin "view-nine" chose view schema 9; this host renders [1]`},
 		{"slow-describe", `plugin "slow-describe": Describe: rpc error: code = DeadlineExceeded`},
@@ -169,10 +170,16 @@ func TestCloseKillsUnresponsivePlugin(t *testing.T) {
 	for _, name := range []string{"frozen", "forks"} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			inst, err := Launch(context.Background(), dir, name, ignore, logger)
+			var child childPID
+			inst, err := Launch(context.Background(), dir, name, child.output, logger)
 			if err != nil {
 				t.Fatal(err)
 			}
+			defer func() {
+				if pid := child.get(); pid != 0 && !gone(pid) {
+					t.Errorf("child %d still running after Close", pid)
+				}
+			}()
 			time.Sleep(500 * time.Millisecond) // until frozen has stopped itself
 			start := time.Now()
 			inst.Close()
@@ -210,6 +217,75 @@ func TestLaunchCanceled(t *testing.T) {
 	}
 	if d := time.Since(start); d > time.Second {
 		t.Errorf("Launch took %v", d)
+	}
+}
+
+// childPID records the PID a forks or exits plugin reports.
+type childPID struct {
+	mu  sync.Mutex
+	pid int
+}
+
+func (c *childPID) output(line string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	fmt.Sscanf(line, "child %d", &c.pid)
+}
+
+func (c *childPID) get() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.pid
+}
+
+// gone waits up to a second for pid to exit and be reaped.
+func gone(pid int) bool {
+	for range 20 {
+		if !alive(pid) {
+			return true
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	return false
+}
+
+func TestExitKillsChildren(t *testing.T) {
+	if !canFreeze {
+		t.Skip("cannot reach a process's children on this OS")
+	}
+	dir := install(t, "exits")
+	logger, _ := newLogger()
+	var child childPID
+	inst, err := Launch(context.Background(), dir, "exits", child.output, logger)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer inst.Close()
+	for start := time.Now(); !inst.Exited() && time.Since(start) < 10*time.Second; {
+		time.Sleep(20 * time.Millisecond) // the plugin exits 200ms after Describe
+	}
+	if !inst.Exited() {
+		t.Fatal("plugin did not exit")
+	}
+	if pid := child.get(); pid == 0 || !gone(pid) {
+		t.Errorf("child %d of an exited plugin still running before Close", pid)
+	}
+}
+
+func TestFailedStartCleansUp(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("TMPDIR", tmp)
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "junk"+exeSuffix()), []byte("not a program\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	logger, _ := newLogger()
+	_, err := Launch(context.Background(), dir, "junk", ignore, logger)
+	if err == nil || !strings.Contains(err.Error(), "plugin \"junk\" failed to start: ") || strings.Contains(err.Error(), "protocol") {
+		t.Fatalf("got %v, want a start error without a protocol hint", err)
+	}
+	if entries, _ := os.ReadDir(tmp); len(entries) != 0 {
+		t.Errorf("left in TMPDIR: %v", entries)
 	}
 }
 

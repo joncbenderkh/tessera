@@ -7,8 +7,10 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -125,8 +127,11 @@ func (inst *Instance) start(ctx context.Context, name string) error {
 		return fmt.Errorf("plugin %q: %w", name, ctx.Err())
 	}
 	rpc, err := s.rpc, s.err
+	if err != nil && strings.Contains(err.Error(), "incompatible API version") {
+		return fmt.Errorf("plugin %q does not speak protocol %d: %w", name, tesserav1.ProtocolVersion, err)
+	}
 	if err != nil {
-		return fmt.Errorf("plugin %q failed to start (this host speaks protocol %d): %w", name, tesserav1.ProtocolVersion, err)
+		return fmt.Errorf("plugin %q failed to start: %w", name, err)
 	}
 	raw, err := rpc.Dispense("panel")
 	if err != nil {
@@ -176,6 +181,10 @@ func (inst *Instance) Close() {
 	defer func() {
 		for _, w := range inst.outputs {
 			w.Flush()
+		}
+		// go-plugin removes it only for a plugin that started.
+		if inst.runner.tmpDir != "" {
+			_ = os.RemoveAll(inst.runner.tmpDir)
 		}
 	}()
 	done := make(chan struct{})
