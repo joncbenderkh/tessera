@@ -776,9 +776,9 @@ type Gauge struct {
 	Value float64 `protobuf:"fixed64,2,opt,name=value,proto3" json:"value,omitempty"`
 	// Lower bound of the arc.
 	Min float64 `protobuf:"fixed64,3,opt,name=min,proto3" json:"min,omitempty"`
-	// Upper bound of the arc. If it is not greater than min, the host
-	// renders the gauge as missing.
-	Max float64 `protobuf:"fixed64,4,opt,name=max,proto3" json:"max,omitempty"`
+	// Upper bound of the arc. Unset means 100. If it is not greater than
+	// min, the host renders the gauge as missing.
+	Max *float64 `protobuf:"fixed64,4,opt,name=max,proto3,oneof" json:"max,omitempty"`
 	// Unit after the value, such as "%".
 	Unit string `protobuf:"bytes,5,opt,name=unit,proto3" json:"unit,omitempty"`
 	// The value as shown in the middle of the arc, already formatted.
@@ -847,8 +847,8 @@ func (x *Gauge) GetMin() float64 {
 }
 
 func (x *Gauge) GetMax() float64 {
-	if x != nil {
-		return x.Max
+	if x != nil && x.Max != nil {
+		return *x.Max
 	}
 	return 0
 }
@@ -1495,17 +1495,18 @@ const file_tessera_v1_view_proto_rawDesc = "" +
 	"\x05value\x18\x02 \x01(\tR\x05value\x12\x12\n" +
 	"\x04unit\x18\x03 \x01(\tR\x04unit\x12\x18\n" +
 	"\acaption\x18\x04 \x01(\tR\acaption\x123\n" +
-	"\fcaption_tone\x18\x05 \x01(\x0e2\x10.tessera.v1.ToneR\vcaptionTone\"\xf6\x01\n" +
+	"\fcaption_tone\x18\x05 \x01(\x0e2\x10.tessera.v1.ToneR\vcaptionTone\"\x83\x02\n" +
 	"\x05Gauge\x12\x14\n" +
 	"\x05label\x18\x01 \x01(\tR\x05label\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\x01R\x05value\x12\x10\n" +
-	"\x03min\x18\x03 \x01(\x01R\x03min\x12\x10\n" +
-	"\x03max\x18\x04 \x01(\x01R\x03max\x12\x12\n" +
+	"\x03min\x18\x03 \x01(\x01R\x03min\x12\x15\n" +
+	"\x03max\x18\x04 \x01(\x01H\x00R\x03max\x88\x01\x01\x12\x12\n" +
 	"\x04unit\x18\x05 \x01(\tR\x04unit\x12\x18\n" +
 	"\adisplay\x18\x06 \x01(\tR\adisplay\x12\x1c\n" +
-	"\awarn_at\x18\a \x01(\x01H\x00R\x06warnAt\x88\x01\x01\x12\x1e\n" +
-	"\berror_at\x18\b \x01(\x01H\x01R\aerrorAt\x88\x01\x01\x12\x18\n" +
-	"\acaption\x18\t \x01(\tR\acaptionB\n" +
+	"\awarn_at\x18\a \x01(\x01H\x01R\x06warnAt\x88\x01\x01\x12\x1e\n" +
+	"\berror_at\x18\b \x01(\x01H\x02R\aerrorAt\x88\x01\x01\x12\x18\n" +
+	"\acaption\x18\t \x01(\tR\acaptionB\x06\n" +
+	"\x04_maxB\n" +
 	"\n" +
 	"\b_warn_atB\v\n" +
 	"\t_error_at\"\xf1\x01\n" +

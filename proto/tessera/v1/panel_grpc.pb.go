@@ -45,13 +45,17 @@ type PanelServiceClient interface {
 	// INVALID_ARGUMENT with a readable message if it rejects the settings.
 	Configure(ctx context.Context, in *ConfigureRequest, opts ...grpc.CallOption) (*ConfigureResponse, error)
 	// Watch streams a new view whenever the panel's content changes,
-	// starting with the current view. A plugin that cannot push returns
-	// UNIMPLEMENTED, and the host polls Render instead.
+	// starting with the current view, and a heartbeat when nothing changed
+	// within WatchRequest.heartbeat_interval. The host holds at most one
+	// stream per plugin: a new Watch supersedes the open one, which the
+	// plugin should end. A plugin that cannot push returns UNIMPLEMENTED,
+	// and the host polls Render instead.
 	Watch(ctx context.Context, in *WatchRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[WatchResponse], error)
 	// Render returns the current view. It is the polling fallback for
 	// plugins that do not implement Watch.
 	Render(ctx context.Context, in *RenderRequest, opts ...grpc.CallOption) (*RenderResponse, error)
-	// HandleEvent delivers one user input event. A plugin that implements
+	// HandleEvent delivers one user input event. A request with no event
+	// set is ignored and answered with OK. A plugin that implements
 	// Watch reflects the effect by sending a new view on the stream; a
 	// polled plugin is rendered again right after the event.
 	HandleEvent(ctx context.Context, in *HandleEventRequest, opts ...grpc.CallOption) (*HandleEventResponse, error)
@@ -141,13 +145,17 @@ type PanelServiceServer interface {
 	// INVALID_ARGUMENT with a readable message if it rejects the settings.
 	Configure(context.Context, *ConfigureRequest) (*ConfigureResponse, error)
 	// Watch streams a new view whenever the panel's content changes,
-	// starting with the current view. A plugin that cannot push returns
-	// UNIMPLEMENTED, and the host polls Render instead.
+	// starting with the current view, and a heartbeat when nothing changed
+	// within WatchRequest.heartbeat_interval. The host holds at most one
+	// stream per plugin: a new Watch supersedes the open one, which the
+	// plugin should end. A plugin that cannot push returns UNIMPLEMENTED,
+	// and the host polls Render instead.
 	Watch(*WatchRequest, grpc.ServerStreamingServer[WatchResponse]) error
 	// Render returns the current view. It is the polling fallback for
 	// plugins that do not implement Watch.
 	Render(context.Context, *RenderRequest) (*RenderResponse, error)
-	// HandleEvent delivers one user input event. A plugin that implements
+	// HandleEvent delivers one user input event. A request with no event
+	// set is ignored and answered with OK. A plugin that implements
 	// Watch reflects the effect by sending a new view on the stream; a
 	// polled plugin is rendered again right after the event.
 	HandleEvent(context.Context, *HandleEventRequest) (*HandleEventResponse, error)

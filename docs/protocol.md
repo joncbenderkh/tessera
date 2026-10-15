@@ -48,7 +48,12 @@ Within a version, changes are additive only: new fields and enum values
 may appear, nothing is renamed, renumbered, or repurposed. Hosts render
 unknown enum values as their default and ignore unknown fields. Anything
 else needs a new version. `buf breaking` (`FILE` rules) is configured in
-`proto/buf.yaml` for checking this.
+`proto/buf.yaml` for checking this; CI does not run it yet.
+
+Since a field's type cannot change, a future view schema version is a new
+package (`tessera.v2.View`, say) carried in a new field next to `view` in
+`WatchResponse` and `RenderResponse`. The plugin sets only the field for
+the version it picked in `Describe`.
 
 ## Lifecycle
 
@@ -56,19 +61,23 @@ The host launches **one plugin process per panel** in the config, so two
 clocks with different time zones are two processes.
 
 ```
-host                                   plugin
- │── Describe(host version, [1]) ──────▶│  name, version, view_version,
- │◀───────────────────────────────────── │  config_schema, default_size
+host                                    plugin
+ │── Describe(host version, [1]) ───────▶│  name, version, view_version,
+ │◀──────────────────────────────────────│  config_schema, default_size
  │── Configure(panel id, settings, size)▶│  INVALID_ARGUMENT if rejected
- │── Watch() ──────────────────────────▶ │
- │◀────────────── view ── view ── view ──│  first view right away
- │── HandleEvent(activate "pid:4821") ─▶ │  effect arrives as a new view
+ │── Watch(heartbeat interval) ─────────▶│
+ │◀──────── view ── view ── heartbeat ───│  first view right away
+ │── HandleEvent(activate "pid:4821") ──▶│  effect arrives as a new view
 ```
 
 - **Configure** is called again whenever the panel's settings or size
   change. A watching plugin then sends a fresh view on its open stream.
 - **Watch** is the normal path: the plugin pushes a complete view each
-  time its content changes, starting with the current one.
+  time its content changes, starting with the current one. When nothing
+  changes for `heartbeat_interval`, it sends a `WatchResponse` without a
+  view, so a silent stream means a hung plugin. The host holds one stream
+  per plugin; a new Watch supersedes the open one, which the plugin
+  should end.
 - **Render** is the fallback for plugins that cannot push. If Watch
   returns `UNIMPLEMENTED`, the host polls Render, waiting
   `RenderResponse.poll_interval` (or its default) between calls.
@@ -79,17 +88,25 @@ Every view is complete: it replaces the previous one rather than patching
 it. Views are small, and this keeps plugins stateless about what the host
 has drawn.
 
-The host puts a deadline on every unary call and restarts a plugin that
-crashes, hangs, or breaks the protocol, with backoff, showing an error tile
-meanwhile (#13).
+The host puts a deadline on every unary call, treats a Watch stream that
+stays silent for twice the heartbeat interval as hung, and restarts a
+plugin that crashes, hangs, or breaks the protocol, with backoff, showing
+an error tile meanwhile (#13).
+
+A plugin's `DescribeResponse.name` must equal its executable's file name
+without extension, which is how the config's `plugin:` field finds it.
 
 ## Settings
 
 `DescribeResponse.config_schema` is a JSON Schema (draft 2020-12) for the
 panel's `settings` block in the config file. The host passes the settings
-to `Configure` as a `google.protobuf.Struct`. Checking settings against
-the schema, and building a form from it, is #16; until then, the plugin
-validates them and answers `INVALID_ARGUMENT` with a readable message.
+to `Configure` as a `google.protobuf.Struct`, which has the JSON data
+model: mappings become structs, sequences lists, and every number a
+double, so integers beyond ±2^53 lose precision (quote them as strings).
+Dates arrive as strings as written, and `!!binary` values as base64
+strings. Checking settings against the schema, and building a form from
+it, is #16; until then, the plugin validates them and answers
+`INVALID_ARGUMENT` with a readable message.
 
 ## View schema v1
 
@@ -101,7 +118,7 @@ placeholder in the widget's shape, and exactly one kind:
 |---|---|---|
 | `Text` | A run of text | `value`, `size` (small, body, large, display), `tone`, `monospace` |
 | `Stat` | A headline number | `label`, `value` (formatted), `unit`, `caption` |
-| `Gauge` | A value on a 260° arc | `value`, `min`, `max`, `unit`, `warn_at`, `error_at` |
+| `Gauge` | A value on a 260° arc | `value`, `min` (default 0), `max` (default 100), `unit`, `warn_at`, `error_at` |
 | `Sparkline` | Recent samples as a line | `samples` (oldest first), optional `min`/`max`, axis labels |
 | `Table` | Rows and columns | `columns`, `rows` (each with an optional `action_id`), sort indicator |
 | `List` | A vertical list | `items` with `leading`, `title`, `detail`, `action_id` |

@@ -107,9 +107,9 @@ message Gauge {
   double value = 2;
   // Lower bound of the arc.
   double min = 3;
-  // Upper bound of the arc. If it is not greater than min, the host
-  // renders the gauge as missing.
-  double max = 4;
+  // Upper bound of the arc. Unset means 100. If it is not greater than
+  // min, the host renders the gauge as missing.
+  optional double max = 4;
   // Unit after the value, such as "%".
   string unit = 5;
   // The value as shown in the middle of the arc, already formatted.

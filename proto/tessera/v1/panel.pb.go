@@ -30,7 +30,8 @@ type DescribeRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// The host's version, such as "0.1.0". For logs and diagnostics only.
 	HostVersion string `protobuf:"bytes,1,opt,name=host_version,json=hostVersion,proto3" json:"host_version,omitempty"`
-	// The view schema versions the host can render, such as [1].
+	// The view schema versions the host can render, such as [1]. Never
+	// empty.
 	ViewVersions  []uint32 `protobuf:"varint,2,rep,packed,name=view_versions,json=viewVersions,proto3" json:"view_versions,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -83,7 +84,9 @@ func (x *DescribeRequest) GetViewVersions() []uint32 {
 // DescribeResponse identifies the plugin.
 type DescribeResponse struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// Stable plugin name, such as "clock". Config files refer to it.
+	// Stable plugin name, such as "clock". Config files refer to it. It must
+	// equal the executable's file name without extension; otherwise the
+	// host stops the plugin and shows an error tile.
 	Name string `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
 	// Plugin version in semver form, such as "0.1.0".
 	Version string `protobuf:"bytes,2,opt,name=version,proto3" json:"version,omitempty"`
@@ -100,6 +103,7 @@ type DescribeResponse struct {
 	// document. Empty means the panel takes no settings.
 	ConfigSchema string `protobuf:"bytes,6,opt,name=config_schema,json=configSchema,proto3" json:"config_schema,omitempty"`
 	// The size, in grid cells, a new panel gets when the user adds it.
+	// Unset, or a zero dimension, means 1.
 	DefaultSize   *GridSize `protobuf:"bytes,7,opt,name=default_size,json=defaultSize,proto3" json:"default_size,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -343,9 +347,13 @@ func (*ConfigureResponse) Descriptor() ([]byte, []int) {
 
 // WatchRequest opens the view stream.
 type WatchRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// The longest the plugin may go without sending a WatchResponse. The
+	// host always sets it, and restarts the plugin if the stream stays
+	// silent for twice this long.
+	HeartbeatInterval *durationpb.Duration `protobuf:"bytes,1,opt,name=heartbeat_interval,json=heartbeatInterval,proto3" json:"heartbeat_interval,omitempty"`
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
 }
 
 func (x *WatchRequest) Reset() {
@@ -378,10 +386,20 @@ func (*WatchRequest) Descriptor() ([]byte, []int) {
 	return file_tessera_v1_panel_proto_rawDescGZIP(), []int{5}
 }
 
+func (x *WatchRequest) GetHeartbeatInterval() *durationpb.Duration {
+	if x != nil {
+		return x.HeartbeatInterval
+	}
+	return nil
+}
+
 // WatchResponse is one view update.
 type WatchResponse struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// The panel's complete new view. It replaces the previous one.
+	// The panel's complete new view, in view schema version 1. It replaces
+	// the previous one. Unset makes the response a heartbeat, which keeps
+	// the current view. A later view schema version gets its own field
+	// here, and the plugin sets only the one for the negotiated version.
 	View          *View `protobuf:"bytes,1,opt,name=view,proto3" json:"view,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -464,7 +482,9 @@ func (*RenderRequest) Descriptor() ([]byte, []int) {
 // RenderResponse is the current view.
 type RenderResponse struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// The panel's complete current view.
+	// The panel's complete current view, in view schema version 1. A later
+	// view schema version gets its own field here, and the plugin sets
+	// only the one for the negotiated version.
 	View *View `protobuf:"bytes,1,opt,name=view,proto3" json:"view,omitempty"`
 	// How long the host should wait before polling again. Unset or zero
 	// means the host's default interval. The host may clamp it.
@@ -777,8 +797,9 @@ const file_tessera_v1_panel_proto_rawDesc = "" +
 	"\bpanel_id\x18\x01 \x01(\tR\apanelId\x123\n" +
 	"\bsettings\x18\x02 \x01(\v2\x17.google.protobuf.StructR\bsettings\x12(\n" +
 	"\x04size\x18\x03 \x01(\v2\x14.tessera.v1.GridSizeR\x04size\"\x13\n" +
-	"\x11ConfigureResponse\"\x0e\n" +
-	"\fWatchRequest\"5\n" +
+	"\x11ConfigureResponse\"X\n" +
+	"\fWatchRequest\x12H\n" +
+	"\x12heartbeat_interval\x18\x01 \x01(\v2\x19.google.protobuf.DurationR\x11heartbeatInterval\"5\n" +
 	"\rWatchResponse\x12$\n" +
 	"\x04view\x18\x01 \x01(\v2\x10.tessera.v1.ViewR\x04view\"\x0f\n" +
 	"\rRenderRequest\"v\n" +
@@ -831,33 +852,34 @@ var file_tessera_v1_panel_proto_goTypes = []any{
 	(*ScrollEvent)(nil),         // 11: tessera.v1.ScrollEvent
 	(*HandleEventResponse)(nil), // 12: tessera.v1.HandleEventResponse
 	(*structpb.Struct)(nil),     // 13: google.protobuf.Struct
-	(*View)(nil),                // 14: tessera.v1.View
-	(*durationpb.Duration)(nil), // 15: google.protobuf.Duration
+	(*durationpb.Duration)(nil), // 14: google.protobuf.Duration
+	(*View)(nil),                // 15: tessera.v1.View
 }
 var file_tessera_v1_panel_proto_depIdxs = []int32{
 	2,  // 0: tessera.v1.DescribeResponse.default_size:type_name -> tessera.v1.GridSize
 	13, // 1: tessera.v1.ConfigureRequest.settings:type_name -> google.protobuf.Struct
 	2,  // 2: tessera.v1.ConfigureRequest.size:type_name -> tessera.v1.GridSize
-	14, // 3: tessera.v1.WatchResponse.view:type_name -> tessera.v1.View
-	14, // 4: tessera.v1.RenderResponse.view:type_name -> tessera.v1.View
-	15, // 5: tessera.v1.RenderResponse.poll_interval:type_name -> google.protobuf.Duration
-	10, // 6: tessera.v1.HandleEventRequest.activate:type_name -> tessera.v1.ActivateEvent
-	11, // 7: tessera.v1.HandleEventRequest.scroll:type_name -> tessera.v1.ScrollEvent
-	0,  // 8: tessera.v1.PanelService.Describe:input_type -> tessera.v1.DescribeRequest
-	3,  // 9: tessera.v1.PanelService.Configure:input_type -> tessera.v1.ConfigureRequest
-	5,  // 10: tessera.v1.PanelService.Watch:input_type -> tessera.v1.WatchRequest
-	7,  // 11: tessera.v1.PanelService.Render:input_type -> tessera.v1.RenderRequest
-	9,  // 12: tessera.v1.PanelService.HandleEvent:input_type -> tessera.v1.HandleEventRequest
-	1,  // 13: tessera.v1.PanelService.Describe:output_type -> tessera.v1.DescribeResponse
-	4,  // 14: tessera.v1.PanelService.Configure:output_type -> tessera.v1.ConfigureResponse
-	6,  // 15: tessera.v1.PanelService.Watch:output_type -> tessera.v1.WatchResponse
-	8,  // 16: tessera.v1.PanelService.Render:output_type -> tessera.v1.RenderResponse
-	12, // 17: tessera.v1.PanelService.HandleEvent:output_type -> tessera.v1.HandleEventResponse
-	13, // [13:18] is the sub-list for method output_type
-	8,  // [8:13] is the sub-list for method input_type
-	8,  // [8:8] is the sub-list for extension type_name
-	8,  // [8:8] is the sub-list for extension extendee
-	0,  // [0:8] is the sub-list for field type_name
+	14, // 3: tessera.v1.WatchRequest.heartbeat_interval:type_name -> google.protobuf.Duration
+	15, // 4: tessera.v1.WatchResponse.view:type_name -> tessera.v1.View
+	15, // 5: tessera.v1.RenderResponse.view:type_name -> tessera.v1.View
+	14, // 6: tessera.v1.RenderResponse.poll_interval:type_name -> google.protobuf.Duration
+	10, // 7: tessera.v1.HandleEventRequest.activate:type_name -> tessera.v1.ActivateEvent
+	11, // 8: tessera.v1.HandleEventRequest.scroll:type_name -> tessera.v1.ScrollEvent
+	0,  // 9: tessera.v1.PanelService.Describe:input_type -> tessera.v1.DescribeRequest
+	3,  // 10: tessera.v1.PanelService.Configure:input_type -> tessera.v1.ConfigureRequest
+	5,  // 11: tessera.v1.PanelService.Watch:input_type -> tessera.v1.WatchRequest
+	7,  // 12: tessera.v1.PanelService.Render:input_type -> tessera.v1.RenderRequest
+	9,  // 13: tessera.v1.PanelService.HandleEvent:input_type -> tessera.v1.HandleEventRequest
+	1,  // 14: tessera.v1.PanelService.Describe:output_type -> tessera.v1.DescribeResponse
+	4,  // 15: tessera.v1.PanelService.Configure:output_type -> tessera.v1.ConfigureResponse
+	6,  // 16: tessera.v1.PanelService.Watch:output_type -> tessera.v1.WatchResponse
+	8,  // 17: tessera.v1.PanelService.Render:output_type -> tessera.v1.RenderResponse
+	12, // 18: tessera.v1.PanelService.HandleEvent:output_type -> tessera.v1.HandleEventResponse
+	14, // [14:19] is the sub-list for method output_type
+	9,  // [9:14] is the sub-list for method input_type
+	9,  // [9:9] is the sub-list for extension type_name
+	9,  // [9:9] is the sub-list for extension extendee
+	0,  // [0:9] is the sub-list for field type_name
 }
 
 func init() { file_tessera_v1_panel_proto_init() }

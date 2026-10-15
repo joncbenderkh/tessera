@@ -152,7 +152,7 @@ func TestViewRoundTrip(t *testing.T) {
 			Dividers: true,
 			Items: []*tesserav1.StackItem{
 				{Weight: 1, Widget: &tesserav1.Widget{Kind: &tesserav1.Widget_Gauge{Gauge: &tesserav1.Gauge{
-					Label: "Disk", Value: 68, Max: 100, Unit: "%", WarnAt: proto.Float64(80), ErrorAt: proto.Float64(95),
+					Label: "Disk", Value: 68, Max: proto.Float64(100), Unit: "%", WarnAt: proto.Float64(80), ErrorAt: proto.Float64(95),
 				}}}},
 				{Weight: 1, Widget: &tesserav1.Widget{Kind: &tesserav1.Widget_Sparkline{Sparkline: &tesserav1.Sparkline{
 					Samples: []float64{1, 2, 3}, Min: &lo, Max: &hi, StartLabel: "60s ago", EndLabel: "now",

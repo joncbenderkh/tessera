@@ -25,15 +25,19 @@ service PanelService {
   rpc Configure(ConfigureRequest) returns (ConfigureResponse);
 
   // Watch streams a new view whenever the panel's content changes,
-  // starting with the current view. A plugin that cannot push returns
-  // UNIMPLEMENTED, and the host polls Render instead.
+  // starting with the current view, and a heartbeat when nothing changed
+  // within WatchRequest.heartbeat_interval. The host holds at most one
+  // stream per plugin: a new Watch supersedes the open one, which the
+  // plugin should end. A plugin that cannot push returns UNIMPLEMENTED,
+  // and the host polls Render instead.
   rpc Watch(WatchRequest) returns (stream WatchResponse);
 
   // Render returns the current view. It is the polling fallback for
   // plugins that do not implement Watch.
   rpc Render(RenderRequest) returns (RenderResponse);
 
-  // HandleEvent delivers one user input event. A plugin that implements
+  // HandleEvent delivers one user input event. A request with no event
+  // set is ignored and answered with OK. A plugin that implements
   // Watch reflects the effect by sending a new view on the stream; a
   // polled plugin is rendered again right after the event.
   rpc HandleEvent(HandleEventRequest) returns (HandleEventResponse);
@@ -43,13 +47,16 @@ service PanelService {
 message DescribeRequest {
   // The host's version, such as "0.1.0". For logs and diagnostics only.
   string host_version = 1;
-  // The view schema versions the host can render, such as [1].
+  // The view schema versions the host can render, such as [1]. Never
+  // empty.
   repeated uint32 view_versions = 2;
 }
 
 // DescribeResponse identifies the plugin.
 message DescribeResponse {
-  // Stable plugin name, such as "clock". Config files refer to it.
+  // Stable plugin name, such as "clock". Config files refer to it. It must
+  // equal the executable's file name without extension; otherwise the
+  // host stops the plugin and shows an error tile.
   string name = 1;
   // Plugin version in semver form, such as "0.1.0".
   string version = 2;
@@ -66,6 +73,7 @@ message DescribeResponse {
   // document. Empty means the panel takes no settings.
   string config_schema = 6;
   // The size, in grid cells, a new panel gets when the user adds it.
+  // Unset, or a zero dimension, means 1.
   GridSize default_size = 7;
 }
 
@@ -92,11 +100,19 @@ message ConfigureRequest {
 message ConfigureResponse {}
 
 // WatchRequest opens the view stream.
-message WatchRequest {}
+message WatchRequest {
+  // The longest the plugin may go without sending a WatchResponse. The
+  // host always sets it, and restarts the plugin if the stream stays
+  // silent for twice this long.
+  google.protobuf.Duration heartbeat_interval = 1;
+}
 
 // WatchResponse is one view update.
 message WatchResponse {
-  // The panel's complete new view. It replaces the previous one.
+  // The panel's complete new view, in view schema version 1. It replaces
+  // the previous one. Unset makes the response a heartbeat, which keeps
+  // the current view. A later view schema version gets its own field
+  // here, and the plugin sets only the one for the negotiated version.
   View view = 1;
 }
 
@@ -105,7 +121,9 @@ message RenderRequest {}
 
 // RenderResponse is the current view.
 message RenderResponse {
-  // The panel's complete current view.
+  // The panel's complete current view, in view schema version 1. A later
+  // view schema version gets its own field here, and the plugin sets
+  // only the one for the negotiated version.
   View view = 1;
   // How long the host should wait before polling again. Unset or zero
   // means the host's default interval. The host may clamp it.
