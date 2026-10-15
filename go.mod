@@ -6,6 +6,7 @@ require (
 	gioui.org v0.10.3
 	github.com/fsnotify/fsnotify v1.10.1
 	github.com/goccy/go-yaml v1.19.2
+	google.golang.org/protobuf v1.36.12
 )
 
 require (

@@ -12,6 +12,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/goccy/go-yaml"
 	"github.com/goccy/go-yaml/parser"
@@ -36,17 +37,21 @@ type Grid struct {
 	RowHeight int `yaml:"row_height"`
 }
 
+// Settings are a panel's plugin settings, resolved by YAML 1.2's core
+// schema; see extractSettings.
+type Settings map[string]any
+
 // Panel places one plugin instance on the grid. X and Y are the zero-based
 // column and row of its top-left cell; W and H are its span in cells.
 type Panel struct {
-	ID       string         `yaml:"id"`
-	Plugin   string         `yaml:"plugin"`
-	Enabled  *bool          `yaml:"enabled,omitempty"`
-	X        int            `yaml:"x"`
-	Y        int            `yaml:"y"`
-	W        int            `yaml:"w"`
-	H        int            `yaml:"h"`
-	Settings map[string]any `yaml:"settings,omitempty"`
+	ID       string   `yaml:"id"`
+	Plugin   string   `yaml:"plugin"`
+	Enabled  *bool    `yaml:"enabled,omitempty"`
+	X        int      `yaml:"x"`
+	Y        int      `yaml:"y"`
+	W        int      `yaml:"w"`
+	H        int      `yaml:"h"`
+	Settings Settings `yaml:"settings,omitempty"`
 }
 
 // IsEnabled reports whether the panel is shown; panels are enabled unless
@@ -85,11 +90,26 @@ func Parse(data []byte) (Config, error) {
 	if len(file.Docs) > 1 {
 		return Config{}, fmt.Errorf("found %d YAML documents, want one", len(file.Docs))
 	}
-	var c Config
-	if err := yaml.UnmarshalWithOptions(data, &c,
-		yaml.Strict(), yaml.DisallowUnknownField(), yaml.CustomUnmarshaler(decodeInt),
-	); err != nil {
+	if err := rejectSharing(file); err != nil {
 		return Config{}, err
+	}
+	settings, err := extractSettings(file)
+	if err != nil {
+		return Config{}, err
+	}
+	var c Config
+	if len(file.Docs) > 0 && file.Docs[0].Body != nil {
+		if err := yaml.NodeToValue(file.Docs[0].Body, &c,
+			yaml.Strict(), yaml.DisallowUnknownField(), yaml.CustomUnmarshaler(decodeInt),
+		); err != nil {
+			return Config{}, err
+		}
+	}
+	if len(settings) != len(c.Panels) {
+		return Config{}, errors.New("panels: syntax tree and decoded config disagree")
+	}
+	for i, s := range settings {
+		c.Panels[i].Settings = s
 	}
 	if err := c.Validate(); err != nil {
 		return Config{}, err
@@ -121,9 +141,31 @@ func decodeInt(dst *int, data []byte) error {
 	return nil
 }
 
-// Marshal encodes a config as YAML.
+// Marshal encodes a config as YAML. It writes the file itself rather than
+// through the YAML encoder, which quotes by YAML 1.1 rules: every key and
+// string is quoted unless the core schema reads it back unchanged.
 func Marshal(c Config) ([]byte, error) {
-	return yaml.MarshalWithOptions(c, yaml.Indent(2), yaml.IndentSequence(true))
+	var b strings.Builder
+	fmt.Fprintf(&b, "version: %d\ngrid:\n  columns: %d\n  row_height: %d\n", c.Version, c.Grid.Columns, c.Grid.RowHeight)
+	if len(c.Panels) == 0 {
+		b.WriteString("panels: []\n")
+		return []byte(b.String()), nil
+	}
+	b.WriteString("panels:\n")
+	for _, p := range c.Panels {
+		fmt.Fprintf(&b, "  - id: %s\n    plugin: %s\n", scalarString(p.ID), scalarString(p.Plugin))
+		if p.Enabled != nil {
+			fmt.Fprintf(&b, "    enabled: %t\n", *p.Enabled)
+		}
+		fmt.Fprintf(&b, "    x: %d\n    y: %d\n    w: %d\n    h: %d\n", p.X, p.Y, p.W, p.H)
+		if len(p.Settings) > 0 {
+			b.WriteString("    settings:\n")
+			if err := writeMap(&b, p.Settings, 6); err != nil {
+				return nil, fmt.Errorf("panel %q: settings.%w", p.ID, err)
+			}
+		}
+	}
+	return []byte(b.String()), nil
 }
 
 // Load reads the config at path. If the file does not exist, it writes

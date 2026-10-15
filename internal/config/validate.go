@@ -5,12 +5,25 @@ package config
 import (
 	"errors"
 	"fmt"
+	"maps"
 	"math"
+	"regexp"
+	"slices"
+
+	"google.golang.org/protobuf/types/known/structpb"
 )
 
+// pluginName is the grammar of plugin names, which are also executable
+// file names in the plugins directory, so it admits no path separators.
+var pluginName = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,63}$`)
+
+// windowsDevice matches the names Windows reserves for devices, which
+// cannot be executable names there.
+var windowsDevice = regexp.MustCompile(`^(con|prn|aux|nul|com[0-9]|lpt[0-9])$`)
+
 // Validate checks the config's internal consistency. Plugin settings are
-// not checked here: that needs each plugin's config schema from its
-// handshake.
+// checked only for values a google.protobuf.Struct cannot carry; checking
+// them against each plugin's config schema needs its handshake.
 func (c Config) Validate() error {
 	var errs []error
 	if c.Version != SchemaVersion {
@@ -37,8 +50,16 @@ func (c Config) Validate() error {
 			errs = append(errs, fmt.Errorf("%s: id is not unique", name))
 		}
 		seen[p.ID] = true
-		if p.Plugin == "" {
+		switch {
+		case p.Plugin == "":
 			errs = append(errs, fmt.Errorf("%s: plugin is required", name))
+		case !pluginName.MatchString(p.Plugin):
+			errs = append(errs, fmt.Errorf("%s: plugin %q must be lowercase letters, digits, and hyphens, starting with a letter or digit, at most 64 characters", name, p.Plugin))
+		case windowsDevice.MatchString(p.Plugin):
+			errs = append(errs, fmt.Errorf("%s: plugin %q is a reserved device name on Windows", name, p.Plugin))
+		}
+		if err := checkSettings(map[string]any(p.Settings), "settings"); err != nil {
+			errs = append(errs, fmt.Errorf("%s: %w", name, err))
 		}
 		if p.W < 1 || p.H < 1 {
 			errs = append(errs, fmt.Errorf("%s: w and h must be at least 1, got %dx%d", name, p.W, p.H))
@@ -66,6 +87,34 @@ func (c Config) Validate() error {
 		placed = append(placed, placement{p, name})
 	}
 	return errors.Join(errs...)
+}
+
+// checkSettings reports the first value in v, at path, that cannot reach
+// a plugin as a JSON-model google.protobuf.Struct value.
+func checkSettings(v any, path string) error {
+	switch v := v.(type) {
+	case map[string]any:
+		for _, k := range slices.Sorted(maps.Keys(v)) {
+			if err := checkSettings(v[k], path+"."+k); err != nil {
+				return err
+			}
+		}
+	case []any:
+		for i, e := range v {
+			if err := checkSettings(e, fmt.Sprintf("%s[%d]", path, i)); err != nil {
+				return err
+			}
+		}
+	case float64:
+		if math.IsInf(v, 0) || math.IsNaN(v) {
+			return fmt.Errorf("%s must be a finite number", path)
+		}
+	default:
+		if _, err := structpb.NewValue(v); err != nil {
+			return fmt.Errorf("%s: %w", path, err)
+		}
+	}
+	return nil
 }
 
 type placement struct {
