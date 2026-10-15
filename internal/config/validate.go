@@ -55,10 +55,10 @@ func (c Config) Validate() error {
 		switch {
 		case p.Plugin == "":
 			errs = append(errs, fmt.Errorf("%s: plugin is required", name))
-		case !pluginName.MatchString(p.Plugin):
-			errs = append(errs, fmt.Errorf("%s: plugin %q must be lowercase letters, digits, and hyphens, starting with a letter or digit, at most 64 characters", name, p.Plugin))
-		case windowsDevice.MatchString(p.Plugin):
-			errs = append(errs, fmt.Errorf("%s: plugin %q is a reserved device name on Windows", name, p.Plugin))
+		default:
+			if err := ValidPluginName(p.Plugin); err != nil {
+				errs = append(errs, fmt.Errorf("%s: %w", name, err))
+			}
 		}
 		if err := checkSettings(p.Settings, "settings"); err != nil {
 			errs = append(errs, fmt.Errorf("%s: %w", name, err))
@@ -89,6 +89,17 @@ func (c Config) Validate() error {
 		placed = append(placed, placement{p, name})
 	}
 	return errors.Join(errs...)
+}
+
+// ValidPluginName reports why name cannot be a plugin name, or nil.
+func ValidPluginName(name string) error {
+	switch {
+	case !pluginName.MatchString(name):
+		return fmt.Errorf("plugin %q must be lowercase letters, digits, and hyphens, starting with a letter or digit, at most 64 characters", name)
+	case windowsDevice.MatchString(name):
+		return fmt.Errorf("plugin %q is a reserved device name on Windows", name)
+	}
+	return nil
 }
 
 // checkSettings reports the first value in v, at path, that Marshal

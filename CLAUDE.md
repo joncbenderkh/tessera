@@ -50,8 +50,10 @@ dialogs). Edit mode must be able to re-enable any disabled panel.
     server-streaming RPC. Polling is the fallback. Input events (click,
     scroll) go back to the plugin as RPCs.
   - Plugins are discovered from a plugins directory
-    (`$XDG_DATA_HOME/tessera/plugins`), and each declares its name, version,
-    protocol version, and config schema in the handshake.
+    (`$XDG_DATA_HOME/tessera/plugins`, found per OS with
+    `github.com/adrg/xdg`), and each declares its name, version,
+    protocol version, and config schema in the handshake. The host
+    launches them with `github.com/hashicorp/go-plugin` itself.
 - **Config:** one YAML file, `tessera/config.yaml` in the user config
   directory (`$XDG_CONFIG_HOME`, or `~/.config`, on Linux), holds the
   grid, panel placement and enabled state, and per-panel settings. YAML
@@ -74,6 +76,10 @@ dialogs). Edit mode must be able to re-enable any disabled panel.
 - `cmd/tessera`: the host (Gio window, layout, plugin manager).
 - `internal/config`: loading, validating, saving, and watching the user
   config.
+- `internal/pluginhost`: finding, launching, describing, configuring,
+  and shutting down plugins, one process per enabled panel. Its tests
+  run the test binary itself as a plugin whose behaviour follows its
+  file name (`plugin_test.go`).
 - `proto/`: the plugin protocol. The `.proto` files and the Go code
   generated from them live in `proto/tessera/v1` (Go package
   `tesserav1`); `buf.yaml` and `buf.gen.yaml` sit in `proto/`. The
@@ -138,8 +144,9 @@ window, and `sdk/` and `plugins/` are placeholders. The backlog is tracked
 as GitHub issues. CI (#5), the release workflow (#6), the config file
 (#7), and plugin protocol v1 (#8) are in place. The host loads the config
 at startup but does not yet apply reloads; that comes with the grid (#10).
-Nothing speaks the protocol yet: the host side is #12 to #14 and the SDK
-is #18.
+The host launches, describes, and configures each enabled panel's plugin
+and shuts them all down on exit (#12), but draws nothing yet; viewing
+and events are #14, restarts #13, and the SDK #18.
 
 ## Git workflow
 
