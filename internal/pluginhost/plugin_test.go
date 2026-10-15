@@ -43,7 +43,13 @@ func TestMain(m *testing.M) {
 	os.Exit(m.Run())
 }
 
+// rawStdout and rawStderr are the plugin's real stdout and stderr:
+// plugin.Serve replaces os.Stdout and os.Stderr with pipes it forwards
+// over GRPCStdio.
+var rawStdout, rawStderr *os.File
+
 func servePlugin(mode string) {
+	rawStdout, rawStderr = os.Stdout, os.Stderr
 	if mode == "slow-start" {
 		time.Sleep(time.Minute) // never reaches the handshake in a test
 	}
@@ -117,14 +123,13 @@ func (s *server) Describe(ctx context.Context, _ *tesserav1.DescribeRequest) (*t
 		<-ctx.Done()
 		return nil, ctx.Err()
 	case "forks", "exits":
-		stderr := os.NewFile(2, "stderr") // go-plugin has replaced os.Stderr
 		child := exec.Command(os.Args[0])
 		child.Env = []string{sleeperKey + "=1"}
-		child.Stderr = stderr
+		child.Stderr = rawStderr
 		if err := child.Start(); err != nil {
 			return nil, err
 		}
-		fmt.Fprintf(stderr, "child %d\n", child.Process.Pid)
+		fmt.Fprintf(rawStderr, "child %d\n", child.Process.Pid)
 		if s.mode == "exits" {
 			go func() {
 				time.Sleep(200 * time.Millisecond)
@@ -133,9 +138,8 @@ func (s *server) Describe(ctx context.Context, _ *tesserav1.DescribeRequest) (*t
 		}
 	case "floods-stdout":
 		go func() {
-			// go-plugin has replaced os.Stdout; write to the handshake pipe.
-			os.NewFile(1, "stdout").Write(bytes.Repeat([]byte("x"), 1<<20))
-			fmt.Fprintln(os.NewFile(2, "stderr"), "flooded")
+			rawStdout.Write(bytes.Repeat([]byte("x"), 1<<20))
+			fmt.Fprintln(rawStderr, "flooded")
 		}()
 	case "frozen":
 		go func() {
