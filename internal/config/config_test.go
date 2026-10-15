@@ -3,6 +3,7 @@
 package config
 
 import (
+	"fmt"
 	"math"
 	"os"
 	"path/filepath"
@@ -70,51 +71,115 @@ func TestParseRejectsFractionalIntegers(t *testing.T) {
 	}
 }
 
-func TestParseRejectsNonFiniteSettings(t *testing.T) {
-	for _, tt := range []struct{ value, path string }{
-		{".inf", "settings.show_seconds"},
-		{"-.Inf", "settings.show_seconds"},
-		{".nan", "settings.show_seconds"},
-		{"{deep: [1, .inf]}", "settings.show_seconds.deep[1]"},
-	} {
-		data := strings.Replace(example, "show_seconds: no", "show_seconds: "+tt.value, 1)
-		_, err := Parse([]byte(data))
-		if err == nil || !strings.Contains(err.Error(), tt.path+" must be a finite number") {
-			t.Errorf("%s: expected a finite-number error at %s, got %v", tt.value, tt.path, err)
-		}
-	}
+// withSetting returns the example config with the clock's show_seconds
+// set to value, and an anchor on its plugin for alias tests.
+func withSetting(value string) []byte {
+	data := strings.Replace(example, "show_seconds: no", "show_seconds: "+value, 1)
+	return []byte(strings.Replace(data, "plugin: clock", "plugin: &other clock", 1))
 }
 
-func TestParseRejectsNonCoreSettings(t *testing.T) {
+func TestParseRejectsSettings(t *testing.T) {
 	for _, tt := range []struct{ value, want string }{
+		{".inf", "must be a finite number"},
+		{"-.Inf", "must be a finite number"},
+		{".nan", "must be a finite number"},
+		{"{deep: [1, .inf]}", "must be a finite number"},
 		{"!!timestamp 2026-10-15", "may not use the !!timestamp tag"},
 		{"!!int 99999999999999999999", "may not use the !!int tag"},
-		{"!!map {a: 1e5}", "may not use the !!map tag"},
+		{"!!binary aGk=", "may not use the !!binary tag"},
+		{"!!map {a: 1}", "may not use the !!map tag"},
 		{"!custom 1", "may not use the !custom tag"},
-		{"*other", "may not use aliases"},
-		{"{<<: *other}", "may not use aliases"},
-		{"1e400", "out of range"},
-		{"-.5e999", "out of range"},
-		{"1e5", "out of range"},
-		{"99999999999999999999", "out of range"},
-		{"{deep: [0x1FFFFFFFFFFFFFFFFF]}", "out of range"},
-		{"1_000", "not a YAML 1.2 number"},
-		{"0b101", "not a YAML 1.2 number"},
+		{"*other", "aliases are not supported"},
+		{"{<<: *other}", "aliases are not supported"},
+		{"{*other : 1}", "aliases are not supported"},
+		{"1e400", "out of range for a double"},
+		{"-.5e999", "out of range for a double"},
+		{"99999999999999999999", "out of range for 64 bits"},
+		{"{deep: [0x1FFFFFFFFFFFFFFFFF]}", "out of range for 64 bits"},
 	} {
-		data := strings.Replace(example, "show_seconds: no", "show_seconds: "+tt.value, 1)
-		data = strings.Replace(data, "plugin: clock", "plugin: &other clock", 1)
-		_, err := Parse([]byte(data))
+		_, err := Parse(withSetting(tt.value))
 		if err == nil || !strings.Contains(err.Error(), tt.want) {
 			t.Errorf("%s: expected %q, got %v", tt.value, tt.want, err)
 		}
 	}
 }
 
-func TestParseChecksQuotedSettingsKey(t *testing.T) {
-	data := strings.Replace(example, "show_seconds: no", "show_seconds: 1e5", 1)
-	data = strings.Replace(data, "    settings:", `    "settings":`, 1)
-	if _, err := Parse([]byte(data)); err == nil || !strings.Contains(err.Error(), "out of range") {
-		t.Fatalf("expected an out-of-range error, got %v", err)
+func TestParseResolvesSettingsByCoreSchema(t *testing.T) {
+	for _, tt := range []struct {
+		value string
+		want  any
+	}{
+		{"017", int64(17)},
+		{"08", int64(8)},
+		{"-017", int64(-17)},
+		{"0o17", int64(15)},
+		{"0x1F", int64(31)},
+		{"18446744073709551615", uint64(math.MaxUint64)},
+		{"1e5", 100000.0},
+		{"+.5", 0.5},
+		{"1_000", "1_000"},
+		{"0b101", "0b101"},
+		{"no", "no"},
+		{"True", true},
+		{"~", nil},
+		{"2026-10-15", "2026-10-15"},
+		{`"1e400"`, "1e400"},
+		{"'017'", "017"},
+		{"!!str 017", "017"},
+		{"&s 3", int64(3)},
+		{"[1, x]", []any{int64(1), "x"}},
+		{"{017: x}", map[string]any{"017": "x"}},
+		{"{<<: {a: 1}, b: 2}", map[string]any{"<<": map[string]any{"a": int64(1)}, "b": int64(2)}},
+	} {
+		c, err := Parse(withSetting(tt.value))
+		if err != nil {
+			t.Errorf("%s: unexpected error: %v", tt.value, err)
+			continue
+		}
+		if got := c.Panels[1].Settings["show_seconds"]; !reflect.DeepEqual(got, tt.want) {
+			t.Errorf("%s: got %#v, want %#v", tt.value, got, tt.want)
+		}
+	}
+}
+
+func TestParseResolvesDecoratedSettingsKey(t *testing.T) {
+	for _, key := range []string{`"settings":`, "!!str settings:", "&k settings:", "? settings\n    :"} {
+		data := strings.Replace(string(withSetting("017")), "    settings:", "    "+key, 1)
+		c, err := Parse([]byte(data))
+		if err != nil {
+			t.Errorf("%s: unexpected error: %v", key, err)
+			continue
+		}
+		if got := c.Panels[1].Settings["show_seconds"]; got != int64(17) {
+			t.Errorf("%s: got %#v, want 17", key, got)
+		}
+	}
+}
+
+func TestParseRejectsMergeKeysOutsideSettings(t *testing.T) {
+	data := strings.Replace(example, "  - id: clock\n", "  - <<: {id: clock}\n", 1)
+	if _, err := Parse([]byte(data)); err == nil || !strings.Contains(err.Error(), "merge keys are not supported") {
+		t.Fatalf("expected a merge-key error, got %v", err)
+	}
+}
+
+func TestSaveQuotesCoreSchemaLookalikes(t *testing.T) {
+	c := Default()
+	settings := map[string]any{"nested": []any{"1e5", map[string]any{"08": "08"}}}
+	for i, s := range []string{"1e5", "08", "017", "0o17", "0x1F", "True", "~", "NULL", "-.5", ".inf", "1_000", "yes", "a: b", "tab\there", "plain"} {
+		settings[fmt.Sprint("k", i)] = s
+	}
+	c.Panels = []Panel{{ID: "a", Plugin: "p", W: 1, H: 1, Settings: settings}}
+	data, err := Marshal(c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	back, err := Parse(data)
+	if err != nil {
+		t.Fatalf("%v\n%s", err, data)
+	}
+	if !reflect.DeepEqual(back.Panels[0].Settings, settings) {
+		t.Fatalf("round trip changed settings:\ngot  %#v\nwant %#v\n%s", back.Panels[0].Settings, settings, data)
 	}
 }
 
@@ -123,15 +188,6 @@ func TestValidateRejectsNonStructSettings(t *testing.T) {
 	c.Panels = []Panel{{ID: "a", Plugin: "p", W: 1, H: 1, Settings: map[string]any{"at": time.Now()}}}
 	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "settings.at") {
 		t.Fatalf("expected an error at settings.at, got %v", err)
-	}
-}
-
-func TestParseKeepsCoreSettings(t *testing.T) {
-	for _, v := range []string{`"1e400"`, "'1e5'", "!!str 1e5", "1.0e5", "2026-10-15", "18446744073709551615", "0x1F", "0o17", "+.5", "&s 3"} {
-		data := strings.Replace(example, "show_seconds: no", "show_seconds: "+v, 1)
-		if _, err := Parse([]byte(data)); err != nil {
-			t.Errorf("%s: unexpected error: %v", v, err)
-		}
 	}
 }
 

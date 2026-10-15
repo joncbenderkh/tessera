@@ -48,8 +48,9 @@ panels:
 | `panels[].enabled` | `false` hides the panel. Defaults to `true`. |
 | `panels[].x`, `y` | Zero-based column and row of the panel's top-left cell. |
 | `panels[].w`, `h` | Width and height in cells, each at least 1. |
-| `panels[].settings` | Settings passed to the plugin. Their schema comes from the plugin; They follow YAML 1.2's core schema: no tags but `!!str`, no aliases, and numbers finite and within range (see `docs/protocol.md`). |
+| `panels[].settings` | Settings passed to the plugin. Their schema comes from the plugin. Values are resolved by YAML 1.2's core schema; tags other than `!!str` and non-finite or out-of-range numbers are errors (see `docs/protocol.md`). |
 
 Unknown fields are errors, so a misspelt key is reported rather than
-ignored. Every panel must fit within `grid.columns`. Enabled panels must
+ignored. Aliases (`*name`) are not supported, nor are merge keys (`<<`)
+outside settings. Every panel must fit within `grid.columns`. Enabled panels must
 not overlap; disabled panels may overlap anything.
