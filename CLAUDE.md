@@ -51,9 +51,16 @@ dialogs). Edit mode must be able to re-enable any disabled panel.
   - Plugins are discovered from a plugins directory
     (`$XDG_DATA_HOME/tessera/plugins`), and each declares its name, version,
     protocol version, and config schema in the handshake.
-- **Config:** a single user config file under `$XDG_CONFIG_HOME/tessera/`
-  holds grid layout, panel placement, and per-panel settings. Its format is
-  undecided; pick it at scaffold time.
+- **Config:** one YAML file, `tessera/config.yaml` in the user config
+  directory (`$XDG_CONFIG_HOME`, or `~/.config`, on Linux), holds the grid,
+  panel placement and enabled state, and per-panel settings. YAML was the
+  owner's choice over TOML and JSON: compact for a list of panels with
+  nested settings, and it allows comments. It is read and written with
+  `github.com/goccy/go-yaml` (YAML 1.2, so `no` stays a string), decoded
+  strictly so unknown fields are errors, saved atomically (temp file and
+  rename), and reloaded on change through `fsnotify`. Rewrites by the host
+  drop comments. The schema is versioned (`version: 1`); see
+  `docs/config.md`.
 - **Module path:** `github.com/joncbenderkh/tessera`.
 
 ## Layout
@@ -61,6 +68,8 @@ dialogs). Edit mode must be able to re-enable any disabled panel.
 - `version.go`: package `tessera`, which embeds `./VERSION` as
   `tessera.Version`.
 - `cmd/tessera`: the host (Gio window, layout, plugin manager).
+- `internal/config`: loading, validating, saving, and watching the user
+  config.
 - `proto/`: the plugin protocol (`.proto`) and generated Go code.
 - `sdk/`: the Go helper library plugin authors import, which hides the
   go-plugin/gRPC boilerplate.
@@ -105,8 +114,8 @@ bare binary, not a signed `.app` bundle.
 
 The module and source skeleton exist (#4): the host opens an empty Gio
 window, and `proto/`, `sdk/`, and `plugins/` are placeholders. The backlog
-is tracked as GitHub issues. CI (#5) and the release workflow (#6) are in
-place; next are the config format (#7) and the plugin protocol (#8).
+is tracked as GitHub issues. CI (#5), the release workflow (#6), and the
+config file (#7) are in place; next is the plugin protocol (#8).
 
 ## Git workflow
 
