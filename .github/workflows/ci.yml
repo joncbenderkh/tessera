@@ -7,6 +7,12 @@ on:
     # edited covers a change of base branch.
     types: [opened, synchronize, reopened, edited]
 
+# A new push or edit to a pull request cancels its older run. Pushes to
+# main each get their own group, since each checks a different HEAD~1.
+concurrency:
+  group: ${{ github.event_name == 'pull_request' && format('ci-{0}', github.ref) || github.run_id }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
 
@@ -88,18 +94,20 @@ jobs:
           go run github.com/bufbuild/buf/cmd/buf@v1.74.0 lint
           go run github.com/bufbuild/buf/cmd/buf@v1.74.0 format -d --exit-code
 
-      # The rules are pinned here rather than read from proto/buf.yaml,
-      # so editing that file cannot weaken them. The pinned config
-      # replaces buf.yaml, so it must repeat any deps or excludes added
-      # there. HEAD~1 is the previous main because main takes only squash
-      # and merge commits (rebase merging is off).
+      # The rules and the module are pinned here, for both sides, rather
+      # than read from proto/buf.yaml, so editing that file (now or in an
+      # earlier merge) cannot weaken the check. The pinned configs replace
+      # buf.yaml, so they must repeat any deps or excludes added there.
+      # HEAD~1 is the previous main because main takes only squash and
+      # merge commits (rebase merging is off).
       - name: Check protocol for breaking changes
         if: matrix.lint
         working-directory: proto
         run: |
           go run github.com/bufbuild/buf/cmd/buf@v1.74.0 breaking \
             --config '{"version":"v2","breaking":{"use":["FILE"]}}' \
-            --against "../.git#ref=HEAD~1,subdir=proto"
+            --against "../.git#ref=HEAD~1,subdir=proto" \
+            --against-config '{"version":"v2","modules":[{"path":"proto"}]}'
 
       - name: Check generated code is up to date
         if: matrix.lint

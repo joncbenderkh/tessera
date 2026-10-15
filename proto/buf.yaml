@@ -3,6 +3,8 @@ lint:
   use:
     - STANDARD
     - COMMENTS
+# CI ignores this block: .github/workflows/ci.yml pins the breaking
+# rules. Keep the two in step.
 breaking:
   use:
     - FILE

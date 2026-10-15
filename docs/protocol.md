@@ -69,8 +69,11 @@ may appear, nothing is renamed, renumbered, or repurposed. Hosts render
 unknown enum values as their default and ignore unknown fields. Anything
 else needs a new version. CI checks this with `buf breaking` (`FILE`
 rules) on every pull request and every push to `main`, against the
-previous `main`. The rules are pinned in the workflow, so editing
-`proto/buf.yaml` does not relax them.
+previous `main`. The rules and the module are pinned in the workflow
+for both sides of the comparison, so editing `proto/buf.yaml` does not
+relax them. Pull requests need not be up to date with `main` to merge,
+so two that pass separately are checked together only by the push to
+`main` after the second merges.
 An intended break is a new package version (`tessera.v2`); a released
 version is never changed incompatibly.
 
