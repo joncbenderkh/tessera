@@ -50,7 +50,16 @@ var rawStdout, rawStderr *os.File
 
 func servePlugin(mode string) {
 	rawStdout, rawStderr = os.Stdout, os.Stderr
-	if mode == "slow-start" {
+	if mode == "escapes-early" {
+		child := exec.Command(os.Args[0])
+		child.Env = []string{sleeperKey + "=1"}
+		child.Stdout = rawStdout // holds the handshake pipe
+		leaveGroup(child)
+		if err := child.Start(); err == nil {
+			fmt.Fprintf(rawStderr, "child %d\n", child.Process.Pid)
+		}
+	}
+	if mode == "slow-start" || mode == "escapes-early" {
 		time.Sleep(time.Minute) // never reaches the handshake in a test
 	}
 	hs := handshake
@@ -87,6 +96,8 @@ func (testPlugin) GRPCClient(context.Context, *plugin.GRPCBroker, *grpc.ClientCo
 //
 //   - misnamed: Describe reports the name "other".
 //   - slow-start: no handshake for a minute.
+//   - escapes-early: as slow-start, after starting a child that leaves
+//     its process group and holds its stdout.
 //   - proto-two: the handshake offers protocol 2.
 //   - plaintext: serves without mutual TLS.
 //   - view-nine: Describe picks view schema 9.

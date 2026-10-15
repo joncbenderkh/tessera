@@ -160,8 +160,9 @@ func (m *Manager) Changed() <-chan struct{} { return m.changed }
 
 // Close stops launching and shuts every plugin down in parallel. It
 // returns once every plugin has exited or been killed, or Instance.Close
-// has given up on it, including when called again while a first call is
-// still shutting them down.
+// has given up on it, and every launch still starting has stopped, which
+// can take up to startTimeout; also when called again while a first call
+// is still shutting them down.
 func (m *Manager) Close() { m.closeOnce.Do(m.close) }
 
 func (m *Manager) close() {

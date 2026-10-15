@@ -181,6 +181,10 @@ func Describe(ctx context.Context, dir, name string, output func(line string), l
 // Windows, the plugin alone). Where watch runs, the group of a plugin
 // that exits is killed as it exits, so its children go with it.
 // It returns within killTimeout plus reapTimeout.
+//
+// A plugin whose exited process left its pipes to a child outside its
+// group is finished by watch instead, within pipeGrace plus
+// drainTimeout of its exit, which is less than killTimeout.
 func (inst *Instance) Close() {
 	defer func() {
 		for _, w := range inst.outputs {
@@ -191,7 +195,6 @@ func (inst *Instance) Close() {
 			_ = os.RemoveAll(inst.runner.tmpDir)
 		}
 	}()
-	inst.runner.dropPipes()
 	done := make(chan struct{})
 	go func() {
 		inst.client.Kill()

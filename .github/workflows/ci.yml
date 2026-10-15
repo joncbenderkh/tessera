@@ -70,7 +70,7 @@ jobs:
         run: go list -e ./... | grep -v '/cmd/tessera$' | xargs go build
 
       - name: Test
-        run: go test ./...
+        run: go test -race ./...
 
       - name: Vet
         run: go vet ./...
@@ -156,5 +156,6 @@ jobs:
           go-version-file: ${{ matrix.go == 'minimum' && 'go.mod' || '' }}
 
       - name: Test
-        # -v lists skipped tests, which differ per OS.
-        run: go test -v ./internal/pluginhost ./internal/config
+        # -v lists skipped tests, which differ per OS. -race needs cgo,
+        # which the Windows runner lacks.
+        run: go test -v ${{ runner.os != 'Windows' && '-race' || '' }} ./internal/pluginhost ./internal/config

@@ -308,11 +308,39 @@ func TestExitSeenDespiteEscapedChild(t *testing.T) {
 	if !inst.Exited() {
 		t.Fatal("exited plugin reported as running while an escaped child holds its stderr")
 	}
-	time.Sleep(pipeGrace + 500*time.Millisecond) // until watch has reaped it
+	// Close at once, before watch has reaped the plugin; watch still
+	// releases the pipes, so go-plugin finishes.
 	start := time.Now()
 	inst.Close()
-	if d := time.Since(start); d > time.Second {
+	if d := time.Since(start); d > pipeGrace+drainTimeout+time.Second {
 		t.Errorf("Close of an exited plugin took %v", d)
+	}
+	if !inst.client.Exited() {
+		t.Error("go-plugin still waiting on the pipes the escaped child holds")
+	}
+}
+
+func TestCancelWithEscapedChild(t *testing.T) {
+	if !canFreeze || !canAwaitExit {
+		t.Skip("needs process groups and an exit watcher")
+	}
+	dir := install(t, "escapes-early")
+	logger, _ := newLogger()
+	var child childPID
+	defer func() {
+		if p, err := os.FindProcess(child.get()); err == nil && child.get() != 0 {
+			p.Kill()
+		}
+	}()
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	_, err := Launch(ctx, dir, "escapes-early", child.output, logger)
+	if err == nil || !strings.Contains(err.Error(), "context deadline exceeded") {
+		t.Fatalf("got %v, want a deadline error", err)
+	}
+	if d := time.Since(start); d > pipeGrace+drainTimeout+2*time.Second {
+		t.Errorf("Launch took %v after its context ended", d)
 	}
 }
 

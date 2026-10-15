@@ -36,18 +36,23 @@ type procRunner struct {
 	exited   bool          // reaped: its PID, and so its group ID, may be reused
 	reaping  bool          // Wait is reaping it without watch
 	exitSeen bool          // watch saw it exit, unreaped
-	reaped   chan struct{} // closed once reap has reaped it
+	reaped   chan struct{} // closed once the plugin is reaped
 	watched  chan struct{} // closed by watch; Wait reaps only after it
+	drained  chan struct{} // closed by Wait: go-plugin has read both pipes to the end
 
 	reapOnce sync.Once
 	waitErr  error
-	early    bool // reaped by watch, which left the pipes to go-plugin; under mu
 }
 
-// pipeGrace is how long an exited plugin's stdout and stderr may stay
-// open, held by a child that left its process group, before watch reaps
-// the plugin itself.
-const pipeGrace = time.Second
+// After the plugin exits, a child that left its process group can hold
+// its stdout and stderr open, and go-plugin reaps the plugin only once
+// both close. watch then reaps it after pipeGrace and, drainTimeout
+// later, closes the pipes so go-plugin finishes; output still unread by
+// then, which only a stalled reader leaves, is lost.
+const (
+	pipeGrace    = time.Second
+	drainTimeout = 2 * time.Second
+)
 
 var _ runner.Runner = (*procRunner)(nil)
 
@@ -82,6 +87,7 @@ func (r *procRunner) Start(context.Context) error {
 		return errors.New("launch canceled")
 	}
 	r.reaped = make(chan struct{})
+	r.drained = make(chan struct{})
 	if err := startOnOwnThread(r.cmd, r.reaped); err != nil {
 		return err
 	}
@@ -100,11 +106,9 @@ func (r *procRunner) Start(context.Context) error {
 
 // watch kills the plugin's process group as soon as the plugin exits,
 // ending children it left behind, before anything reaps the plugin, so
-// its group ID cannot have been reused. go-plugin calls Wait only once
-// the plugin's stdout and stderr close; a child that left the group can
-// hold them open, so if the plugin is still unreaped after pipeGrace,
-// watch reaps it without touching the pipes: go-plugin reads them to
-// the end, so no output is lost, and Wait closes them afterwards.
+// its group ID cannot have been reused. It alone handles pipes that a
+// child that left the group holds open (see pipeGrace): neither Close
+// nor a canceled launch touches them.
 func (r *procRunner) watch() {
 	seen := awaitExitHook(r.proc)
 	if seen {
@@ -119,50 +123,32 @@ func (r *procRunner) watch() {
 	}
 	select {
 	case <-r.reaped:
+		return
 	case <-time.After(pipeGrace):
-		r.mu.Lock()
-		r.exited = true
-		r.mu.Unlock()
-		r.reapOnce.Do(func() {
-			r.waitErr = reapPID(r.proc.Pid)
-			r.mu.Lock()
-			r.early = true
-			r.mu.Unlock()
-			close(r.reaped)
-		})
 	}
+	r.mu.Lock()
+	r.exited = true
+	r.mu.Unlock()
+	// wait4, unlike Cmd.Wait, leaves the pipes for go-plugin to read.
+	r.reapOnce.Do(func() {
+		r.waitErr = reapPID(r.proc.Pid)
+		close(r.reaped)
+	})
+	select {
+	case <-r.drained:
+	case <-time.After(drainTimeout):
+	}
+	r.stdout.Close()
+	r.stderr.Close()
 }
 
 // reap reaps the plugin once, for Wait or watch, whichever comes first.
-// After watch reaped it, Wait releases what Cmd.Wait would have: the
-// pipes, which go-plugin has read to the end, and the process handle.
 func (r *procRunner) reap() error {
 	r.reapOnce.Do(func() {
 		r.waitErr = r.cmd.Wait()
 		close(r.reaped)
 	})
-	if r.reapedEarly() {
-		r.stdout.Close()
-		r.stderr.Close()
-		r.proc.Release()
-	}
 	return r.waitErr
-}
-
-func (r *procRunner) reapedEarly() bool {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	return r.early
-}
-
-// dropPipes closes the pipes of a plugin watch reaped, which only a
-// child that left its group still holds: the plugin's own output was
-// read long ago, and go-plugin finishes once they close.
-func (r *procRunner) dropPipes() {
-	if r.reapedEarly() {
-		r.stdout.Close()
-		r.stderr.Close()
-	}
 }
 
 // sawExit reports whether watch has seen the plugin exit.
@@ -197,6 +183,7 @@ func (r *procRunner) kill() {
 // plugin has exited before reaping it, so from the start of the reap
 // kill signals only the plugin.
 func (r *procRunner) Wait(context.Context) error {
+	close(r.drained) // go-plugin calls Wait once its pipe readers are done
 	if r.watched != nil {
 		<-r.watched
 	}
