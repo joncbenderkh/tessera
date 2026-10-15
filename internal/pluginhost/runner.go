@@ -32,6 +32,7 @@ type procRunner struct {
 
 	mu       sync.Mutex
 	proc     *os.Process
+	pid      int // proc.Pid, kept since Release clears it
 	canceled bool
 	exited   bool          // reaped: its PID, and so its group ID, may be reused
 	reaping  bool          // Wait is reaping it without watch
@@ -51,7 +52,7 @@ type procRunner struct {
 // then, which only a stalled reader leaves, is lost.
 const (
 	pipeGrace    = time.Second
-	drainTimeout = 2 * time.Second
+	drainTimeout = 1500 * time.Millisecond
 )
 
 var _ runner.Runner = (*procRunner)(nil)
@@ -94,6 +95,7 @@ func (r *procRunner) Start(context.Context) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.proc = r.cmd.Process
+	r.pid = r.proc.Pid
 	if r.canceled {
 		killGroup(r.proc)
 	}
@@ -131,13 +133,23 @@ func (r *procRunner) watch() {
 	r.mu.Unlock()
 	// wait4, unlike Cmd.Wait, leaves the pipes for go-plugin to read.
 	r.reapOnce.Do(func() {
-		r.waitErr = reapPID(r.proc.Pid)
+		r.waitErr = reapPID(r.pid)
+		// Cmd.Wait, which no longer runs, would release the handle.
+		r.mu.Lock()
+		r.proc.Release()
+		r.mu.Unlock()
 		close(r.reaped)
 	})
 	select {
 	case <-r.drained:
 	case <-time.After(drainTimeout):
 	}
+	r.closePipes()
+}
+
+// closePipes closes the plugin's pipes, ending go-plugin's readers even
+// if a child that left the plugin's group holds them.
+func (r *procRunner) closePipes() {
 	r.stdout.Close()
 	r.stderr.Close()
 }
@@ -219,7 +231,7 @@ func (r *procRunner) ID() string {
 	if r.proc == nil {
 		return ""
 	}
-	return strconv.Itoa(r.proc.Pid)
+	return strconv.Itoa(r.pid)
 }
 
 func (r *procRunner) Diagnose(context.Context) string { return "" }

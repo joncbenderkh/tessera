@@ -32,8 +32,10 @@ const (
 	// answers, or on a child of the plugin that keeps its stderr open.
 	killTimeout = 3 * time.Second
 	// reapTimeout bounds the wait for Kill after the plugin's process
-	// group has been killed.
+	// group has been killed. If Kill is still waiting then, Close closes
+	// the plugin's pipes and waits up to pipeTimeout more.
 	reapTimeout = 2 * time.Second
+	pipeTimeout = time.Second
 )
 
 // handshake is the transport handshake of docs/protocol.md.
@@ -180,7 +182,7 @@ func Describe(ctx context.Context, dir, name string, output func(line string), l
 // holding its stderr open, Close kills the plugin's process group (on
 // Windows, the plugin alone). Where watch runs, the group of a plugin
 // that exits is killed as it exits, so its children go with it.
-// It returns within killTimeout plus reapTimeout.
+// It returns within killTimeout, reapTimeout, and pipeTimeout together.
 //
 // A plugin whose exited process left its pipes to a child outside its
 // group is finished by watch instead, within pipeGrace plus
@@ -209,7 +211,15 @@ func (inst *Instance) Close() {
 	inst.runner.kill() // the exit unblocks Shutdown, and EOF the stderr reader
 	select {
 	case <-done:
+		return
 	case <-time.After(reapTimeout):
+	}
+	// Only a child that left the group can still hold the pipes, on a
+	// plugin whose exit watch did not see; go-plugin waits for them.
+	inst.runner.closePipes()
+	select {
+	case <-done:
+	case <-time.After(pipeTimeout):
 	}
 }
 

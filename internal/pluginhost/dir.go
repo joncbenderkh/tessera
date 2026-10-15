@@ -43,7 +43,7 @@ func List(dir string) ([]string, error) {
 	}
 	var names []string
 	for _, e := range entries {
-		name, ok := strings.CutSuffix(e.Name(), exeSuffix())
+		name, ok := cutExeSuffix(e.Name())
 		if !ok || config.ValidPluginName(name) != nil {
 			continue
 		}
@@ -52,6 +52,16 @@ func List(dir string) ([]string, error) {
 		}
 	}
 	return names, nil
+}
+
+// cutExeSuffix strips exeSuffix from a file name, ignoring case on
+// Windows, whose file names are case-insensitive.
+func cutExeSuffix(file string) (string, bool) {
+	suffix := exeSuffix()
+	if len(file) < len(suffix) || !strings.EqualFold(file[len(file)-len(suffix):], suffix) {
+		return file, false
+	}
+	return file[:len(file)-len(suffix)], true
 }
 
 // find returns the path of the plugin called name in dir, or an error

@@ -291,6 +291,8 @@ func TestExitSeenDespiteEscapedChild(t *testing.T) {
 	dir := install(t, "escapes")
 	logger, _ := newLogger()
 	var child childPID
+	runtime.GC() // release the handles of plugins earlier tests dropped
+	before := pidfds()
 	inst, err := Launch(context.Background(), dir, "escapes", child.output, logger)
 	if err != nil {
 		t.Fatal(err)
@@ -317,6 +319,40 @@ func TestExitSeenDespiteEscapedChild(t *testing.T) {
 	}
 	if !inst.client.Exited() {
 		t.Error("go-plugin still waiting on the pipes the escaped child holds")
+	}
+	if n := pidfds(); n > before {
+		t.Errorf("%d pidfds open after Close, %d before Launch", n, before)
+	}
+}
+
+func TestCloseEndsEscapedPipesWhenWatchFails(t *testing.T) {
+	if !canFreeze {
+		t.Skip("needs process groups")
+	}
+	defer func(f func(*os.Process) bool) { awaitExitHook = f }(awaitExitHook)
+	awaitExitHook = func(*os.Process) bool { return false }
+	dir := install(t, "escapes")
+	logger, _ := newLogger()
+	var child childPID
+	inst, err := Launch(context.Background(), dir, "escapes", child.output, logger)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if p, err := os.FindProcess(child.get()); err == nil && child.get() != 0 {
+			p.Kill()
+		}
+	}()
+	time.Sleep(500 * time.Millisecond) // the plugin exits 200ms after Describe
+	start := time.Now()
+	inst.Close()
+	if d := time.Since(start); d > killTimeout+reapTimeout+pipeTimeout+time.Second {
+		t.Errorf("Close took %v", d)
+	}
+	select {
+	case <-inst.runner.reaped:
+	case <-time.After(2 * time.Second):
+		t.Error("plugin left unreaped, and its start thread held, after Close")
 	}
 }
 
@@ -561,7 +597,11 @@ func TestList(t *testing.T) {
 	}
 	want := []string{"clock", "weather"}
 	if exeSuffix() != "" {
-		want = []string{"clock", "notes", "weather"} // no executable bit
+		// No executable bit, and the suffix in any case.
+		if err := os.WriteFile(filepath.Join(dir, "shout.EXE"), nil, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		want = []string{"clock", "notes", "shout", "weather"}
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("got %v, want %v", got, want)
