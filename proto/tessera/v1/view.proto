@@ -24,7 +24,7 @@ message Widget {
   // it and the others are treated as having none.
   string id = 1;
   // When true, the host draws a loading placeholder in the widget's shape
-  // instead of its content.
+  // instead of its content. With no kind set, it draws nothing.
   bool loading = 2;
   // The widget itself. Unset renders nothing.
   oneof kind {

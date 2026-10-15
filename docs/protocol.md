@@ -31,8 +31,10 @@ languages can follow its documented handshake:
    exits.
 2. The plugin listens on a unix socket (on Windows, TCP on 127.0.0.1),
    generates its own certificate, and prints one line to stdout:
-   `1|<protocol version>|unix|<path>|grpc|<certificate>`, where the
-   certificate is its DER encoding in unpadded standard base64.
+   `1|<protocol version>|<network>|<address>|grpc|<certificate>`, where
+   `<network>|<address>` is `unix|<socket path>` (on Windows,
+   `tcp|127.0.0.1:<port>`) and the certificate is its DER encoding in
+   unpadded standard base64.
 3. The host connects over mutual TLS, each side trusting only the other's
    certificate, and makes `PanelService` calls. The host verifies the
    plugin's certificate for the name `localhost`, so it needs that DNS
@@ -86,7 +88,11 @@ host                                    plugin
 ```
 
 - **Configure** is called again whenever the panel's settings or size
-  change. A watching plugin then sends a fresh view on its open stream.
+  change. A watching plugin then sends a fresh view on its open stream,
+  and a polled plugin is rendered again right away. If the plugin
+  answers `INVALID_ARGUMENT`, it keeps its previous settings, and the
+  host shows the message in an error tile; until a Configure succeeds,
+  the host makes no Watch or Render call.
 - **Watch** is the normal path: the plugin pushes a complete view each
   time its content changes, starting with the current one. When nothing
   changes for `heartbeat_interval`, it sends a `WatchResponse` without a
@@ -95,16 +101,20 @@ host                                    plugin
   cancelled handler may still be returning when the next starts, so keep
   per-stream state inside the handler.
 - **Render** is the fallback for plugins that cannot push. If Watch
-  returns `UNIMPLEMENTED`, the host polls Render, waiting
+  returns `UNIMPLEMENTED` before its first response, the host polls
+  Render, waiting
   `RenderResponse.poll_interval` (or its default) between calls.
 - **HandleEvent** delivers clicks and scrolls. A polled plugin is rendered
   again right after the event.
 
 Configure and HandleEvent run concurrently with the open Watch, so a
 plugin guards the state they share. The host makes these unary calls one
-at a time and in order, so events never overtake each other. A Watch
-stream that ends without the host cancelling it, cleanly or with an
-error other than `UNIMPLEMENTED`, is a protocol failure.
+at a time and in order, so events never overtake each other. A call that
+misses its deadline counts as a hang: the host restarts the plugin
+before making another call, so a timed-out handler never overlaps the
+next one. A Watch stream that ends without the host cancelling it, other
+than with `UNIMPLEMENTED` before its first response, is a protocol
+failure.
 
 Every view is complete: it replaces the previous one rather than patching
 it. Views are small, and this keeps plugins stateless about what the host

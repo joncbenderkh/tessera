@@ -427,7 +427,7 @@ type Widget struct {
 	// it and the others are treated as having none.
 	Id string `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
 	// When true, the host draws a loading placeholder in the widget's shape
-	// instead of its content.
+	// instead of its content. With no kind set, it draws nothing.
 	Loading bool `protobuf:"varint,2,opt,name=loading,proto3" json:"loading,omitempty"`
 	// The widget itself. Unset renders nothing.
 	//

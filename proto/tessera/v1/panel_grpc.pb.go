@@ -44,7 +44,10 @@ type PanelServiceClient interface {
 	// schema version it will speak.
 	Describe(ctx context.Context, in *DescribeRequest, opts ...grpc.CallOption) (*DescribeResponse, error)
 	// Configure passes the panel's settings and size. The plugin returns
-	// INVALID_ARGUMENT with a readable message if it rejects the settings.
+	// INVALID_ARGUMENT with a readable message if it rejects the settings;
+	// it then keeps its previous settings, if any. The host shows the
+	// message in an error tile and makes no Watch or Render call until a
+	// later Configure succeeds.
 	Configure(ctx context.Context, in *ConfigureRequest, opts ...grpc.CallOption) (*ConfigureResponse, error)
 	// Watch streams a new view whenever the panel's content changes,
 	// starting with the current view, and a heartbeat when nothing changed
@@ -52,9 +55,9 @@ type PanelServiceClient interface {
 	// stream per plugin and cancels it before opening another, but the
 	// cancelled handler may still be returning when the next one starts,
 	// so a plugin keeps per-stream state local to the handler. A stream
-	// that ends without the host cancelling it, with OK or any error
-	// other than UNIMPLEMENTED, is a protocol failure. A plugin that
-	// cannot push returns UNIMPLEMENTED, and the host polls Render instead.
+	// that ends without the host cancelling it is a protocol failure,
+	// except that a plugin that cannot push returns UNIMPLEMENTED before
+	// its first response, and the host polls Render instead.
 	Watch(ctx context.Context, in *WatchRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[WatchResponse], error)
 	// Render returns the current view. It is the polling fallback for
 	// plugins that do not implement Watch.
@@ -149,7 +152,10 @@ type PanelServiceServer interface {
 	// schema version it will speak.
 	Describe(context.Context, *DescribeRequest) (*DescribeResponse, error)
 	// Configure passes the panel's settings and size. The plugin returns
-	// INVALID_ARGUMENT with a readable message if it rejects the settings.
+	// INVALID_ARGUMENT with a readable message if it rejects the settings;
+	// it then keeps its previous settings, if any. The host shows the
+	// message in an error tile and makes no Watch or Render call until a
+	// later Configure succeeds.
 	Configure(context.Context, *ConfigureRequest) (*ConfigureResponse, error)
 	// Watch streams a new view whenever the panel's content changes,
 	// starting with the current view, and a heartbeat when nothing changed
@@ -157,9 +163,9 @@ type PanelServiceServer interface {
 	// stream per plugin and cancels it before opening another, but the
 	// cancelled handler may still be returning when the next one starts,
 	// so a plugin keeps per-stream state local to the handler. A stream
-	// that ends without the host cancelling it, with OK or any error
-	// other than UNIMPLEMENTED, is a protocol failure. A plugin that
-	// cannot push returns UNIMPLEMENTED, and the host polls Render instead.
+	// that ends without the host cancelling it is a protocol failure,
+	// except that a plugin that cannot push returns UNIMPLEMENTED before
+	// its first response, and the host polls Render instead.
 	Watch(*WatchRequest, grpc.ServerStreamingServer[WatchResponse]) error
 	// Render returns the current view. It is the polling fallback for
 	// plugins that do not implement Watch.
