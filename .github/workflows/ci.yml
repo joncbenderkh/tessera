@@ -131,18 +131,20 @@ jobs:
   # host itself needs cgo and is built only on Linux above, so only the
   # pure-Go packages are tested here.
   other-os:
-    name: Plugin host (${{ matrix.os }})
+    name: Plugin host (${{ matrix.os }}, Go ${{ matrix.go }})
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
         os: [macos-latest, windows-latest]
+        go: [minimum, stable]
     steps:
       - uses: actions/checkout@v7
 
       - uses: actions/setup-go@v7
         with:
-          go-version: stable
+          go-version: ${{ matrix.go == 'stable' && 'stable' || '' }}
+          go-version-file: ${{ matrix.go == 'minimum' && 'go.mod' || '' }}
 
       - name: Test
         # -v lists skipped tests, which differ per OS.

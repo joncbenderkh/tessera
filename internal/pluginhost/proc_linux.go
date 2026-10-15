@@ -14,7 +14,7 @@ import (
 // killGroup reaches its children too, and has the kernel kill it if
 // the host dies without shutting it down. Pdeathsig fires when the OS
 // thread that started the plugin exits, so plugins are started on a
-// thread that never does (forkThread).
+// thread that never does (startOnOwnThread).
 func ownProcessGroup(cmd *exec.Cmd) {
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true, Pdeathsig: syscall.SIGKILL}
 }

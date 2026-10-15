@@ -159,8 +159,9 @@ func (m *Manager) States() []PanelState {
 func (m *Manager) Changed() <-chan struct{} { return m.changed }
 
 // Close stops launching and shuts every plugin down in parallel. It
-// returns once all plugin processes are gone, including when called
-// again while a first call is still shutting them down.
+// returns once every plugin has exited or been killed, or Instance.Close
+// has given up on it, including when called again while a first call is
+// still shutting them down.
 func (m *Manager) Close() { m.closeOnce.Do(m.close) }
 
 func (m *Manager) close() {

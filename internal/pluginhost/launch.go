@@ -13,6 +13,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/hashicorp/go-hclog"
 	"github.com/hashicorp/go-plugin"
@@ -209,7 +210,9 @@ func (inst *Instance) Close() {
 }
 
 // Exited reports whether the plugin process has exited.
-func (inst *Instance) Exited() bool { return inst.client.Exited() }
+func (inst *Instance) Exited() bool {
+	return inst.client.Exited() || inst.runner.sawExit()
+}
 
 // quietStderr is go-plugin's logger minus the sub-logger it re-logs
 // plugin stderr lines through, which it names after the executable,
@@ -249,11 +252,26 @@ func (w *lineWriter) Write(b []byte) (int, error) {
 		}
 		w.line = append(w.line, c)
 		if len(w.line) == maxLine {
-			w.output(string(w.line))
-			w.line = w.line[:0]
+			cut := runeCut(w.line)
+			w.output(string(w.line[:cut]))
+			w.line = w.line[:copy(w.line, w.line[cut:])]
 		}
 	}
 	return len(b), nil
+}
+
+// runeCut is where to cut a full line buffer: at its end, or before a
+// UTF-8 character the buffer ends in the middle of.
+func runeCut(b []byte) int {
+	for i := len(b) - 1; i >= 0 && i >= len(b)-utf8.UTFMax; i-- {
+		if utf8.RuneStart(b[i]) {
+			if utf8.FullRune(b[i:]) {
+				return len(b)
+			}
+			return i
+		}
+	}
+	return len(b)
 }
 
 // Flush passes on a final line that has no newline.

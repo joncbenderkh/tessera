@@ -284,6 +284,38 @@ func TestExitKillsChildren(t *testing.T) {
 	}
 }
 
+func TestExitSeenDespiteEscapedChild(t *testing.T) {
+	if !canFreeze || !canAwaitExit {
+		t.Skip("needs process groups and an exit watcher")
+	}
+	dir := install(t, "escapes")
+	logger, _ := newLogger()
+	var child childPID
+	inst, err := Launch(context.Background(), dir, "escapes", child.output, logger)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer inst.Close() // on an early failure; Close is idempotent
+	// The child left the group, so nothing else ends it.
+	defer func() {
+		if p, err := os.FindProcess(child.get()); err == nil && child.get() != 0 {
+			p.Kill()
+		}
+	}()
+	for start := time.Now(); !inst.Exited() && time.Since(start) < 10*time.Second; {
+		time.Sleep(20 * time.Millisecond) // the plugin exits 200ms after Describe
+	}
+	if !inst.Exited() {
+		t.Fatal("exited plugin reported as running while an escaped child holds its stderr")
+	}
+	time.Sleep(pipeGrace + 500*time.Millisecond) // until watch has reaped it
+	start := time.Now()
+	inst.Close()
+	if d := time.Since(start); d > time.Second {
+		t.Errorf("Close of an exited plugin took %v", d)
+	}
+}
+
 func TestCloseKillsDetachedChildren(t *testing.T) {
 	if !canFreeze || !canAwaitExit {
 		t.Skip("children of a plugin that exits on Shutdown survive on this OS")
@@ -415,6 +447,12 @@ func TestLineWriter(t *testing.T) {
 	w.Flush()
 	if want := []string{"one", "two", "three"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("got %q, want %q", got, want)
+	}
+
+	got = nil
+	w.Write(append(bytes.Repeat([]byte("x"), maxLine-1), "é\n"...))
+	if len(got) != 2 || len(got[0]) != maxLine-1 || got[1] != "é" {
+		t.Fatalf("a character across the cap: got pieces %d long", len(got))
 	}
 
 	got = nil

@@ -12,6 +12,7 @@ import (
 	"runtime"
 	"strconv"
 	"sync"
+	"time"
 
 	"github.com/hashicorp/go-hclog"
 	"github.com/hashicorp/go-plugin/runner"
@@ -35,9 +36,17 @@ type procRunner struct {
 	exited   bool          // reaped: its PID, and so its group ID, may be reused
 	reaping  bool          // Wait is reaping it without watch
 	exitSeen bool          // watch saw it exit, unreaped
-	reaped   chan struct{} // closed once Wait has reaped it
+	reaped   chan struct{} // closed once reap has reaped it
 	watched  chan struct{} // closed by watch; Wait reaps only after it
+
+	reapOnce sync.Once
+	waitErr  error
 }
+
+// pipeGrace is how long an exited plugin's stdout and stderr may stay
+// open, held by a child that left its process group, before watch reaps
+// the plugin itself.
+const pipeGrace = time.Second
 
 var _ runner.Runner = (*procRunner)(nil)
 
@@ -89,18 +98,47 @@ func (r *procRunner) Start(context.Context) error {
 }
 
 // watch kills the plugin's process group as soon as the plugin exits,
-// ending children it left behind. go-plugin calls Wait only once the
-// plugin's stderr closes, so a child holding it open would otherwise
-// keep an exited plugin looking alive. The plugin is not reaped until
-// watch is done, so its group ID cannot have been reused.
+// ending children it left behind, before anything reaps the plugin, so
+// its group ID cannot have been reused. go-plugin calls Wait only once
+// the plugin's stdout and stderr close; a child that left the group can
+// hold them open, so if the plugin is still unreaped after pipeGrace,
+// watch reaps it, which closes the pipes and lets go-plugin finish.
 func (r *procRunner) watch() {
-	defer close(r.watched)
-	if awaitExitHook(r.proc) {
+	seen := awaitExitHook(r.proc)
+	if seen {
 		r.mu.Lock()
 		killGroup(r.proc)
 		r.exitSeen = true
 		r.mu.Unlock()
 	}
+	close(r.watched)
+	if !seen {
+		return
+	}
+	select {
+	case <-r.reaped:
+	case <-time.After(pipeGrace):
+		r.mu.Lock()
+		r.exited = true
+		r.mu.Unlock()
+		r.reap()
+	}
+}
+
+// reap reaps the plugin once, for Wait or watch, whichever comes first.
+func (r *procRunner) reap() error {
+	r.reapOnce.Do(func() {
+		r.waitErr = r.cmd.Wait()
+		close(r.reaped)
+	})
+	return r.waitErr
+}
+
+// sawExit reports whether watch has seen the plugin exit.
+func (r *procRunner) sawExit() bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.exitSeen
 }
 
 // kill kills the plugin's process group and stops a pending Start.
@@ -128,7 +166,6 @@ func (r *procRunner) kill() {
 // plugin has exited before reaping it, so from the start of the reap
 // kill signals only the plugin.
 func (r *procRunner) Wait(context.Context) error {
-	defer close(r.reaped)
 	if r.watched != nil {
 		<-r.watched
 	}
@@ -136,11 +173,11 @@ func (r *procRunner) Wait(context.Context) error {
 	if r.exitSeen {
 		r.exited = true
 		r.mu.Unlock()
-		return r.cmd.Wait()
+		return r.reap()
 	}
 	r.reaping = true
 	r.mu.Unlock()
-	err := r.cmd.Wait()
+	err := r.reap()
 	r.mu.Lock()
 	r.exited = true
 	r.mu.Unlock()

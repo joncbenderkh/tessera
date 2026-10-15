@@ -58,11 +58,12 @@ On Unix each plugin runs in a process group of its own. On Linux,
 macOS, and the BSDs the host kills that group as soon as the plugin
 exits, and when it shuts the plugin down, so children that stay in the
 group cannot outlive the plugin or keep the host from exiting by
-holding the plugin's stderr open; a child that leaves the group is on
-its own. On other Unix systems the group is killed only when a plugin
-has to be killed. On Windows only the plugin itself is killed. On Linux
-the kernel also kills a plugin whose host dies without shutting it
-down; elsewhere such a plugin outlives its host.
+holding the plugin's stderr open. A child that leaves the group is
+on its own, though the host still sees the plugin exit. On other Unix
+systems the group is killed only when a plugin has to be killed. On
+Windows only the plugin itself is killed. On Linux the kernel also
+kills a plugin whose host dies without shutting it down; elsewhere
+such a plugin outlives its host.
 
 Mutual TLS is what go-plugin calls AutoMTLS, and the host always enables
 it: without it, any local process could connect to a plugin, read its

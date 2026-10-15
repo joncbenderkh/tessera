@@ -2,11 +2,17 @@
 
 package pluginhost
 
-import "golang.org/x/sys/windows"
+import (
+	"os/exec"
+
+	"golang.org/x/sys/windows"
+)
 
 const canFreeze = false
 
 func freeze() {}
+
+func leaveGroup(*exec.Cmd) {}
 
 // alive reports whether a process with this PID is running.
 func alive(pid int) bool {
