@@ -77,6 +77,7 @@ func TestStartBringsPanelsUp(t *testing.T) {
 		{ID: "hidden", Plugin: "clock", Enabled: &off, W: 1, H: 1},
 	}}
 	m := Start(cfg, dir, logger)
+	defer m.Close() // on an early failure; Close is idempotent
 	states := settle(t, m)
 
 	if len(states) != 2 {
@@ -87,6 +88,20 @@ func TestStartBringsPanelsUp(t *testing.T) {
 			t.Errorf("panel %s: got %v %v, want ready clock", s.ID, s.State, s.Err)
 		}
 	}
+	// The plugins report Configure over GRPCStdio, which delivers it
+	// asynchronously, so wait for it before closing them.
+	for _, want := range []string{
+		"[panel a] configured a map[n:map[x:1] timezone:UTC] 2x1",
+		"[panel b] configured b map[] 1x1",
+	} {
+		for start := time.Now(); !strings.Contains(logs.String(), want); {
+			if time.Since(start) > 10*time.Second {
+				t.Fatalf("log lacks %q:\n%s", want, logs)
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
+	}
+
 	insts := []*Instance{m.panels[0].inst, m.panels[1].inst}
 	start := time.Now()
 	m.Close()
@@ -96,15 +111,6 @@ func TestStartBringsPanelsUp(t *testing.T) {
 	for i, inst := range insts {
 		if !inst.Exited() {
 			t.Errorf("plugin %d still running after Close", i)
-		}
-	}
-	// Checked after Close, which waits for the plugins' output.
-	for _, want := range []string{
-		"[panel a] configured a map[n:map[x:1] timezone:UTC] 2x1",
-		"[panel b] configured b map[] 1x1",
-	} {
-		if !strings.Contains(logs.String(), want) {
-			t.Errorf("log lacks %q:\n%s", want, logs)
 		}
 	}
 }
