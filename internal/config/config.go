@@ -12,9 +12,12 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"regexp"
 
 	"github.com/goccy/go-yaml"
+	"github.com/goccy/go-yaml/ast"
 	"github.com/goccy/go-yaml/parser"
+	"github.com/goccy/go-yaml/token"
 )
 
 // SchemaVersion is the config schema version this build reads and writes.
@@ -85,6 +88,13 @@ func Parse(data []byte) (Config, error) {
 	if len(file.Docs) > 1 {
 		return Config{}, fmt.Errorf("found %d YAML documents, want one", len(file.Docs))
 	}
+	var numErr error
+	for _, doc := range file.Docs {
+		ast.Walk(numberCheck{err: &numErr}, doc)
+	}
+	if numErr != nil {
+		return Config{}, numErr
+	}
 	var c Config
 	if err := yaml.UnmarshalWithOptions(data, &c,
 		yaml.Strict(), yaml.DisallowUnknownField(), yaml.CustomUnmarshaler(decodeInt),
@@ -119,6 +129,40 @@ func decodeInt(dst *int, data []byte) error {
 		return fmt.Errorf("%s is not an integer", bytes.TrimSpace(data))
 	}
 	return nil
+}
+
+// yamlNumber matches the plain scalars YAML 1.2's core schema reads as
+// numbers.
+var yamlNumber = regexp.MustCompile(`^([-+]?(\.[0-9]+|[0-9]+(\.[0-9]*)?)([eE][-+]?[0-9]+)?|0o[0-7]+|0x[0-9a-fA-F]+)$`)
+
+// numberCheck rejects plain settings values that YAML 1.2 reads as
+// numbers but the decoder keeps as strings: integers beyond 64 bits,
+// floats beyond a double, and exponents without a decimal point (1e5).
+// A plugin would otherwise receive a string where it expects a number.
+type numberCheck struct {
+	inSettings bool
+	err        *error
+}
+
+func (v numberCheck) Visit(n ast.Node) ast.Visitor {
+	if *v.err != nil {
+		return nil
+	}
+	switch n := n.(type) {
+	case *ast.MappingValueNode:
+		inner := v
+		inner.inSettings = v.inSettings || n.Key.String() == "settings"
+		ast.Walk(inner, n.Value)
+		return nil
+	case *ast.TagNode:
+		return nil
+	case *ast.StringNode:
+		if v.inSettings && n.Token.Type == token.StringType && yamlNumber.MatchString(n.Value) {
+			pos := n.Token.Position
+			*v.err = fmt.Errorf("line %d: %s is a number out of range or with an exponent but no decimal point (write 1.0e5); quote it to pass a string", pos.Line, n.Value)
+		}
+	}
+	return v
 }
 
 // Marshal encodes a config as YAML.

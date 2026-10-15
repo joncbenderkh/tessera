@@ -48,7 +48,7 @@ panels:
 | `panels[].enabled` | `false` hides the panel. Defaults to `true`. |
 | `panels[].x`, `y` | Zero-based column and row of the panel's top-left cell. |
 | `panels[].w`, `h` | Width and height in cells, each at least 1. |
-| `panels[].settings` | Settings passed to the plugin. Their schema comes from the plugin; numbers must be finite (no `.inf` or `.nan`). |
+| `panels[].settings` | Settings passed to the plugin. Their schema comes from the plugin; numbers must be finite and fit a double, and timestamps untagged (see `docs/protocol.md`). |
 
 Unknown fields are errors, so a misspelt key is reported rather than
 ignored. Every panel must fit within `grid.columns`. Enabled panels must

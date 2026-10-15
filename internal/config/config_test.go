@@ -84,6 +84,33 @@ func TestParseRejectsNonFiniteSettings(t *testing.T) {
 	}
 }
 
+func TestParseRejectsTimestampSettings(t *testing.T) {
+	data := strings.Replace(example, "show_seconds: no", "show_seconds: !!timestamp 2026-10-15", 1)
+	_, err := Parse([]byte(data))
+	if err == nil || !strings.Contains(err.Error(), "settings.show_seconds is a !!timestamp") {
+		t.Fatalf("expected a timestamp error, got %v", err)
+	}
+}
+
+func TestParseRejectsUnreadableNumbers(t *testing.T) {
+	for _, v := range []string{"1e400", "-.5e999", "1e5", "99999999999999999999", "{deep: [0x1FFFFFFFFFFFFFFFFF]}"} {
+		data := strings.Replace(example, "show_seconds: no", "show_seconds: "+v, 1)
+		_, err := Parse([]byte(data))
+		if err == nil || !strings.Contains(err.Error(), "quote it to pass a string") {
+			t.Errorf("%s: expected an unreadable-number error, got %v", v, err)
+		}
+	}
+}
+
+func TestParseKeepsQuotedAndInRangeSettings(t *testing.T) {
+	for _, v := range []string{`"1e400"`, "'1e5'", "!!str 1e5", "1.0e5", "2026-10-15", "18446744073709551615"} {
+		data := strings.Replace(example, "show_seconds: no", "show_seconds: "+v, 1)
+		if _, err := Parse([]byte(data)); err != nil {
+			t.Errorf("%s: unexpected error: %v", v, err)
+		}
+	}
+}
+
 func TestParseRejectsExtraDocuments(t *testing.T) {
 	_, err := Parse([]byte(example + "---\ngrid: {row_hieght: 200}\n"))
 	if err == nil || !strings.Contains(err.Error(), "YAML documents") {

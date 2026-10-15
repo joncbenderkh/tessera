@@ -128,7 +128,8 @@ limit, is a protocol failure.
 Every view is complete: it replaces the previous one rather than patching
 it. Views are small, and this keeps plugins stateless about what the host
 has drawn. A response is at most 4 MiB encoded, gRPC's default receive
-limit, and widgets nest at most 16 deep. A view over either limit fails
+limit, and widgets nest at most 16 deep (`View.body` is depth 1, and
+each `StackItem.widget` adds 1). A view over either limit fails
 its stream or Render call; the host shows an error tile naming the limit,
 does not restart the plugin, and tries again after the next Configure.
 
@@ -148,17 +149,19 @@ directory. Names Windows reserves for devices (`con`, `prn`, `aux`,
 
 ## Settings
 
-`DescribeResponse.config_schema` is a JSON Schema (draft 2020-12) for the
-panel's `settings` block in the config file. The host passes the settings
-to `Configure` as a `google.protobuf.Struct`, which has the JSON data
-model: mappings become structs, sequences lists, and every number a
-double, so integers beyond ±2^53 lose precision (quote them as strings).
-JSON has no infinity or NaN, so the host rejects `.inf` and `.nan`
-settings when it loads the config.
-Dates arrive as strings as written, and `!!binary` values as base64
-strings. Checking settings against the schema, and building a form from
-it, is #16; until then, the plugin validates them and answers
-`INVALID_ARGUMENT` with a readable message.
+`DescribeResponse.config_schema` is a JSON Schema (draft 2020-12) for
+the panel's `settings` block in the config file. The host passes the
+settings to `Configure` as a `google.protobuf.Struct`, which has the
+JSON data model: mappings become structs, sequences lists, and every
+number a double, so integers beyond ±2^53 lose precision (quote them as
+strings). The host rejects, when it loads the config, settings a Struct
+cannot carry: `.inf` and `.nan`, `!!timestamp` values, and unquoted
+numbers too large for 64 bits or a double, or written with an exponent
+but no decimal point (`1e5`; write `1.0e5`). Untagged dates arrive as
+strings as written, and `!!binary` values as base64 strings. Checking
+settings against the schema, and building a form from it, is #16; until
+then, the plugin validates them and answers `INVALID_ARGUMENT` with a
+readable message.
 
 ## View schema v1
 
