@@ -57,11 +57,12 @@ panels must not overlap; disabled panels may overlap anything.
 
 ### Settings
 
-A panel's settings reach its plugin as JSON-model values, so tessera reads
-them strictly by YAML 1.2's core schema, whatever the rest of the YAML
-tooling does: `017` is 17, `1e5` is a number, `1_000`, `0b101`, `yes`, and
-dates are strings, and `<<` is an ordinary key. Tags other than `!!str`,
-`.inf` and `.nan`, integers beyond 64 bits, and floats beyond a double
-are errors. Quote a value to pass it as a string. When tessera rewrites
-the file, it quotes every key and string that would otherwise read back
-as something else.
+A panel's settings reach its plugin as JSON-model values, so tessera
+reads them strictly by YAML 1.2's core schema, whatever the rest of the
+YAML tooling does: `017` is 17, `1e5` is a number, `1_000`, `0b101`,
+`yes`, and dates are strings, and `<<` is an ordinary key. Tags other
+than `!!str` (on keys too), `.inf` and `.nan`, and floats beyond a
+double are errors, and so are integers beyond ±2^53, which a plugin
+would receive rounded. Quote a value to pass it as a string. When
+tessera rewrites the file, it quotes every key and string that would
+otherwise read back as something else.

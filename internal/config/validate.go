@@ -9,8 +9,7 @@ import (
 	"math"
 	"regexp"
 	"slices"
-
-	"google.golang.org/protobuf/types/known/structpb"
+	"unicode/utf8"
 )
 
 // pluginName is the grammar of plugin names, which are also executable
@@ -22,8 +21,9 @@ var pluginName = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,63}$`)
 var windowsDevice = regexp.MustCompile(`^(con|prn|aux|nul|com[0-9]|lpt[0-9])$`)
 
 // Validate checks the config's internal consistency. Plugin settings are
-// checked only for values a google.protobuf.Struct cannot carry; checking
-// them against each plugin's config schema needs its handshake.
+// checked only for values Marshal cannot write or a plugin would not
+// receive exactly; checking them against each plugin's config schema
+// needs its handshake.
 func (c Config) Validate() error {
 	var errs []error
 	if c.Version != SchemaVersion {
@@ -48,6 +48,8 @@ func (c Config) Validate() error {
 			errs = append(errs, fmt.Errorf("%s: id is required", name))
 		case seen[p.ID]:
 			errs = append(errs, fmt.Errorf("%s: id is not unique", name))
+		case !utf8.ValidString(p.ID):
+			errs = append(errs, fmt.Errorf("%s: id is not valid UTF-8", name))
 		}
 		seen[p.ID] = true
 		switch {
@@ -58,7 +60,7 @@ func (c Config) Validate() error {
 		case windowsDevice.MatchString(p.Plugin):
 			errs = append(errs, fmt.Errorf("%s: plugin %q is a reserved device name on Windows", name, p.Plugin))
 		}
-		if err := checkSettings(map[string]any(p.Settings), "settings"); err != nil {
+		if err := checkSettings(p.Settings, "settings"); err != nil {
 			errs = append(errs, fmt.Errorf("%s: %w", name, err))
 		}
 		if p.W < 1 || p.H < 1 {
@@ -89,12 +91,17 @@ func (c Config) Validate() error {
 	return errors.Join(errs...)
 }
 
-// checkSettings reports the first value in v, at path, that cannot reach
-// a plugin as a JSON-model google.protobuf.Struct value.
+// checkSettings reports the first value in v, at path, that Marshal
+// cannot write or a plugin would not receive exactly.
 func checkSettings(v any, path string) error {
 	switch v := v.(type) {
+	case Settings:
+		return checkSettings(map[string]any(v), path)
 	case map[string]any:
 		for _, k := range slices.Sorted(maps.Keys(v)) {
+			if !utf8.ValidString(k) {
+				return fmt.Errorf("%s: key %q is not valid UTF-8", path, k)
+			}
 			if err := checkSettings(v[k], path+"."+k); err != nil {
 				return err
 			}
@@ -105,12 +112,8 @@ func checkSettings(v any, path string) error {
 				return err
 			}
 		}
-	case float64:
-		if math.IsInf(v, 0) || math.IsNaN(v) {
-			return fmt.Errorf("%s must be a finite number", path)
-		}
 	default:
-		if _, err := structpb.NewValue(v); err != nil {
+		if _, err := scalar(v); err != nil {
 			return fmt.Errorf("%s: %w", path, err)
 		}
 	}

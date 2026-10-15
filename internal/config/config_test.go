@@ -94,8 +94,12 @@ func TestParseRejectsSettings(t *testing.T) {
 		{"{*other : 1}", "aliases are not supported"},
 		{"1e400", "out of range for a double"},
 		{"-.5e999", "out of range for a double"},
-		{"99999999999999999999", "out of range for 64 bits"},
-		{"{deep: [0x1FFFFFFFFFFFFFFFFF]}", "out of range for 64 bits"},
+		{"99999999999999999999", "beyond ±2^53"},
+		{"9007199254740993", "beyond ±2^53"},
+		{"-9007199254740993", "beyond ±2^53"},
+		{"{deep: [0x1FFFFFFFFFFFFFFFFF]}", "0x1FFFFFFFFFFFFFFFFF is beyond ±2^53"},
+		{"{!!int 17: x}", "may not use the !!int tag"},
+		{"{? !!timestamp 2026-01-01 : x}", "may not use the !!timestamp tag"},
 	} {
 		_, err := Parse(withSetting(tt.value))
 		if err == nil || !strings.Contains(err.Error(), tt.want) {
@@ -114,7 +118,11 @@ func TestParseResolvesSettingsByCoreSchema(t *testing.T) {
 		{"-017", int64(-17)},
 		{"0o17", int64(15)},
 		{"0x1F", int64(31)},
-		{"18446744073709551615", uint64(math.MaxUint64)},
+		{"9007199254740992", int64(1 << 53)},
+		{"-9007199254740992", int64(-1 << 53)},
+		{"{!!str 017: x}", map[string]any{"017": "x"}},
+		{"!!str", ""},
+		{"!!str null", "null"},
 		{"1e5", 100000.0},
 		{"+.5", 0.5},
 		{"1_000", "1_000"},
@@ -170,7 +178,7 @@ func TestSaveQuotesCoreSchemaLookalikes(t *testing.T) {
 	settings := map[string]any{
 		"nested": []any{"1e5", map[string]any{"08": "08"}, []any{}, map[string]any{}},
 		"<<":     "merge", "a\tb": "tab key", "a\nb": "newline key", "": "empty key", "1e5": "number key",
-		"float": 100000.0, "int": int64(-17), "uint": uint64(math.MaxUint64), "bool": true, "null": nil,
+		"float": 100000.0, "int": int64(-17), "big": int64(1 << 53), "bool": true, "null": nil,
 	}
 	for i, s := range []string{"1e5", "08", "017", "0o17", "0x1F", "True", "~", "NULL", "-.5", ".inf", "1_000", "yes", "a: b", "tab\there", "plain", "", " lead", "trail ", "#x", "- x", "Europe/Berlin"} {
 		settings[fmt.Sprint("k", i)] = s
@@ -189,11 +197,44 @@ func TestSaveQuotesCoreSchemaLookalikes(t *testing.T) {
 	}
 }
 
-func TestValidateRejectsNonStructSettings(t *testing.T) {
+func TestValidateMatchesMarshal(t *testing.T) {
+	for _, tt := range []struct {
+		value any
+		want  string
+	}{
+		{time.Now(), "unsupported settings value time.Time"},
+		{int32(3), "unsupported settings value int32"},
+		{float32(0.5), "unsupported settings value float32"},
+		{[]byte("hi"), "unsupported settings value []uint8"},
+		{int64(1<<53 + 1), "beyond ±2^53"},
+		{uint64(1<<53 + 1), "beyond ±2^53"},
+		{"\xff", "not valid UTF-8"},
+		{map[string]any{"\xff": 1}, "not valid UTF-8"},
+		{Settings{"n": 1}, ""},
+		{[]any{Settings{"n": int64(1)}, 2.5, nil, true}, ""},
+	} {
+		c := Default()
+		c.Panels = []Panel{{ID: "a", Plugin: "p", W: 1, H: 1, Settings: Settings{"v": tt.value}}}
+		err := c.Validate()
+		if tt.want == "" {
+			if err != nil {
+				t.Errorf("%#v: unexpected error: %v", tt.value, err)
+			} else if _, err := Marshal(c); err != nil {
+				t.Errorf("%#v: validates but does not save: %v", tt.value, err)
+			}
+			continue
+		}
+		if err == nil || !strings.Contains(err.Error(), "settings.v") || !strings.Contains(err.Error(), tt.want) {
+			t.Errorf("%#v: expected %q at settings.v, got %v", tt.value, tt.want, err)
+		}
+	}
+}
+
+func TestValidateRejectsNonUTF8ID(t *testing.T) {
 	c := Default()
-	c.Panels = []Panel{{ID: "a", Plugin: "p", W: 1, H: 1, Settings: map[string]any{"at": time.Now()}}}
-	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "settings.at") {
-		t.Fatalf("expected an error at settings.at, got %v", err)
+	c.Panels = []Panel{{ID: "\xff", Plugin: "p", W: 1, H: 1}}
+	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "not valid UTF-8") {
+		t.Fatalf("expected a UTF-8 error, got %v", err)
 	}
 }
 

@@ -11,6 +11,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/goccy/go-yaml/ast"
 	"github.com/goccy/go-yaml/token"
@@ -159,6 +160,26 @@ func keyText(key ast.Node) string {
 
 func line(n ast.Node) int { return n.GetToken().Position.Line }
 
+// checkKeyTag applies the value rule to keys: only !!str is allowed.
+func checkKeyTag(key ast.Node) error {
+	for n := key; n != nil; {
+		switch m := n.(type) {
+		case *ast.MappingKeyNode:
+			n = m.Value
+		case *ast.AnchorNode:
+			n = m.Value
+		case *ast.TagNode:
+			if tag := m.Start.Value; tag != "!!str" {
+				return fmt.Errorf("line %d: settings may not use the %s tag", line(m), tag)
+			}
+			n = m.Value
+		default:
+			return nil
+		}
+	}
+	return nil
+}
+
 // resolve converts a settings node to the Go value the core schema gives
 // it. It rejects tags other than !!str and numbers a double cannot carry.
 func resolve(n ast.Node) (any, error) {
@@ -174,10 +195,16 @@ func resolve(n ast.Node) (any, error) {
 		if !ok {
 			return nil, fmt.Errorf("line %d: !!str applies only to scalars", line(m))
 		}
+		if s.GetToken().Type == token.ImplicitNullType {
+			return "", nil // "a: !!str" with nothing after the tag
+		}
 		return scalarText(s), nil
 	case *ast.MappingNode, *ast.MappingValueNode:
 		out := make(map[string]any)
 		for _, pair := range pairs(m) {
+			if err := checkKeyTag(pair.Key); err != nil {
+				return nil, err
+			}
 			if _, ok := unwrap(pair.Key).(ast.ScalarNode); !ok {
 				return nil, fmt.Errorf("line %d: settings keys must be scalars", line(pair))
 			}
@@ -235,11 +262,11 @@ func resolvePlain(s string, line int) (any, error) {
 	case coreFalse.MatchString(s):
 		return false, nil
 	case coreInt.MatchString(s):
-		return parseInt(s, 10, line)
+		return parseInt(s, s, 10, line)
 	case coreOct.MatchString(s):
-		return parseInt(s[2:], 8, line)
+		return parseInt(s, s[2:], 8, line)
 	case coreHex.MatchString(s):
-		return parseInt(s[2:], 16, line)
+		return parseInt(s, s[2:], 16, line)
 	case coreFloat.MatchString(s):
 		f, err := strconv.ParseFloat(s, 64)
 		if math.IsInf(f, 0) {
@@ -272,6 +299,8 @@ func writeMap(b *strings.Builder, m map[string]any, indent int) error {
 
 func writeValue(b *strings.Builder, v any, indent int) error {
 	switch v := v.(type) {
+	case Settings:
+		return writeValue(b, map[string]any(v), indent)
 	case map[string]any:
 		if len(v) == 0 {
 			b.WriteString(" {}\n")
@@ -303,6 +332,8 @@ func writeValue(b *strings.Builder, v any, indent int) error {
 
 // scalar writes a settings scalar as text the core schema reads back as
 // the same value and type.
+// It is also the check Validate applies, so whatever validates can be
+// saved.
 func scalar(v any) (string, error) {
 	switch v := v.(type) {
 	case nil:
@@ -310,12 +341,18 @@ func scalar(v any) (string, error) {
 	case bool:
 		return strconv.FormatBool(v), nil
 	case string:
+		if !utf8.ValidString(v) {
+			return "", fmt.Errorf("%q is not valid UTF-8", v)
+		}
 		return scalarString(v), nil
 	case int:
-		return strconv.Itoa(v), nil
+		return exactInt(int64(v))
 	case int64:
-		return strconv.FormatInt(v, 10), nil
+		return exactInt(v)
 	case uint64:
+		if v > maxExact {
+			return "", errInexact(strconv.FormatUint(v, 10))
+		}
 		return strconv.FormatUint(v, 10), nil
 	case float64:
 		if math.IsInf(v, 0) || math.IsNaN(v) {
@@ -337,12 +374,25 @@ func scalarString(s string) string {
 	return strconv.Quote(s)
 }
 
-func parseInt(s string, base, line int) (any, error) {
-	if i, err := strconv.ParseInt(s, base, 64); err == nil {
-		return i, nil
+// maxExact is the largest integer magnitude a double, and so a Struct
+// number, carries exactly.
+const maxExact = 1 << 53
+
+func errInexact(text string) error {
+	return fmt.Errorf("%s is beyond ±2^53, which a plugin receives inexactly; quote it to pass a string", text)
+}
+
+func exactInt(v int64) (string, error) {
+	if v > maxExact || v < -maxExact {
+		return "", errInexact(strconv.FormatInt(v, 10))
 	}
-	if u, err := strconv.ParseUint(strings.TrimPrefix(s, "+"), base, 64); err == nil {
-		return u, nil
+	return strconv.FormatInt(v, 10), nil
+}
+
+func parseInt(text, digits string, base, line int) (any, error) {
+	i, err := strconv.ParseInt(digits, base, 64)
+	if err != nil || i > maxExact || i < -maxExact {
+		return nil, fmt.Errorf("line %d: %w", line, errInexact(text))
 	}
-	return nil, fmt.Errorf("line %d: %s is out of range for 64 bits", line, s)
+	return i, nil
 }
