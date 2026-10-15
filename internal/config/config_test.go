@@ -80,6 +80,9 @@ func TestValidate(t *testing.T) {
 	panel := func(id string, x, y, w, h int) Panel {
 		return Panel{ID: id, Plugin: "p", X: x, Y: y, W: w, H: h}
 	}
+	plugin := func(name string) Panel {
+		return Panel{ID: "a", Plugin: name, W: 1, H: 1}
+	}
 	disabled := panel("b", 0, 0, 1, 1)
 	disabled.Enabled = new(bool)
 
@@ -91,8 +94,15 @@ func TestValidate(t *testing.T) {
 		{"valid", []Panel{panel("a", 0, 0, 2, 1), panel("b", 2, 0, 2, 2)}, ""},
 		{"duplicate id", []Panel{panel("a", 0, 0, 1, 1), panel("a", 1, 0, 1, 1)}, "not unique"},
 		{"missing id", []Panel{panel("", 0, 0, 1, 1)}, "id is required"},
-		{"plugin path", []Panel{{ID: "a", Plugin: "../../bin/sh", W: 1, H: 1}}, "lowercase letters"},
-		{"plugin name with hyphen", []Panel{{ID: "a", Plugin: "system-stats", W: 1, H: 1}}, ""},
+		{"plugin path", []Panel{plugin("../../bin/sh")}, "lowercase letters"},
+		{"plugin name with hyphen", []Panel{plugin("system-stats")}, ""},
+		{"plugin name of 64 characters", []Panel{plugin(strings.Repeat("a", 64))}, ""},
+		{"plugin name of 65 characters", []Panel{plugin(strings.Repeat("a", 65))}, "at most 64"},
+		{"plugin name with uppercase", []Panel{plugin("Clock")}, "lowercase letters"},
+		{"plugin name with underscore", []Panel{plugin("system_stats")}, "lowercase letters"},
+		{"plugin name with leading hyphen", []Panel{plugin("-clock")}, "lowercase letters"},
+		{"plugin name reserved on Windows", []Panel{plugin("com1")}, "reserved device name"},
+		{"plugin name containing a reserved name", []Panel{plugin("console")}, ""},
 		{"zero span", []Panel{panel("a", 0, 0, 0, 1)}, "at least 1"},
 		{"negative position", []Panel{panel("a", -1, 0, 1, 1)}, "must not be negative"},
 		{"past last column", []Panel{panel("a", 3, 0, 2, 1)}, "4 columns"},

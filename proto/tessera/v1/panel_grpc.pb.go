@@ -36,7 +36,8 @@ const (
 // plugin process per panel in the config and calls, in order: Describe,
 // Configure, then Watch (or Render, if Watch is unimplemented). It calls
 // Configure again whenever the panel's settings or size change, and
-// HandleEvent when the user interacts with the panel.
+// HandleEvent when the user interacts with the panel. These later calls
+// run concurrently with the open Watch, so a plugin guards shared state.
 type PanelServiceClient interface {
 	// Describe is the handshake: the plugin names itself and picks the view
 	// schema version it will speak.
@@ -46,10 +47,12 @@ type PanelServiceClient interface {
 	Configure(ctx context.Context, in *ConfigureRequest, opts ...grpc.CallOption) (*ConfigureResponse, error)
 	// Watch streams a new view whenever the panel's content changes,
 	// starting with the current view, and a heartbeat when nothing changed
-	// within WatchRequest.heartbeat_interval. The host holds at most one
-	// stream per plugin and cancels it before opening another, so a plugin
-	// may assume one Watch at a time. A plugin that cannot push returns
-	// UNIMPLEMENTED, and the host polls Render instead.
+	// within WatchRequest.heartbeat_interval. The host reads at most one
+	// stream per plugin and cancels it before opening another, but the
+	// cancelled handler may still be returning when the next one starts,
+	// so a plugin keeps per-stream state local to the handler. A plugin
+	// that cannot push returns UNIMPLEMENTED, and the host polls Render
+	// instead.
 	Watch(ctx context.Context, in *WatchRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[WatchResponse], error)
 	// Render returns the current view. It is the polling fallback for
 	// plugins that do not implement Watch.
@@ -136,7 +139,8 @@ func (c *panelServiceClient) HandleEvent(ctx context.Context, in *HandleEventReq
 // plugin process per panel in the config and calls, in order: Describe,
 // Configure, then Watch (or Render, if Watch is unimplemented). It calls
 // Configure again whenever the panel's settings or size change, and
-// HandleEvent when the user interacts with the panel.
+// HandleEvent when the user interacts with the panel. These later calls
+// run concurrently with the open Watch, so a plugin guards shared state.
 type PanelServiceServer interface {
 	// Describe is the handshake: the plugin names itself and picks the view
 	// schema version it will speak.
@@ -146,10 +150,12 @@ type PanelServiceServer interface {
 	Configure(context.Context, *ConfigureRequest) (*ConfigureResponse, error)
 	// Watch streams a new view whenever the panel's content changes,
 	// starting with the current view, and a heartbeat when nothing changed
-	// within WatchRequest.heartbeat_interval. The host holds at most one
-	// stream per plugin and cancels it before opening another, so a plugin
-	// may assume one Watch at a time. A plugin that cannot push returns
-	// UNIMPLEMENTED, and the host polls Render instead.
+	// within WatchRequest.heartbeat_interval. The host reads at most one
+	// stream per plugin and cancels it before opening another, but the
+	// cancelled handler may still be returning when the next one starts,
+	// so a plugin keeps per-stream state local to the handler. A plugin
+	// that cannot push returns UNIMPLEMENTED, and the host polls Render
+	// instead.
 	Watch(*WatchRequest, grpc.ServerStreamingServer[WatchResponse]) error
 	// Render returns the current view. It is the polling fallback for
 	// plugins that do not implement Watch.

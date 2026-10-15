@@ -24,7 +24,9 @@ languages can follow its documented handshake:
 1. The host starts the plugin with `TESSERA_PLUGIN_MAGIC_COOKIE` set to
    the value in `proto/tessera/v1/version.go`,
    `PLUGIN_PROTOCOL_VERSIONS` listing the protocol versions it supports,
-   and `PLUGIN_CLIENT_CERT` holding a fresh PEM certificate. A plugin
+   and `PLUGIN_CLIENT_CERT` holding a fresh PEM certificate. On Windows
+   it also sets `PLUGIN_MIN_PORT` and `PLUGIN_MAX_PORT`, the range the
+   plugin's TCP port must fall in. A plugin
    started without the cookie was run by hand: it prints a short message
    and exits.
 2. The plugin listens on a unix socket (on Windows, TCP on 127.0.0.1),
@@ -84,13 +86,18 @@ host                                    plugin
 - **Watch** is the normal path: the plugin pushes a complete view each
   time its content changes, starting with the current one. When nothing
   changes for `heartbeat_interval`, it sends a `WatchResponse` without a
-  view, so a silent stream means a hung plugin. The host holds one stream
-  per plugin and cancels it before opening another.
+  view, so a silent stream means a hung plugin. The host reads one
+  stream per plugin and cancels it before opening another, but the
+  cancelled handler may still be returning when the next starts, so keep
+  per-stream state inside the handler.
 - **Render** is the fallback for plugins that cannot push. If Watch
   returns `UNIMPLEMENTED`, the host polls Render, waiting
   `RenderResponse.poll_interval` (or its default) between calls.
 - **HandleEvent** delivers clicks and scrolls. A polled plugin is rendered
   again right after the event.
+
+Configure and HandleEvent run concurrently with the open Watch, so a
+plugin guards the state they share.
 
 Every view is complete: it replaces the previous one rather than patching
 it. Views are small, and this keeps plugins stateless about what the host
@@ -105,7 +112,8 @@ A plugin's `DescribeResponse.name` must equal its executable's file name
 without extension, which is how the config's `plugin:` field finds it.
 Names are 1 to 64 lowercase letters, digits, and hyphens, starting with a
 letter or digit, so they can never name a path outside the plugins
-directory.
+directory. Names Windows reserves for devices (`con`, `prn`, `aux`,
+`nul`, `com1` to `com9`, `lpt1` to `lpt9`) are not allowed.
 
 ## Settings
 

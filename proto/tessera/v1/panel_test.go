@@ -5,6 +5,7 @@ package tesserav1_test
 import (
 	"context"
 	"net"
+	"sync"
 	"testing"
 	"time"
 
@@ -24,7 +25,9 @@ import (
 type counter struct {
 	tesserav1.UnimplementedPanelServiceServer
 	clicks chan struct{}
-	label  string
+
+	mu    sync.Mutex
+	label string
 }
 
 func (c *counter) Describe(_ context.Context, req *tesserav1.DescribeRequest) (*tesserav1.DescribeResponse, error) {
@@ -42,11 +45,15 @@ func (c *counter) Configure(_ context.Context, req *tesserav1.ConfigureRequest) 
 	if !ok {
 		return nil, status.Error(codes.InvalidArgument, "settings.label is required")
 	}
+	c.mu.Lock()
 	c.label = label.GetStringValue()
+	c.mu.Unlock()
 	return &tesserav1.ConfigureResponse{}, nil
 }
 
 func (c *counter) view(n int) *tesserav1.View {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	return &tesserav1.View{
 		Title: "Counter",
 		Body: &tesserav1.Widget{Kind: &tesserav1.Widget_Stat{Stat: &tesserav1.Stat{

@@ -13,6 +13,10 @@ import (
 // file names in the plugins directory, so it admits no path separators.
 var pluginName = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,63}$`)
 
+// windowsDevice matches the names Windows reserves for devices, which
+// cannot be executable names there.
+var windowsDevice = regexp.MustCompile(`^(con|prn|aux|nul|com[1-9]|lpt[1-9])$`)
+
 // Validate checks the config's internal consistency. Plugin settings are
 // not checked here: that needs each plugin's config schema from its
 // handshake.
@@ -47,6 +51,8 @@ func (c Config) Validate() error {
 			errs = append(errs, fmt.Errorf("%s: plugin is required", name))
 		case !pluginName.MatchString(p.Plugin):
 			errs = append(errs, fmt.Errorf("%s: plugin %q must be lowercase letters, digits, and hyphens, starting with a letter or digit, at most 64 characters", name, p.Plugin))
+		case windowsDevice.MatchString(p.Plugin):
+			errs = append(errs, fmt.Errorf("%s: plugin %q is a reserved device name on Windows", name, p.Plugin))
 		}
 		if p.W < 1 || p.H < 1 {
 			errs = append(errs, fmt.Errorf("%s: w and h must be at least 1, got %dx%d", name, p.W, p.H))

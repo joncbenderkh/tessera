@@ -423,6 +423,8 @@ type Widget struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Optional id, unique within the view. Scroll events name the widget
 	// by it, and the host uses it to keep scroll position across updates.
+	// If several widgets share an id, the first in depth-first order keeps
+	// it and the others are treated as having none.
 	Id string `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
 	// When true, the host draws a loading placeholder in the widget's shape
 	// instead of its content.
@@ -785,10 +787,12 @@ type Gauge struct {
 	// The value as shown in the middle of the arc, already formatted.
 	// Empty means the host formats value itself.
 	Display string `protobuf:"bytes,6,opt,name=display,proto3" json:"display,omitempty"`
-	// From this value up, the arc uses the warning color.
+	// From this value up, the arc uses the warning color. NaN counts as
+	// unset; a threshold outside [min, max] draws no tick.
 	WarnAt *float64 `protobuf:"fixed64,7,opt,name=warn_at,json=warnAt,proto3,oneof" json:"warn_at,omitempty"`
 	// From this value up, the arc uses the error color. Takes precedence
-	// over warn_at.
+	// over warn_at. NaN counts as unset; a threshold outside [min, max]
+	// draws no tick.
 	ErrorAt *float64 `protobuf:"fixed64,8,opt,name=error_at,json=errorAt,proto3,oneof" json:"error_at,omitempty"`
 	// Context line below the gauge, such as "320 GB free".
 	Caption       string `protobuf:"bytes,9,opt,name=caption,proto3" json:"caption,omitempty"`
@@ -894,12 +898,17 @@ type Sparkline struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Label above the chart.
 	Label string `protobuf:"bytes,1,opt,name=label,proto3" json:"label,omitempty"`
-	// The samples, oldest first, evenly spaced in time. Empty renders an
-	// empty-state message. A NaN or infinite sample is a gap in the line.
+	// The samples, oldest first, evenly spaced in time. A NaN or infinite
+	// sample is a gap in the line. Samples outside [min, max] are clamped
+	// to it. No finite samples renders an empty-state message; a single
+	// one is drawn as a dot.
 	Samples []float64 `protobuf:"fixed64,2,rep,packed,name=samples,proto3" json:"samples,omitempty"`
-	// Bottom of the y axis. Unset means the smallest sample.
+	// Bottom of the y axis. Unset, NaN, or infinite means the smallest
+	// finite sample.
 	Min *float64 `protobuf:"fixed64,3,opt,name=min,proto3,oneof" json:"min,omitempty"`
-	// Top of the y axis. Unset means the largest sample.
+	// Top of the y axis. Unset, NaN, or infinite means the largest finite
+	// sample. If the range is empty (max not greater than min, as when all
+	// samples are equal), the line is drawn at mid-height.
 	Max *float64 `protobuf:"fixed64,4,opt,name=max,proto3,oneof" json:"max,omitempty"`
 	// Unit of the samples, for accessibility text.
 	Unit string `protobuf:"bytes,5,opt,name=unit,proto3" json:"unit,omitempty"`

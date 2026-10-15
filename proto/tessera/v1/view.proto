@@ -20,6 +20,8 @@ message View {
 message Widget {
   // Optional id, unique within the view. Scroll events name the widget
   // by it, and the host uses it to keep scroll position across updates.
+  // If several widgets share an id, the first in depth-first order keeps
+  // it and the others are treated as having none.
   string id = 1;
   // When true, the host draws a loading placeholder in the widget's shape
   // instead of its content.
@@ -116,10 +118,12 @@ message Gauge {
   // The value as shown in the middle of the arc, already formatted.
   // Empty means the host formats value itself.
   string display = 6;
-  // From this value up, the arc uses the warning color.
+  // From this value up, the arc uses the warning color. NaN counts as
+  // unset; a threshold outside [min, max] draws no tick.
   optional double warn_at = 7;
   // From this value up, the arc uses the error color. Takes precedence
-  // over warn_at.
+  // over warn_at. NaN counts as unset; a threshold outside [min, max]
+  // draws no tick.
   optional double error_at = 8;
   // Context line below the gauge, such as "320 GB free".
   string caption = 9;
@@ -129,12 +133,17 @@ message Gauge {
 message Sparkline {
   // Label above the chart.
   string label = 1;
-  // The samples, oldest first, evenly spaced in time. Empty renders an
-  // empty-state message. A NaN or infinite sample is a gap in the line.
+  // The samples, oldest first, evenly spaced in time. A NaN or infinite
+  // sample is a gap in the line. Samples outside [min, max] are clamped
+  // to it. No finite samples renders an empty-state message; a single
+  // one is drawn as a dot.
   repeated double samples = 2;
-  // Bottom of the y axis. Unset means the smallest sample.
+  // Bottom of the y axis. Unset, NaN, or infinite means the smallest
+  // finite sample.
   optional double min = 3;
-  // Top of the y axis. Unset means the largest sample.
+  // Top of the y axis. Unset, NaN, or infinite means the largest finite
+  // sample. If the range is empty (max not greater than min, as when all
+  // samples are equal), the line is drawn at mid-height.
   optional double max = 4;
   // Unit of the samples, for accessibility text.
   string unit = 5;
