@@ -102,6 +102,7 @@ func TestValidate(t *testing.T) {
 		{"plugin name with underscore", []Panel{plugin("system_stats")}, "lowercase letters"},
 		{"plugin name with leading hyphen", []Panel{plugin("-clock")}, "lowercase letters"},
 		{"plugin name reserved on Windows", []Panel{plugin("com1")}, "reserved device name"},
+		{"plugin name lpt0 reserved on Windows", []Panel{plugin("lpt0")}, "reserved device name"},
 		{"plugin name containing a reserved name", []Panel{plugin("console")}, ""},
 		{"zero span", []Panel{panel("a", 0, 0, 0, 1)}, "at least 1"},
 		{"negative position", []Panel{panel("a", -1, 0, 1, 1)}, "must not be negative"},

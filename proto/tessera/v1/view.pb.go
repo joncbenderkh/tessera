@@ -788,11 +788,13 @@ type Gauge struct {
 	// Empty means the host formats value itself.
 	Display string `protobuf:"bytes,6,opt,name=display,proto3" json:"display,omitempty"`
 	// From this value up, the arc uses the warning color. NaN counts as
-	// unset; a threshold outside [min, max] draws no tick.
+	// unset. A threshold outside [min, max] draws no tick but still colors
+	// the arc: below min, always; above max, never.
 	WarnAt *float64 `protobuf:"fixed64,7,opt,name=warn_at,json=warnAt,proto3,oneof" json:"warn_at,omitempty"`
 	// From this value up, the arc uses the error color. Takes precedence
-	// over warn_at. NaN counts as unset; a threshold outside [min, max]
-	// draws no tick.
+	// over warn_at. NaN counts as unset. A threshold outside [min, max]
+	// draws no tick but still colors the arc: below min, always; above
+	// max, never.
 	ErrorAt *float64 `protobuf:"fixed64,8,opt,name=error_at,json=errorAt,proto3,oneof" json:"error_at,omitempty"`
 	// Context line below the gauge, such as "320 GB free".
 	Caption       string `protobuf:"bytes,9,opt,name=caption,proto3" json:"caption,omitempty"`

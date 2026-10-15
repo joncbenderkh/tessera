@@ -15,7 +15,7 @@ var pluginName = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,63}$`)
 
 // windowsDevice matches the names Windows reserves for devices, which
 // cannot be executable names there.
-var windowsDevice = regexp.MustCompile(`^(con|prn|aux|nul|com[1-9]|lpt[1-9])$`)
+var windowsDevice = regexp.MustCompile(`^(con|prn|aux|nul|com[0-9]|lpt[0-9])$`)
 
 // Validate checks the config's internal consistency. Plugin settings are
 // not checked here: that needs each plugin's config schema from its

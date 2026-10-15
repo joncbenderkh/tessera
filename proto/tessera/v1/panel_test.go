@@ -92,7 +92,10 @@ func (c *counter) Watch(req *tesserav1.WatchRequest, stream grpc.ServerStreaming
 
 func (c *counter) HandleEvent(_ context.Context, req *tesserav1.HandleEventRequest) (*tesserav1.HandleEventResponse, error) {
 	if req.GetActivate().GetActionId() == "increment" {
-		c.clicks <- struct{}{}
+		select {
+		case c.clicks <- struct{}{}:
+		default: // A click is already pending; never block the event call.
+		}
 	}
 	return &tesserav1.HandleEventResponse{}, nil
 }
@@ -118,7 +121,7 @@ func dial(t *testing.T, srv tesserav1.PanelServiceServer) tesserav1.PanelService
 
 func TestPanelLifecycle(t *testing.T) {
 	ctx := t.Context()
-	client := dial(t, &counter{clicks: make(chan struct{})})
+	client := dial(t, &counter{clicks: make(chan struct{}, 1)})
 
 	desc, err := client.Describe(ctx, &tesserav1.DescribeRequest{HostVersion: "0.1.0", ViewVersions: []uint32{tesserav1.ViewVersion}})
 	if err != nil {
@@ -170,7 +173,7 @@ func TestPanelLifecycle(t *testing.T) {
 }
 
 func TestWatchHeartbeat(t *testing.T) {
-	client := dial(t, &counter{clicks: make(chan struct{})})
+	client := dial(t, &counter{clicks: make(chan struct{}, 1)})
 	stream, err := client.Watch(t.Context(), &tesserav1.WatchRequest{HeartbeatInterval: durationpb.New(time.Millisecond)})
 	if err != nil {
 		t.Fatal(err)

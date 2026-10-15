@@ -119,11 +119,13 @@ message Gauge {
   // Empty means the host formats value itself.
   string display = 6;
   // From this value up, the arc uses the warning color. NaN counts as
-  // unset; a threshold outside [min, max] draws no tick.
+  // unset. A threshold outside [min, max] draws no tick but still colors
+  // the arc: below min, always; above max, never.
   optional double warn_at = 7;
   // From this value up, the arc uses the error color. Takes precedence
-  // over warn_at. NaN counts as unset; a threshold outside [min, max]
-  // draws no tick.
+  // over warn_at. NaN counts as unset. A threshold outside [min, max]
+  // draws no tick but still colors the arc: below min, always; above
+  // max, never.
   optional double error_at = 8;
   // Context line below the gauge, such as "320 GB free".
   string caption = 9;

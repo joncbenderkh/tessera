@@ -37,7 +37,8 @@ const (
 // Configure, then Watch (or Render, if Watch is unimplemented). It calls
 // Configure again whenever the panel's settings or size change, and
 // HandleEvent when the user interacts with the panel. These later calls
-// run concurrently with the open Watch, so a plugin guards shared state.
+// run concurrently with the open Watch, so a plugin guards shared state,
+// but the host makes them one at a time and in order.
 type PanelServiceClient interface {
 	// Describe is the handshake: the plugin names itself and picks the view
 	// schema version it will speak.
@@ -50,9 +51,10 @@ type PanelServiceClient interface {
 	// within WatchRequest.heartbeat_interval. The host reads at most one
 	// stream per plugin and cancels it before opening another, but the
 	// cancelled handler may still be returning when the next one starts,
-	// so a plugin keeps per-stream state local to the handler. A plugin
-	// that cannot push returns UNIMPLEMENTED, and the host polls Render
-	// instead.
+	// so a plugin keeps per-stream state local to the handler. A stream
+	// that ends without the host cancelling it, with OK or any error
+	// other than UNIMPLEMENTED, is a protocol failure. A plugin that
+	// cannot push returns UNIMPLEMENTED, and the host polls Render instead.
 	Watch(ctx context.Context, in *WatchRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[WatchResponse], error)
 	// Render returns the current view. It is the polling fallback for
 	// plugins that do not implement Watch.
@@ -140,7 +142,8 @@ func (c *panelServiceClient) HandleEvent(ctx context.Context, in *HandleEventReq
 // Configure, then Watch (or Render, if Watch is unimplemented). It calls
 // Configure again whenever the panel's settings or size change, and
 // HandleEvent when the user interacts with the panel. These later calls
-// run concurrently with the open Watch, so a plugin guards shared state.
+// run concurrently with the open Watch, so a plugin guards shared state,
+// but the host makes them one at a time and in order.
 type PanelServiceServer interface {
 	// Describe is the handshake: the plugin names itself and picks the view
 	// schema version it will speak.
@@ -153,9 +156,10 @@ type PanelServiceServer interface {
 	// within WatchRequest.heartbeat_interval. The host reads at most one
 	// stream per plugin and cancels it before opening another, but the
 	// cancelled handler may still be returning when the next one starts,
-	// so a plugin keeps per-stream state local to the handler. A plugin
-	// that cannot push returns UNIMPLEMENTED, and the host polls Render
-	// instead.
+	// so a plugin keeps per-stream state local to the handler. A stream
+	// that ends without the host cancelling it, with OK or any error
+	// other than UNIMPLEMENTED, is a protocol failure. A plugin that
+	// cannot push returns UNIMPLEMENTED, and the host polls Render instead.
 	Watch(*WatchRequest, grpc.ServerStreamingServer[WatchResponse]) error
 	// Render returns the current view. It is the polling fallback for
 	// plugins that do not implement Watch.

@@ -24,17 +24,21 @@ languages can follow its documented handshake:
 1. The host starts the plugin with `TESSERA_PLUGIN_MAGIC_COOKIE` set to
    the value in `proto/tessera/v1/version.go`,
    `PLUGIN_PROTOCOL_VERSIONS` listing the protocol versions it supports,
-   and `PLUGIN_CLIENT_CERT` holding a fresh PEM certificate. On Windows
-   it also sets `PLUGIN_MIN_PORT` and `PLUGIN_MAX_PORT`, the range the
-   plugin's TCP port must fall in. A plugin
-   started without the cookie was run by hand: it prints a short message
-   and exits.
+   and `PLUGIN_CLIENT_CERT` holding a fresh PEM certificate. It also
+   sets `PLUGIN_MIN_PORT` and `PLUGIN_MAX_PORT`, which a plugin uses only
+   on Windows, as the range its TCP port must fall in. A plugin started
+   without the cookie was run by hand: it prints a short message and
+   exits.
 2. The plugin listens on a unix socket (on Windows, TCP on 127.0.0.1),
    generates its own certificate, and prints one line to stdout:
    `1|<protocol version>|unix|<path>|grpc|<certificate>`, where the
    certificate is its DER encoding in unpadded standard base64.
 3. The host connects over mutual TLS, each side trusting only the other's
-   certificate, and makes `PanelService` calls. As go-plugin requires,
+   certificate, and makes `PanelService` calls. The host verifies the
+   plugin's certificate for the name `localhost`, so it needs that DNS
+   name and the server and client authentication key usages; the plugin
+   requires a client certificate and verifies it against
+   `PLUGIN_CLIENT_CERT`. As go-plugin requires,
    the plugin also serves the standard gRPC health service
    (`grpc.health.v1.Health`) and reports the service name `plugin` as
    serving. The plugin's stderr goes to the host's log for that panel.
@@ -97,7 +101,10 @@ host                                    plugin
   again right after the event.
 
 Configure and HandleEvent run concurrently with the open Watch, so a
-plugin guards the state they share.
+plugin guards the state they share. The host makes these unary calls one
+at a time and in order, so events never overtake each other. A Watch
+stream that ends without the host cancelling it, cleanly or with an
+error other than `UNIMPLEMENTED`, is a protocol failure.
 
 Every view is complete: it replaces the previous one rather than patching
 it. Views are small, and this keeps plugins stateless about what the host
@@ -108,12 +115,14 @@ stays silent for twice the heartbeat interval as hung, and restarts a
 plugin that crashes, hangs, or breaks the protocol, with backoff, showing
 an error tile meanwhile (#13).
 
-A plugin's `DescribeResponse.name` must equal its executable's file name
-without extension, which is how the config's `plugin:` field finds it.
+A plugin's `DescribeResponse.name` must equal its executable's file name,
+which is how the config's `plugin:` field finds it: the name itself on
+Unix, the name plus `.exe` on Windows. Other files in the plugins
+directory, such as `clock.py` next to `clock`, are ignored.
 Names are 1 to 64 lowercase letters, digits, and hyphens, starting with a
 letter or digit, so they can never name a path outside the plugins
 directory. Names Windows reserves for devices (`con`, `prn`, `aux`,
-`nul`, `com1` to `com9`, `lpt1` to `lpt9`) are not allowed.
+`nul`, `com0` to `com9`, `lpt0` to `lpt9`) are not allowed.
 
 ## Settings
 
