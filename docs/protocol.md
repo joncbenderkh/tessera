@@ -67,8 +67,17 @@ Two versions are negotiated, and they change independently:
 Within a version, changes are additive only: new fields and enum values
 may appear, nothing is renamed, renumbered, or repurposed. Hosts render
 unknown enum values as their default and ignore unknown fields. Anything
-else needs a new version. `buf breaking` (`FILE` rules) is configured in
-`proto/buf.yaml` for checking this; CI does not run it yet.
+else needs a new version. CI checks this with `buf breaking` (`FILE`
+rules) on every pull request and every push to `main`, against the
+previous `main`. The rules and the module are pinned in the workflow
+for both sides of the comparison, so editing `proto/buf.yaml` does not
+relax them. Pull requests need not be up to date with `main` to merge,
+so two that pass separately are checked together only by the push to
+`main` after the second merges. A failed check on `main` must be reverted
+or fixed before the next merge, since later checks compare against it
+and would accept the break.
+An intended break is a new package version (`tessera.v2`); a released
+version is never changed incompatibly.
 
 Since a field's type cannot change, a future view schema version is a new
 package (`tessera.v2.View`, say) carried in a new field of the `content`
