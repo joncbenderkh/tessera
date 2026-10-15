@@ -5,12 +5,25 @@ package config
 import (
 	"errors"
 	"fmt"
+	"maps"
 	"math"
+	"regexp"
+	"slices"
+	"unicode/utf8"
 )
 
+// pluginName is the grammar of plugin names, which are also executable
+// file names in the plugins directory, so it admits no path separators.
+var pluginName = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,63}$`)
+
+// windowsDevice matches the names Windows reserves for devices, which
+// cannot be executable names there.
+var windowsDevice = regexp.MustCompile(`^(con|prn|aux|nul|com[0-9]|lpt[0-9])$`)
+
 // Validate checks the config's internal consistency. Plugin settings are
-// not checked here: that needs each plugin's config schema from its
-// handshake.
+// checked only for values Marshal cannot write or a plugin would not
+// receive exactly; checking them against each plugin's config schema
+// needs its handshake.
 func (c Config) Validate() error {
 	var errs []error
 	if c.Version != SchemaVersion {
@@ -35,10 +48,20 @@ func (c Config) Validate() error {
 			errs = append(errs, fmt.Errorf("%s: id is required", name))
 		case seen[p.ID]:
 			errs = append(errs, fmt.Errorf("%s: id is not unique", name))
+		case !utf8.ValidString(p.ID):
+			errs = append(errs, fmt.Errorf("%s: id is not valid UTF-8", name))
 		}
 		seen[p.ID] = true
-		if p.Plugin == "" {
+		switch {
+		case p.Plugin == "":
 			errs = append(errs, fmt.Errorf("%s: plugin is required", name))
+		case !pluginName.MatchString(p.Plugin):
+			errs = append(errs, fmt.Errorf("%s: plugin %q must be lowercase letters, digits, and hyphens, starting with a letter or digit, at most 64 characters", name, p.Plugin))
+		case windowsDevice.MatchString(p.Plugin):
+			errs = append(errs, fmt.Errorf("%s: plugin %q is a reserved device name on Windows", name, p.Plugin))
+		}
+		if err := checkSettings(p.Settings, "settings"); err != nil {
+			errs = append(errs, fmt.Errorf("%s: %w", name, err))
 		}
 		if p.W < 1 || p.H < 1 {
 			errs = append(errs, fmt.Errorf("%s: w and h must be at least 1, got %dx%d", name, p.W, p.H))
@@ -66,6 +89,35 @@ func (c Config) Validate() error {
 		placed = append(placed, placement{p, name})
 	}
 	return errors.Join(errs...)
+}
+
+// checkSettings reports the first value in v, at path, that Marshal
+// cannot write or a plugin would not receive exactly.
+func checkSettings(v any, path string) error {
+	switch v := v.(type) {
+	case Settings:
+		return checkSettings(map[string]any(v), path)
+	case map[string]any:
+		for _, k := range slices.Sorted(maps.Keys(v)) {
+			if !utf8.ValidString(k) {
+				return fmt.Errorf("%s: key %q is not valid UTF-8", path, k)
+			}
+			if err := checkSettings(v[k], path+"."+k); err != nil {
+				return err
+			}
+		}
+	case []any:
+		for i, e := range v {
+			if err := checkSettings(e, fmt.Sprintf("%s[%d]", path, i)); err != nil {
+				return err
+			}
+		}
+	default:
+		if _, err := scalar(v); err != nil {
+			return fmt.Errorf("%s: %w", path, err)
+		}
+	}
+	return nil
 }
 
 type placement struct {

@@ -53,15 +53,18 @@ dialogs). Edit mode must be able to re-enable any disabled panel.
     (`$XDG_DATA_HOME/tessera/plugins`), and each declares its name, version,
     protocol version, and config schema in the handshake.
 - **Config:** one YAML file, `tessera/config.yaml` in the user config
-  directory (`$XDG_CONFIG_HOME`, or `~/.config`, on Linux), holds the grid,
-  panel placement and enabled state, and per-panel settings. YAML was the
-  owner's choice over TOML and JSON: compact for a list of panels with
-  nested settings, and it allows comments. It is read and written with
-  `github.com/goccy/go-yaml` (YAML 1.2, so `no` stays a string), decoded
-  strictly so unknown fields are errors, saved atomically (temp file and
-  rename), and watched for changes through `fsnotify`. Rewrites by the
-  host drop comments. The schema is versioned (`version: 1`); see
-  `docs/config.md`.
+  directory (`$XDG_CONFIG_HOME`, or `~/.config`, on Linux), holds the
+  grid, panel placement and enabled state, and per-panel settings. YAML
+  was the owner's choice over TOML and JSON: compact for a list of panels
+  with nested settings, and it allows comments. It is parsed with
+  `github.com/goccy/go-yaml` and decoded strictly so unknown fields are
+  errors. goccy resolves some plain scalars by YAML 1.1 rules (`017` as
+  octal, `<<` as a merge), so panel settings are taken out of its syntax
+  tree and resolved by YAML 1.2's core schema in
+  `internal/config/settings.go`, and the host writes the file with its own
+  emitter. It is saved atomically (temp file and rename) and watched for
+  changes through `fsnotify`. Rewrites by the host drop comments. The
+  schema is versioned (`version: 1`); see `docs/config.md`.
 - **Module path:** `github.com/joncbenderkh/tessera`.
 
 ## Layout
