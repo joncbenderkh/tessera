@@ -591,10 +591,6 @@ func TestList(t *testing.T) {
 	if err := os.Mkdir(filepath.Join(dir, "sub"+exeSuffix()), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	got, err := List(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
 	want := []string{"clock", "weather"}
 	if exeSuffix() != "" {
 		// No executable bit, and the suffix in any case.
@@ -602,6 +598,10 @@ func TestList(t *testing.T) {
 			t.Fatal(err)
 		}
 		want = []string{"clock", "notes", "shout", "weather"}
+	}
+	got, err := List(dir)
+	if err != nil {
+		t.Fatal(err)
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("got %v, want %v", got, want)
