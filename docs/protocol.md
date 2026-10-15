@@ -73,7 +73,9 @@ previous `main`. The rules and the module are pinned in the workflow
 for both sides of the comparison, so editing `proto/buf.yaml` does not
 relax them. Pull requests need not be up to date with `main` to merge,
 so two that pass separately are checked together only by the push to
-`main` after the second merges.
+`main` after the second merges. A failed check on `main` must be reverted
+or fixed before the next merge, since later checks compare against it
+and would accept the break.
 An intended break is a new package version (`tessera.v2`); a released
 version is never changed incompatibly.
 
