@@ -7,8 +7,9 @@ different file. On first run, tessera writes a default config there,
 readable only by you (mode 0600). Later saves keep the file's existing
 permissions.
 
-tessera reloads the file when it changes. Edit layout rewrites it, which
-drops any comments.
+tessera reads the file at startup; restart it after editing. Reloading
+on change and Edit layout, which will rewrite the file and drop any
+comments, arrive with the grid layout engine (#10).
 
 ## Example
 

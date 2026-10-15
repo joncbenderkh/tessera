@@ -58,8 +58,8 @@ dialogs). Edit mode must be able to re-enable any disabled panel.
   nested settings, and it allows comments. It is read and written with
   `github.com/goccy/go-yaml` (YAML 1.2, so `no` stays a string), decoded
   strictly so unknown fields are errors, saved atomically (temp file and
-  rename), and reloaded on change through `fsnotify`. Rewrites by the host
-  drop comments. The schema is versioned (`version: 1`); see
+  rename), and watched for changes through `fsnotify`. Rewrites by the
+  host drop comments. The schema is versioned (`version: 1`); see
   `docs/config.md`.
 - **Module path:** `github.com/joncbenderkh/tessera`.
 
@@ -115,7 +115,9 @@ bare binary, not a signed `.app` bundle.
 The module and source skeleton exist (#4): the host opens an empty Gio
 window, and `proto/`, `sdk/`, and `plugins/` are placeholders. The backlog
 is tracked as GitHub issues. CI (#5), the release workflow (#6), and the
-config file (#7) are in place; next is the plugin protocol (#8).
+config file (#7) are in place. The host loads the config at startup but
+does not yet apply reloads; that comes with the grid (#10). Next is the
+plugin protocol (#8).
 
 ## Git workflow
 
