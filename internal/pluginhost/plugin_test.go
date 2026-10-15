@@ -143,6 +143,7 @@ func (s *server) Describe(ctx context.Context, _ *tesserav1.DescribeRequest) (*t
 		if s.mode == "exits" || s.mode == "escapes" {
 			go func() {
 				time.Sleep(200 * time.Millisecond)
+				fmt.Fprintln(rawStderr, "last words")
 				os.Exit(0)
 			}()
 		}

@@ -116,7 +116,8 @@ Use the local toolchain: `export PATH=/usr/local/go/bin:$PATH`.
   other base. A separate job runs the `internal/pluginhost` and
   `internal/config` tests on macOS and Windows, on both Go versions;
   the BSD variants of the plugin host's process code are only
-  compiled (`GOOS=freebsd go vet`), never run. It does not run the
+  vetted (`GOOS=freebsd go vet` and so on, in the stable Linux job),
+  never run. It does not run the
   host.
 - Plugins and `sdk/` must also build with `CGO_ENABLED=0`.
 

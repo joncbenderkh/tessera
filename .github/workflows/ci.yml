@@ -83,6 +83,15 @@ jobs:
             echo "::error::gofmt needed on:"; echo "$unformatted"; exit 1
           fi
 
+      - name: Vet the plugin host for the BSDs
+        if: matrix.lint
+        env:
+          CGO_ENABLED: "0"
+        run: |
+          for os in freebsd netbsd openbsd dragonfly; do
+            GOOS=$os go vet ./internal/pluginhost
+          done
+
       - name: Staticcheck
         if: matrix.lint
         run: go run honnef.co/go/tools/cmd/staticcheck@v0.8.2 ./...

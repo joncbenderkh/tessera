@@ -191,6 +191,7 @@ func (inst *Instance) Close() {
 			_ = os.RemoveAll(inst.runner.tmpDir)
 		}
 	}()
+	inst.runner.dropPipes()
 	done := make(chan struct{})
 	go func() {
 		inst.client.Kill()

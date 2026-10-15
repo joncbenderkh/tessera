@@ -48,10 +48,12 @@ func main() {
 	// terminal reaches only the host.
 	signal.Notify(signals, os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
 	go func() {
-		<-signals
+		sig := <-signals
 		signal.Stop(signals) // a second signal ends a slow shutdown at once
 		plugins.Close()
-		os.Exit(0)
+		// The shell convention for a signalled exit, so a supervisor sees
+		// why the host stopped.
+		os.Exit(128 + int(sig.(syscall.Signal)))
 	}()
 
 	go func() {

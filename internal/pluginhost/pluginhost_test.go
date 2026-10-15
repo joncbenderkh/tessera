@@ -316,6 +316,42 @@ func TestExitSeenDespiteEscapedChild(t *testing.T) {
 	}
 }
 
+// TestEarlyReapKeepsOutput stalls the host's reading of an exited
+// plugin's stderr past pipeGrace, so watch reaps the plugin while its
+// last line is still unread.
+func TestEarlyReapKeepsOutput(t *testing.T) {
+	if !canFreeze || !canAwaitExit {
+		t.Skip("needs process groups and an exit watcher")
+	}
+	dir := install(t, "escapes")
+	logger, _ := newLogger()
+	var child childPID
+	lastWords := make(chan struct{}, 1)
+	inst, err := Launch(context.Background(), dir, "escapes", func(line string) {
+		child.output(line)
+		switch {
+		case strings.HasPrefix(line, "child "):
+			time.Sleep(pipeGrace + time.Second) // a stalled log
+		case line == "last words":
+			lastWords <- struct{}{}
+		}
+	}, logger)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer inst.Close()
+	defer func() {
+		if p, err := os.FindProcess(child.get()); err == nil && child.get() != 0 {
+			p.Kill()
+		}
+	}()
+	select {
+	case <-lastWords:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the plugin's last line was lost")
+	}
+}
+
 func TestCloseKillsDetachedChildren(t *testing.T) {
 	if !canFreeze || !canAwaitExit {
 		t.Skip("children of a plugin that exits on Shutdown survive on this OS")

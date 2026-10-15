@@ -61,8 +61,9 @@ group cannot outlive the plugin or keep the host from exiting by
 holding the plugin's stderr open. A child that leaves the group is
 on its own, though the host still sees the plugin exit. On other Unix
 systems the group is killed only when a plugin has to be killed. On
-Windows only the plugin itself is killed. On Linux the kernel also
-kills a plugin whose host dies without shutting it down; elsewhere
+Windows only the plugin itself is killed. All of this holds while the
+host runs: on Linux the kernel also kills a plugin whose host dies
+without shutting it down, but not the plugin's children; elsewhere
 such a plugin outlives its host.
 
 Mutual TLS is what go-plugin calls AutoMTLS, and the host always enables

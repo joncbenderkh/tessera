@@ -41,6 +41,7 @@ type procRunner struct {
 
 	reapOnce sync.Once
 	waitErr  error
+	early    bool // reaped by watch, which left the pipes to go-plugin; under mu
 }
 
 // pipeGrace is how long an exited plugin's stdout and stderr may stay
@@ -102,7 +103,8 @@ func (r *procRunner) Start(context.Context) error {
 // its group ID cannot have been reused. go-plugin calls Wait only once
 // the plugin's stdout and stderr close; a child that left the group can
 // hold them open, so if the plugin is still unreaped after pipeGrace,
-// watch reaps it, which closes the pipes and lets go-plugin finish.
+// watch reaps it without touching the pipes: go-plugin reads them to
+// the end, so no output is lost, and Wait closes them afterwards.
 func (r *procRunner) watch() {
 	seen := awaitExitHook(r.proc)
 	if seen {
@@ -121,17 +123,46 @@ func (r *procRunner) watch() {
 		r.mu.Lock()
 		r.exited = true
 		r.mu.Unlock()
-		r.reap()
+		r.reapOnce.Do(func() {
+			r.waitErr = reapPID(r.proc.Pid)
+			r.mu.Lock()
+			r.early = true
+			r.mu.Unlock()
+			close(r.reaped)
+		})
 	}
 }
 
 // reap reaps the plugin once, for Wait or watch, whichever comes first.
+// After watch reaped it, Wait releases what Cmd.Wait would have: the
+// pipes, which go-plugin has read to the end, and the process handle.
 func (r *procRunner) reap() error {
 	r.reapOnce.Do(func() {
 		r.waitErr = r.cmd.Wait()
 		close(r.reaped)
 	})
+	if r.reapedEarly() {
+		r.stdout.Close()
+		r.stderr.Close()
+		r.proc.Release()
+	}
 	return r.waitErr
+}
+
+func (r *procRunner) reapedEarly() bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.early
+}
+
+// dropPipes closes the pipes of a plugin watch reaped, which only a
+// child that left its group still holds: the plugin's own output was
+// read long ago, and go-plugin finishes once they close.
+func (r *procRunner) dropPipes() {
+	if r.reapedEarly() {
+		r.stdout.Close()
+		r.stderr.Close()
+	}
 }
 
 // sawExit reports whether watch has seen the plugin exit.
