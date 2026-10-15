@@ -68,7 +68,8 @@ Within a version, changes are additive only: new fields and enum values
 may appear, nothing is renamed, renumbered, or repurposed. Hosts render
 unknown enum values as their default and ignore unknown fields. Anything
 else needs a new version. `buf breaking` (`FILE` rules) is configured in
-`proto/buf.yaml` for checking this; CI does not run it yet.
+`proto/buf.yaml`, and CI runs it on every pull request against the base
+branch.
 
 Since a field's type cannot change, a future view schema version is a new
 package (`tessera.v2.View`, say) carried in a new field of the `content`

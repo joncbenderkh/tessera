@@ -74,6 +74,15 @@ jobs:
           go run github.com/bufbuild/buf/cmd/buf@v1.74.0 lint
           go run github.com/bufbuild/buf/cmd/buf@v1.74.0 format -d --exit-code
 
+      - name: Check protocol for breaking changes
+        if: matrix.lint && github.event_name == 'pull_request'
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          git fetch --no-tags --depth=1 origin "+refs/heads/$BASE_REF:refs/remotes/origin/$BASE_REF"
+          go run github.com/bufbuild/buf/cmd/buf@v1.74.0 breaking proto \
+            --against ".git#ref=refs/remotes/origin/$BASE_REF,subdir=proto"
+
       - name: Check generated code is up to date
         if: matrix.lint
         run: |
