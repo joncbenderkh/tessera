@@ -97,11 +97,15 @@ Use the local toolchain: `export PATH=/usr/local/go/bin:$PATH`.
 - Lint the protocol (from `proto/`):
   `go run github.com/bufbuild/buf/cmd/buf@v1.74.0 lint` and
   `go run github.com/bufbuild/buf/cmd/buf@v1.74.0 format -d --exit-code`.
+- Check the protocol for breaking changes against `origin/main` (from
+  the repo root):
+  `go run github.com/bufbuild/buf/cmd/buf@v1.74.0 breaking proto --against "$(git rev-parse --git-common-dir)#ref=origin/main,subdir=proto"`.
 - CI (`.github/workflows/ci.yml`) builds, tests, vets, and checks the
   `CGO_ENABLED=0` build on both the `go.mod` minimum and stable Go. On
   stable only, it also runs the format check, staticcheck, `buf lint`,
-  `buf format`, `buf breaking` against the base branch (pull requests
-  only), a `go generate` drift check, and an SPDX header check.
+  `buf format`, `buf breaking` against `main` (pull requests only), a
+  `go generate` drift check, and an SPDX header check. Pull requests
+  must target `main`; CI fails on any other base.
   It does not run the host.
 - Plugins and `sdk/` must also build with `CGO_ENABLED=0`.
 

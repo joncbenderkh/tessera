@@ -26,7 +26,19 @@ jobs:
             go-version: stable
             lint: true
     steps:
+      - name: Require pull requests to target main
+        if: github.event_name == 'pull_request' && github.base_ref != 'main'
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          echo "::error::pull requests must target main, not $BASE_REF"
+          exit 1
+
+      # Depth 2 so that, on a pull request's merge commit, HEAD~1 is the
+      # main the change was merged with.
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 2
 
       - uses: actions/setup-go@v7
         with:
@@ -76,12 +88,9 @@ jobs:
 
       - name: Check protocol for breaking changes
         if: matrix.lint && github.event_name == 'pull_request'
-        env:
-          BASE_REF: ${{ github.base_ref }}
         run: |
-          git fetch --no-tags --depth=1 origin "+refs/heads/$BASE_REF:refs/remotes/origin/$BASE_REF"
           go run github.com/bufbuild/buf/cmd/buf@v1.74.0 breaking proto \
-            --against ".git#ref=refs/remotes/origin/$BASE_REF,subdir=proto"
+            --against ".git#ref=HEAD~1,subdir=proto"
 
       - name: Check generated code is up to date
         if: matrix.lint
