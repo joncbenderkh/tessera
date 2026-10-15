@@ -208,7 +208,9 @@ message TableRow {
   // are ignored.
   repeated string cells = 1;
   // If set, the row is selectable and activating it sends an
-  // ActivateEvent with this id. Unique within the view.
+  // ActivateEvent with this id. Unique within the view: the first
+  // row or item in depth-first order keeps a repeated id, and later ones
+  // are not actionable.
   string action_id = 2;
 }
 
@@ -229,7 +231,9 @@ message ListItem {
   // Secondary text under the title.
   string detail = 3;
   // If set, the item shows a chevron and activating it sends an
-  // ActivateEvent with this id. Unique within the view.
+  // ActivateEvent with this id. Unique within the view: the first
+  // row or item in depth-first order keeps a repeated id, and later ones
+  // are not actionable.
   string action_id = 4;
 }
 

@@ -10,6 +10,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 )
 
 const example = `version: 1
@@ -84,26 +85,49 @@ func TestParseRejectsNonFiniteSettings(t *testing.T) {
 	}
 }
 
-func TestParseRejectsTimestampSettings(t *testing.T) {
-	data := strings.Replace(example, "show_seconds: no", "show_seconds: !!timestamp 2026-10-15", 1)
-	_, err := Parse([]byte(data))
-	if err == nil || !strings.Contains(err.Error(), "settings.show_seconds is a !!timestamp") {
-		t.Fatalf("expected a timestamp error, got %v", err)
-	}
-}
-
-func TestParseRejectsUnreadableNumbers(t *testing.T) {
-	for _, v := range []string{"1e400", "-.5e999", "1e5", "99999999999999999999", "{deep: [0x1FFFFFFFFFFFFFFFFF]}"} {
-		data := strings.Replace(example, "show_seconds: no", "show_seconds: "+v, 1)
+func TestParseRejectsNonCoreSettings(t *testing.T) {
+	for _, tt := range []struct{ value, want string }{
+		{"!!timestamp 2026-10-15", "may not use the !!timestamp tag"},
+		{"!!int 99999999999999999999", "may not use the !!int tag"},
+		{"!!map {a: 1e5}", "may not use the !!map tag"},
+		{"!custom 1", "may not use the !custom tag"},
+		{"*other", "may not use aliases"},
+		{"{<<: *other}", "may not use aliases"},
+		{"1e400", "out of range"},
+		{"-.5e999", "out of range"},
+		{"1e5", "out of range"},
+		{"99999999999999999999", "out of range"},
+		{"{deep: [0x1FFFFFFFFFFFFFFFFF]}", "out of range"},
+		{"1_000", "not a YAML 1.2 number"},
+		{"0b101", "not a YAML 1.2 number"},
+	} {
+		data := strings.Replace(example, "show_seconds: no", "show_seconds: "+tt.value, 1)
+		data = strings.Replace(data, "plugin: clock", "plugin: &other clock", 1)
 		_, err := Parse([]byte(data))
-		if err == nil || !strings.Contains(err.Error(), "quote it to pass a string") {
-			t.Errorf("%s: expected an unreadable-number error, got %v", v, err)
+		if err == nil || !strings.Contains(err.Error(), tt.want) {
+			t.Errorf("%s: expected %q, got %v", tt.value, tt.want, err)
 		}
 	}
 }
 
-func TestParseKeepsQuotedAndInRangeSettings(t *testing.T) {
-	for _, v := range []string{`"1e400"`, "'1e5'", "!!str 1e5", "1.0e5", "2026-10-15", "18446744073709551615"} {
+func TestParseChecksQuotedSettingsKey(t *testing.T) {
+	data := strings.Replace(example, "show_seconds: no", "show_seconds: 1e5", 1)
+	data = strings.Replace(data, "    settings:", `    "settings":`, 1)
+	if _, err := Parse([]byte(data)); err == nil || !strings.Contains(err.Error(), "out of range") {
+		t.Fatalf("expected an out-of-range error, got %v", err)
+	}
+}
+
+func TestValidateRejectsNonStructSettings(t *testing.T) {
+	c := Default()
+	c.Panels = []Panel{{ID: "a", Plugin: "p", W: 1, H: 1, Settings: map[string]any{"at": time.Now()}}}
+	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "settings.at") {
+		t.Fatalf("expected an error at settings.at, got %v", err)
+	}
+}
+
+func TestParseKeepsCoreSettings(t *testing.T) {
+	for _, v := range []string{`"1e400"`, "'1e5'", "!!str 1e5", "1.0e5", "2026-10-15", "18446744073709551615", "0x1F", "0o17", "+.5", "&s 3"} {
 		data := strings.Replace(example, "show_seconds: no", "show_seconds: "+v, 1)
 		if _, err := Parse([]byte(data)); err != nil {
 			t.Errorf("%s: unexpected error: %v", v, err)

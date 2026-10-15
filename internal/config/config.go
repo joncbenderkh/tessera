@@ -88,12 +88,12 @@ func Parse(data []byte) (Config, error) {
 	if len(file.Docs) > 1 {
 		return Config{}, fmt.Errorf("found %d YAML documents, want one", len(file.Docs))
 	}
-	var numErr error
+	var settingsErr error
 	for _, doc := range file.Docs {
-		ast.Walk(numberCheck{err: &numErr}, doc)
+		ast.Walk(settingsCheck{err: &settingsErr}, doc)
 	}
-	if numErr != nil {
-		return Config{}, numErr
+	if settingsErr != nil {
+		return Config{}, settingsErr
 	}
 	var c Config
 	if err := yaml.UnmarshalWithOptions(data, &c,
@@ -135,34 +135,63 @@ func decodeInt(dst *int, data []byte) error {
 // numbers.
 var yamlNumber = regexp.MustCompile(`^([-+]?(\.[0-9]+|[0-9]+(\.[0-9]*)?)([eE][-+]?[0-9]+)?|0o[0-7]+|0x[0-9a-fA-F]+)$`)
 
-// numberCheck rejects plain settings values that YAML 1.2 reads as
-// numbers but the decoder keeps as strings: integers beyond 64 bits,
-// floats beyond a double, and exponents without a decimal point (1e5).
-// A plugin would otherwise receive a string where it expects a number.
-type numberCheck struct {
+// settingsCheck holds settings to YAML 1.2's core schema, so a plugin
+// receives exactly the types the file shows. Inside settings it rejects
+// tags other than !!str, aliases, and plain scalars the decoder reads
+// differently from the core schema: numbers it keeps as strings (beyond
+// 64 bits or a double, or 1e5 without a decimal point) and YAML 1.1
+// numbers it reads as numbers (1_000, 0b101).
+type settingsCheck struct {
 	inSettings bool
 	err        *error
 }
 
-func (v numberCheck) Visit(n ast.Node) ast.Visitor {
+func (v settingsCheck) Visit(n ast.Node) ast.Visitor {
 	if *v.err != nil {
+		return nil
+	}
+	fail := func(format string, args ...any) ast.Visitor {
+		*v.err = fmt.Errorf("line %d: "+format, append([]any{n.GetToken().Position.Line}, args...)...)
 		return nil
 	}
 	switch n := n.(type) {
 	case *ast.MappingValueNode:
 		inner := v
-		inner.inSettings = v.inSettings || n.Key.String() == "settings"
+		inner.inSettings = v.inSettings || isKey(n.Key, "settings")
 		ast.Walk(inner, n.Value)
 		return nil
 	case *ast.TagNode:
+		if !v.inSettings {
+			return v
+		}
+		if tag := n.Start.Value; tag != "!!str" {
+			return fail("settings may not use the %s tag; quote the value to pass a string", tag)
+		}
 		return nil
+	case *ast.AliasNode:
+		if v.inSettings {
+			return fail("settings may not use aliases")
+		}
 	case *ast.StringNode:
 		if v.inSettings && n.Token.Type == token.StringType && yamlNumber.MatchString(n.Value) {
-			pos := n.Token.Position
-			*v.err = fmt.Errorf("line %d: %s is a number out of range or with an exponent but no decimal point (write 1.0e5); quote it to pass a string", pos.Line, n.Value)
+			return fail("%s is out of range or has an exponent without a decimal point (write 1.0e5); quote it to pass a string", n.Value)
+		}
+	case *ast.IntegerNode, *ast.FloatNode:
+		if text := n.GetToken().Value; v.inSettings && !yamlNumber.MatchString(text) {
+			return fail("%s is not a YAML 1.2 number; write it in decimal, or quote it to pass a string", text)
 		}
 	}
 	return v
+}
+
+// isKey reports whether a mapping key is the plain or quoted string name.
+func isKey(key ast.MapKeyNode, name string) bool {
+	if k, ok := key.(*ast.MappingKeyNode); ok {
+		s, ok := k.Value.(*ast.StringNode)
+		return ok && s.Value == name
+	}
+	s, ok := key.(*ast.StringNode)
+	return ok && s.Value == name
 }
 
 // Marshal encodes a config as YAML.

@@ -60,8 +60,11 @@ type PanelServiceClient interface {
 	// cancelled handler may still be returning when the next one starts,
 	// so a plugin keeps per-stream state local to the handler. A stream
 	// that ends without the host cancelling it is a protocol failure,
-	// except that a plugin that cannot push returns UNIMPLEMENTED before
-	// its first response, and the host polls Render instead.
+	// with two exceptions: a plugin that cannot push returns UNIMPLEMENTED
+	// before its first response, and the host polls Render instead; and a
+	// view over the size or depth limit in docs/protocol.md ends the
+	// stream, and the host shows an error tile without restarting the
+	// plugin.
 	Watch(ctx context.Context, in *WatchRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[WatchResponse], error)
 	// Render returns the current view. It is the polling fallback for
 	// plugins that do not implement Watch.
@@ -172,8 +175,11 @@ type PanelServiceServer interface {
 	// cancelled handler may still be returning when the next one starts,
 	// so a plugin keeps per-stream state local to the handler. A stream
 	// that ends without the host cancelling it is a protocol failure,
-	// except that a plugin that cannot push returns UNIMPLEMENTED before
-	// its first response, and the host polls Render instead.
+	// with two exceptions: a plugin that cannot push returns UNIMPLEMENTED
+	// before its first response, and the host polls Render instead; and a
+	// view over the size or depth limit in docs/protocol.md ends the
+	// stream, and the host shows an error tile without restarting the
+	// plugin.
 	Watch(*WatchRequest, grpc.ServerStreamingServer[WatchResponse]) error
 	// Render returns the current view. It is the polling fallback for
 	// plugins that do not implement Watch.

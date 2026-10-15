@@ -9,7 +9,6 @@ import (
 	"math"
 	"regexp"
 	"slices"
-	"time"
 
 	"google.golang.org/protobuf/types/known/structpb"
 )
@@ -110,8 +109,6 @@ func checkSettings(v any, path string) error {
 		if math.IsInf(v, 0) || math.IsNaN(v) {
 			return fmt.Errorf("%s must be a finite number", path)
 		}
-	case time.Time:
-		return fmt.Errorf("%s is a !!timestamp; drop the tag to pass the date as a string", path)
 	default:
 		if _, err := structpb.NewValue(v); err != nil {
 			return fmt.Errorf("%s: %w", path, err)

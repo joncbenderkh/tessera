@@ -154,11 +154,12 @@ the panel's `settings` block in the config file. The host passes the
 settings to `Configure` as a `google.protobuf.Struct`, which has the
 JSON data model: mappings become structs, sequences lists, and every
 number a double, so integers beyond ±2^53 lose precision (quote them as
-strings). The host rejects, when it loads the config, settings a Struct
-cannot carry: `.inf` and `.nan`, `!!timestamp` values, and unquoted
-numbers too large for 64 bits or a double, or written with an exponent
-but no decimal point (`1e5`; write `1.0e5`). Untagged dates arrive as
-strings as written, and `!!binary` values as base64 strings. Checking
+strings). Settings follow YAML 1.2's core schema exactly, so when it
+loads the config the host rejects what would reach the plugin as another
+type: tags other than `!!str`, aliases, `.inf` and `.nan`, unquoted
+numbers too large for 64 bits or a double or written with an exponent
+but no decimal point (`1e5`; write `1.0e5`), and YAML 1.1 numbers such
+as `1_000` and `0b101`. Dates arrive as strings as written. Checking
 settings against the schema, and building a form from it, is #16; until
 then, the plugin validates them and answers `INVALID_ARGUMENT` with a
 readable message.
@@ -198,5 +199,7 @@ mockup.
 | `ScrollEvent` | The visible range of a table or list with an `id` changes | `widget_id`, `first_visible`, `visible_count` |
 
 Rows and items without an `action_id` are not interactive. The event
-carries only the `action_id`, so a view never reuses one. Hover and
+carries only the `action_id`, so a view never reuses one; if it does,
+the first row or item in depth-first order keeps it and later ones are
+not interactive. Hover and
 selection highlighting are drawn by the host and never reach the plugin.
