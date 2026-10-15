@@ -94,6 +94,7 @@ func (testPlugin) GRPCClient(context.Context, *plugin.GRPCBroker, *grpc.ClientCo
 //   - rejects: Configure answers INVALID_ARGUMENT.
 //   - frozen: the process stops itself after Describe, so it never
 //     answers Shutdown.
+//   - mute-frozen: as frozen, after closing its stdout and stderr.
 //   - forks: Describe starts a long-lived child that shares the
 //     plugin's stderr, and reports its PID there.
 //   - exits: as forks, then the plugin exits on its own.
@@ -144,6 +145,13 @@ func (s *server) Describe(ctx context.Context, _ *tesserav1.DescribeRequest) (*t
 		go func() {
 			rawStdout.Write(bytes.Repeat([]byte("x"), 1<<20))
 			fmt.Fprintln(rawStderr, "flooded")
+		}()
+	case "mute-frozen":
+		go func() {
+			time.Sleep(200 * time.Millisecond) // let the response out first
+			rawStdout.Close()
+			rawStderr.Close()
+			freeze()
 		}()
 	case "frozen":
 		go func() {

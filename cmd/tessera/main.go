@@ -49,6 +49,7 @@ func main() {
 	signal.Notify(signals, os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
 	go func() {
 		<-signals
+		signal.Stop(signals) // a second signal ends a slow shutdown at once
 		plugins.Close()
 		os.Exit(0)
 	}()

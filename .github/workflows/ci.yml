@@ -145,4 +145,5 @@ jobs:
           go-version: stable
 
       - name: Test
-        run: go test ./internal/pluginhost ./internal/config
+        # -v lists skipped tests, which differ per OS.
+        run: go test -v ./internal/pluginhost ./internal/config

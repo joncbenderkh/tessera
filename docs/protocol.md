@@ -172,12 +172,13 @@ file name, which is how the config's `plugin:` field finds it: the name
 itself on Unix, the name plus `.exe` on Windows. Other files in the
 plugins directory, such as `clock.py` next to `clock`, are ignored.
 
-The host refuses a plugin, shutting it down and showing the reason in
-its panel's place, when its file is missing or not executable, the
-handshake or the mutual TLS connection fails, it does not answer
-`Describe` within 5 seconds, its `Describe` gives a
-different name or protocol version, or it picks a view schema version
-the host did not offer. A rejected `Configure` is shown the same way.
+The host refuses a plugin, shutting it down and recording the reason,
+when its file is missing or not executable, the handshake or the
+mutual TLS connection fails, it does not answer `Describe` within 5
+seconds, its `Describe` gives a different name or protocol version, or
+it picks a view schema version the host did not offer. A rejected
+`Configure` is recorded the same way. The reason is logged now and will
+be shown in the panel's place once the host draws the grid (#10, #13).
 Names are 1 to 64 lowercase letters, digits, and hyphens, starting with a
 letter or digit, so they can never name a path outside the plugins
 directory. Names Windows reserves for devices (`con`, `prn`, `aux`,

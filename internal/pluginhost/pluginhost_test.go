@@ -295,9 +295,30 @@ func TestCloseKillsDetachedChildren(t *testing.T) {
 	}
 }
 
+func TestCloseKillsPluginWhenWatchFails(t *testing.T) {
+	if !canFreeze {
+		t.Skip("cannot stop a process on this OS")
+	}
+	defer func(f func(*os.Process) bool) { awaitExitHook = f }(awaitExitHook)
+	awaitExitHook = func(*os.Process) bool { return false }
+	dir := install(t, "mute-frozen")
+	logger, _ := newLogger()
+	inst, err := Launch(context.Background(), dir, "mute-frozen", ignore, logger)
+	if err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(500 * time.Millisecond) // until it has closed its output and stopped
+	inst.Close()
+	if !inst.Exited() {
+		t.Fatal("plugin still running after Close, with no exit watcher")
+	}
+}
+
 func TestFailedStartCleansUp(t *testing.T) {
 	tmp := t.TempDir()
 	t.Setenv("TMPDIR", tmp)
+	t.Setenv("TMP", tmp) // Windows
+	t.Setenv("TEMP", tmp)
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "junk"+exeSuffix()), []byte("not a program\n"), 0o755); err != nil {
 		t.Fatal(err)

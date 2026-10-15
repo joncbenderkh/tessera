@@ -23,7 +23,8 @@ func ownProcessGroup(cmd *exec.Cmd) {
 const canAwaitExit = true
 
 // awaitExit waits for p to exit without reaping it, so its PID and
-// process group ID stay reserved, and reports whether it did.
+// process group ID stay reserved. It reports whether it saw the exit;
+// false means it could not watch.
 func awaitExit(p *os.Process) bool {
 	var info unix.Siginfo
 	for {

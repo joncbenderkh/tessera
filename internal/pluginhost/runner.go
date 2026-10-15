@@ -34,6 +34,8 @@ type procRunner struct {
 	canceled bool
 	exited   bool          // reaped: its PID, and so its group ID, may be reused
 	reaping  bool          // Wait is reaping it without watch
+	exitSeen bool          // watch saw it exit, unreaped
+	reaped   chan struct{} // closed once Wait has reaped it
 	watched  chan struct{} // closed by watch; Wait reaps only after it
 }
 
@@ -59,16 +61,26 @@ func (r *procRunner) runnerFunc(_ hclog.Logger, spec *exec.Cmd, tmpDir string) (
 	return r, nil
 }
 
+// Start starts the plugin. It does not hold mu while the process
+// starts, so kill can mark the launch canceled meanwhile; the plugin is
+// then killed as soon as it exists.
 func (r *procRunner) Start(context.Context) error {
 	r.mu.Lock()
-	defer r.mu.Unlock()
-	if r.canceled {
+	canceled := r.canceled
+	r.mu.Unlock()
+	if canceled {
 		return errors.New("launch canceled")
 	}
-	if err := forkThread(r.cmd.Start); err != nil {
+	r.reaped = make(chan struct{})
+	if err := startOnOwnThread(r.cmd, r.reaped); err != nil {
 		return err
 	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	r.proc = r.cmd.Process
+	if r.canceled {
+		killGroup(r.proc)
+	}
 	if canAwaitExit {
 		r.watched = make(chan struct{})
 		go r.watch()
@@ -83,9 +95,10 @@ func (r *procRunner) Start(context.Context) error {
 // watch is done, so its group ID cannot have been reused.
 func (r *procRunner) watch() {
 	defer close(r.watched)
-	if awaitExit(r.proc) {
+	if awaitExitHook(r.proc) {
 		r.mu.Lock()
 		killGroup(r.proc)
+		r.exitSeen = true
 		r.mu.Unlock()
 	}
 }
@@ -107,22 +120,24 @@ func (r *procRunner) kill() {
 	}
 }
 
-// Wait reaps the plugin. With watch (Linux, macOS, the BSDs), the
-// plugin has exited and its group been killed once watched closes, so
-// it is marked exited before the reap and kill never reaches a released
-// group ID. Elsewhere (Windows; other Unix systems, where children it
-// left in its group are killed only by a forced Close) Wait cannot know
-// the plugin has exited before reaping it, so kill stops reaching the
-// group as soon as the reap may begin.
+// Wait reaps the plugin. When watch saw it exit (Linux, macOS, the
+// BSDs), its group has been killed, so it is marked exited before the
+// reap and kill never reaches a released group ID. Otherwise (Windows;
+// other Unix systems, where children it left in its group are killed
+// only by a forced Close; or watch could not watch) Wait cannot know the
+// plugin has exited before reaping it, so from the start of the reap
+// kill signals only the plugin.
 func (r *procRunner) Wait(context.Context) error {
+	defer close(r.reaped)
 	if r.watched != nil {
 		<-r.watched
-		r.mu.Lock()
+	}
+	r.mu.Lock()
+	if r.exitSeen {
 		r.exited = true
 		r.mu.Unlock()
 		return r.cmd.Wait()
 	}
-	r.mu.Lock()
 	r.reaping = true
 	r.mu.Unlock()
 	err := r.cmd.Wait()
@@ -193,26 +208,26 @@ func (l *lineLimiter) Read(p []byte) (int, error) {
 	return k, err
 }
 
-var (
-	forkOnce sync.Once
-	forks    = make(chan func())
-)
+// awaitExitHook is awaitExit, replaceable by tests.
+var awaitExitHook = awaitExit
 
-// forkThread runs start on one OS thread that never exits. On Linux a
-// plugin's Pdeathsig fires when the thread that started it exits, not
-// only the host, and Go ends a thread when a goroutine locked to it
-// exits (Gio's window goroutine locks one), so plugins are started from
-// a thread kept for the purpose.
-func forkThread(start func() error) error {
-	forkOnce.Do(func() {
-		go func() {
-			runtime.LockOSThread()
-			for f := range forks {
-				f()
-			}
-		}()
-	})
+// startOnOwnThread starts cmd from a goroutine locked to an OS thread,
+// which it keeps until reaped is closed. On Linux a plugin's Pdeathsig
+// fires when the thread that started it exits, not only the host, and
+// Go ends a thread when a goroutine locked to it exits (Gio's window
+// goroutine locks one), so no other goroutine may run, and exit, on the
+// starting thread while the plugin lives. One thread per plugin also
+// keeps a start that hangs from holding up the others.
+func startOnOwnThread(cmd *exec.Cmd, reaped <-chan struct{}) error {
 	errc := make(chan error, 1)
-	forks <- func() { errc <- start() }
+	go func() {
+		runtime.LockOSThread()
+		err := cmd.Start()
+		errc <- err
+		if err == nil {
+			<-reaped
+		}
+		runtime.UnlockOSThread()
+	}()
 	return <-errc
 }
