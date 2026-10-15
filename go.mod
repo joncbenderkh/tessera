@@ -2,7 +2,11 @@ module github.com/joncbenderkh/tessera
 
 go 1.24.0
 
-require gioui.org v0.10.3
+require (
+	gioui.org v0.10.3
+	github.com/fsnotify/fsnotify v1.10.1
+	github.com/goccy/go-yaml v1.19.2
+)
 
 require (
 	gioui.org/shader v1.0.9 // indirect
