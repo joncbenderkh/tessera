@@ -126,3 +126,23 @@ jobs:
             fi
           done
           exit $missing
+
+  # The plugin host's process handling differs per OS (proc_*.go). The
+  # host itself needs cgo and is built only on Linux above, so only the
+  # pure-Go packages are tested here.
+  other-os:
+    name: Plugin host (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version: stable
+
+      - name: Test
+        run: go test ./internal/pluginhost ./internal/config

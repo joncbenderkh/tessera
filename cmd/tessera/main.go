@@ -44,7 +44,9 @@ func main() {
 
 	plugins := pluginhost.Start(cfg, pluginhost.DefaultDir(), log.Default())
 	signals := make(chan os.Signal, 1)
-	signal.Notify(signals, os.Interrupt, syscall.SIGTERM)
+	// SIGHUP too: plugins run in their own process groups, so a closed
+	// terminal reaches only the host.
+	signal.Notify(signals, os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
 	go func() {
 		<-signals
 		plugins.Close()

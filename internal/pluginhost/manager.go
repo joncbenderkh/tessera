@@ -96,7 +96,7 @@ func (m *Manager) bringUp(pn *panel, p config.Panel, dir string, logger *log.Log
 			inst = nil
 		}
 	}
-	if err != nil {
+	if err != nil && m.ctx.Err() == nil { // not canceled by Close
 		logger.Printf("panel %q: %v", p.ID, err)
 	}
 

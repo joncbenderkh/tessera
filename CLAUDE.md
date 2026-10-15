@@ -113,8 +113,8 @@ Use the local toolchain: `export PATH=/usr/local/go/bin:$PATH`.
   `buf format`, `buf breaking` against the previous `main` (with the
   rules pinned in the workflow), a `go generate` drift check, and an
   SPDX header check. Pull requests must target `main`; CI fails on any
-  other base.
-  It does not run the host.
+  other base. A separate job runs the `internal/pluginhost` and
+  `internal/config` tests on macOS and Windows. It does not run the host.
 - Plugins and `sdk/` must also build with `CGO_ENABLED=0`.
 
 The host needs Gio's system packages. On Fedora: `wayland-devel`,

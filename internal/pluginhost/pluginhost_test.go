@@ -6,10 +6,13 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"log"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -195,13 +198,16 @@ func TestCloseKillsUnresponsivePlugin(t *testing.T) {
 
 func TestCloseStopsHandshake(t *testing.T) {
 	dir := install(t, "slow-start")
-	logger, _ := newLogger()
+	logger, logs := newLogger()
 	m := Start(config.Config{Panels: []config.Panel{{ID: "s", Plugin: "slow-start", W: 1, H: 1}}}, dir, logger)
 	time.Sleep(300 * time.Millisecond) // until it is in the handshake
 	start := time.Now()
 	m.Close()
 	if d := time.Since(start); d > time.Second {
 		t.Errorf("Close took %v", d)
+	}
+	if strings.Contains(logs.String(), "canceled") {
+		t.Errorf("Close logged the launch it stopped as a failure:\n%s", logs)
 	}
 }
 
@@ -250,8 +256,8 @@ func gone(pid int) bool {
 }
 
 func TestExitKillsChildren(t *testing.T) {
-	if !canFreeze {
-		t.Skip("cannot reach a process's children on this OS")
+	if !canAwaitExit {
+		t.Skip("children of an exited plugin are killed only by Close on this OS")
 	}
 	dir := install(t, "exits")
 	logger, _ := newLogger()
@@ -286,6 +292,73 @@ func TestFailedStartCleansUp(t *testing.T) {
 	}
 	if entries, _ := os.ReadDir(tmp); len(entries) != 0 {
 		t.Errorf("left in TMPDIR: %v", entries)
+	}
+}
+
+func TestStdoutFloodDoesNotBlock(t *testing.T) {
+	dir := install(t, "floods-stdout")
+	logger, _ := newLogger()
+	flooded := make(chan struct{}, 1)
+	inst, err := Launch(context.Background(), dir, "floods-stdout", func(line string) {
+		if line == "flooded" {
+			flooded <- struct{}{}
+		}
+	}, logger)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer inst.Close()
+	select {
+	case <-flooded:
+	case <-time.After(10 * time.Second):
+		t.Fatal("plugin blocked writing to stdout")
+	}
+}
+
+func TestPluginDiesWithHost(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("only Linux kills a plugin when its host dies")
+	}
+	dir := install(t, "clock")
+	self, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	host := exec.Command(self)
+	// Its own TMPDIR: the killed host cannot remove go-plugin's socket directory.
+	host.Env = append(os.Environ(), hostKey+"="+dir, "TMPDIR="+t.TempDir())
+	out, err := host.StdoutPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := host.Start(); err != nil {
+		t.Fatal(err)
+	}
+	var pid int
+	if _, err := fmt.Fscan(out, &pid); err != nil {
+		host.Process.Kill()
+		t.Fatalf("host did not report a plugin PID: %v", err)
+	}
+	host.Process.Kill()
+	host.Wait()
+	if !gone(pid) {
+		if p, err := os.FindProcess(pid); err == nil {
+			p.Kill()
+		}
+		t.Fatalf("plugin %d outlived its SIGKILLed host", pid)
+	}
+}
+
+func TestLineLimiter(t *testing.T) {
+	long := bytes.Repeat([]byte("x"), 2*maxStdoutLine+10)
+	in := append([]byte("1|1|unix|/s|grpc|cert\n"), long...)
+	got, err := io.ReadAll(&lineLimiter{ReadCloser: io.NopCloser(bytes.NewReader(in))})
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(string(got), "\n")
+	if lines[0] != "1|1|unix|/s|grpc|cert" || len(lines) != 4 || len(lines[1]) != maxStdoutLine || len(lines[3]) != 10 {
+		t.Fatalf("got lines of %d", len(lines))
 	}
 }
 
@@ -327,7 +400,6 @@ func TestList(t *testing.T) {
 		"weather" + exeSuffix(): 0o755,
 		"clock.py":              0o755,
 		"Bad" + exeSuffix():     0o755,
-		"con" + exeSuffix():     0o755,
 		"notes" + exeSuffix():   0o644,
 	} {
 		if err := os.WriteFile(filepath.Join(dir, name), nil, mode); err != nil {

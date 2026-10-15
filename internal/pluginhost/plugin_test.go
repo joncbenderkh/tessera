@@ -3,10 +3,12 @@
 package pluginhost
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -32,6 +34,10 @@ func TestMain(m *testing.M) {
 	}
 	if os.Getenv(tesserav1.MagicCookieKey) != "" {
 		servePlugin(strings.TrimSuffix(filepath.Base(os.Args[0]), exeSuffix()))
+		return
+	}
+	if dir := os.Getenv(hostKey); dir != "" {
+		runHost(dir)
 		return
 	}
 	os.Exit(m.Run())
@@ -85,6 +91,8 @@ func (testPlugin) GRPCClient(context.Context, *plugin.GRPCBroker, *grpc.ClientCo
 //   - forks: Describe starts a long-lived child that shares the
 //     plugin's stderr, and reports its PID there.
 //   - exits: as forks, then the plugin exits on its own.
+//   - floods-stdout: after Describe, writes 1 MiB to stdout with no
+//     newline, then reports "flooded" on stderr.
 //
 // Any other name is a well-behaved plugin of that name, which reports
 // each Configure on stderr.
@@ -123,6 +131,12 @@ func (s *server) Describe(ctx context.Context, _ *tesserav1.DescribeRequest) (*t
 				os.Exit(0)
 			}()
 		}
+	case "floods-stdout":
+		go func() {
+			// go-plugin has replaced os.Stdout; write to the handshake pipe.
+			os.NewFile(1, "stdout").Write(bytes.Repeat([]byte("x"), 1<<20))
+			fmt.Fprintln(os.NewFile(2, "stderr"), "flooded")
+		}()
 	case "frozen":
 		go func() {
 			time.Sleep(200 * time.Millisecond) // let the response out first
@@ -143,6 +157,21 @@ func (s *server) Configure(_ context.Context, req *tesserav1.ConfigureRequest) (
 
 // sleeperKey makes the test binary sleep instead of running tests.
 const sleeperKey = "TESSERA_TEST_SLEEPER"
+
+// hostKey makes the test binary a host: it launches the clock plugin
+// from the directory in the variable, prints the plugin's PID, and
+// waits to be killed.
+const hostKey = "TESSERA_TEST_HOST"
+
+func runHost(dir string) {
+	inst, err := Launch(context.Background(), dir, "clock", func(string) {}, log.New(io.Discard, "", 0))
+	if err != nil {
+		fmt.Println(err)
+		os.Exit(1)
+	}
+	fmt.Println(inst.runner.proc.Pid)
+	select {}
+}
 
 // install copies the test binary into a new plugins directory once per
 // name.

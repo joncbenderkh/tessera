@@ -3,6 +3,7 @@
 package pluginhost
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"io"
@@ -46,10 +47,11 @@ func (r *procRunner) runnerFunc(_ hclog.Logger, spec *exec.Cmd, tmpDir string) (
 	// No stdin: go-plugin would pass the host's, and a plugin in its own
 	// process group that read a terminal would be stopped by SIGTTIN.
 	ownProcessGroup(r.cmd)
-	var err error
-	if r.stdout, err = r.cmd.StdoutPipe(); err != nil {
+	stdout, err := r.cmd.StdoutPipe()
+	if err != nil {
 		return nil, err
 	}
+	r.stdout = &lineLimiter{ReadCloser: stdout}
 	if r.stderr, err = r.cmd.StderrPipe(); err != nil {
 		return nil, err
 	}
@@ -98,20 +100,24 @@ func (r *procRunner) kill() {
 	}
 }
 
-// Wait reaps the plugin. Without watch (other than on Linux), it kills
-// the plugin's process group just after the reap, before the group ID
-// is likely to be reused.
+// Wait reaps the plugin. With watch (Linux), the plugin has exited and
+// its group been killed once watched closes, so it is marked exited
+// before the reap and kill never reaches a released group ID. Elsewhere
+// Wait cannot know the plugin has exited before reaping it: a kill in
+// the moment between the reap and marking it could reach a reused ID,
+// and children it left in its group are killed only by Close.
 func (r *procRunner) Wait(context.Context) error {
 	if r.watched != nil {
 		<-r.watched
+		r.mu.Lock()
+		r.exited = true
+		r.mu.Unlock()
+		return r.cmd.Wait()
 	}
 	err := r.cmd.Wait()
 	r.mu.Lock()
-	defer r.mu.Unlock()
-	if r.watched == nil {
-		killGroup(r.proc)
-	}
 	r.exited = true
+	r.mu.Unlock()
 	return err
 }
 
@@ -143,6 +149,37 @@ func (r *procRunner) PluginToHost(network, addr string) (string, string, error) 
 
 func (r *procRunner) HostToPlugin(network, addr string) (string, string, error) {
 	return network, addr, nil
+}
+
+// maxStdoutLine caps a stdout line below bufio.Scanner's default
+// limit. go-plugin scans stdout for the handshake line and discards the
+// rest, but stops reading at a line its scanner cannot hold, after
+// which a plugin that keeps writing there blocks on the full pipe.
+const maxStdoutLine = 32 << 10
+
+// lineLimiter breaks lines longer than maxStdoutLine with a newline.
+type lineLimiter struct {
+	io.ReadCloser
+	n int // bytes since the last newline
+}
+
+func (l *lineLimiter) Read(p []byte) (int, error) {
+	if len(p) == 0 {
+		return 0, nil
+	}
+	if l.n == maxStdoutLine {
+		p[0] = '\n'
+		l.n = 0
+		return 1, nil
+	}
+	p = p[:min(len(p), maxStdoutLine-l.n)]
+	k, err := l.ReadCloser.Read(p)
+	if i := bytes.LastIndexByte(p[:k], '\n'); i >= 0 {
+		l.n = k - i - 1
+	} else {
+		l.n += k
+	}
+	return k, err
 }
 
 var (

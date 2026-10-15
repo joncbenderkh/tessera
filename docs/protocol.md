@@ -50,8 +50,9 @@ languages can follow its documented handshake:
    output it forwards over `GRPCStdio`, go to the host's log for that
    panel.
 
-A plugin's stdin is empty, and an output line longer than 64 KiB is
-logged in pieces. On Unix each plugin runs in a process group of its
+A plugin's stdin is empty, and its stdout carries only the handshake
+line: anything written there later is discarded. An output line longer
+than 64 KiB is logged in pieces. On Unix each plugin runs in a process group of its
 own, which the host kills when it shuts the plugin down and, on Linux,
 as soon as the plugin exits. Children that stay in that group
 therefore cannot outlive the plugin's shutdown or keep the host from
