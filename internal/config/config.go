@@ -12,7 +12,6 @@ import (
 	"math"
 	"os"
 	"path/filepath"
-	"slices"
 
 	"github.com/goccy/go-yaml"
 	"github.com/goccy/go-yaml/parser"
@@ -86,16 +85,10 @@ func Parse(data []byte) (Config, error) {
 	if len(file.Docs) > 1 {
 		return Config{}, fmt.Errorf("found %d YAML documents, want one", len(file.Docs))
 	}
-	if err := rejectSharing(file); err != nil {
-		return Config{}, err
-	}
 	var c Config
 	if err := yaml.UnmarshalWithOptions(data, &c,
 		yaml.Strict(), yaml.DisallowUnknownField(), yaml.CustomUnmarshaler(decodeInt),
 	); err != nil {
-		return Config{}, err
-	}
-	if err := decodeSettings(file, &c); err != nil {
 		return Config{}, err
 	}
 	if err := c.Validate(); err != nil {
@@ -128,15 +121,8 @@ func decodeInt(dst *int, data []byte) error {
 	return nil
 }
 
-// Marshal encodes a config as YAML. Strings that the core schema would
-// read back as another type, such as "1e5" or "08", are quoted.
+// Marshal encodes a config as YAML.
 func Marshal(c Config) ([]byte, error) {
-	c.Panels = slices.Clone(c.Panels)
-	for i := range c.Panels {
-		if s := c.Panels[i].Settings; s != nil {
-			c.Panels[i].Settings = quoteLookalikes(s).(map[string]any)
-		}
-	}
 	return yaml.MarshalWithOptions(c, yaml.Indent(2), yaml.IndentSequence(true))
 }
 

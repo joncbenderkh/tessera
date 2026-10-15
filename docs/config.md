@@ -44,13 +44,12 @@ panels:
 | `grid.columns` | Number of grid columns, at least 1. |
 | `grid.row_height` | Height of one grid row, at least 1. |
 | `panels[].id` | Unique name for this panel. One plugin can back several panels. |
-| `panels[].plugin` | Name of the plugin that provides the panel: lowercase letters, digits, and hyphens, starting with a letter or digit, at most 64 characters, and not a Windows device name such as `con` or `com1`. |
+| `panels[].plugin` | Name of the plugin that provides the panel. |
 | `panels[].enabled` | `false` hides the panel. Defaults to `true`. |
 | `panels[].x`, `y` | Zero-based column and row of the panel's top-left cell. |
 | `panels[].w`, `h` | Width and height in cells, each at least 1. |
-| `panels[].settings` | Settings passed to the plugin. Their schema comes from the plugin. Values are resolved by YAML 1.2's core schema; tags other than `!!str` and non-finite or out-of-range numbers are errors (see `docs/protocol.md`). |
+| `panels[].settings` | Settings passed to the plugin. Their schema comes from the plugin. |
 
 Unknown fields are errors, so a misspelt key is reported rather than
-ignored. Aliases (`*name`) are not supported, nor are merge keys (`<<`)
-outside settings. Every panel must fit within `grid.columns`. Enabled panels must
+ignored. Every panel must fit within `grid.columns`. Enabled panels must
 not overlap; disabled panels may overlap anything.

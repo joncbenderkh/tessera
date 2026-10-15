@@ -154,14 +154,10 @@ the panel's `settings` block in the config file. The host passes the
 settings to `Configure` as a `google.protobuf.Struct`, which has the
 JSON data model: mappings become structs, sequences lists, and every
 number a double, so integers beyond ±2^53 lose precision (quote them as
-strings). The host resolves settings by YAML 1.2's core schema: `017` is
-17, `1e5` is a number, `1_000`, `0b101`, `yes`, and dates are strings,
-and `<<` is an ordinary key. When it loads the config, it rejects tags
-other than `!!str`, aliases anywhere in the file, `.inf` and `.nan`, and
-integers beyond 64 bits or floats beyond a double. Checking settings
-against the schema, and building a form from it, is #16; until then, the
-plugin validates them and answers `INVALID_ARGUMENT` with a readable
-message.
+strings). How the host reads YAML values into settings is in
+`docs/config.md`. Checking settings against the schema, and building a
+form from it, is #16; until then, the plugin validates them and answers
+`INVALID_ARGUMENT` with a readable message.
 
 ## View schema v1
 
