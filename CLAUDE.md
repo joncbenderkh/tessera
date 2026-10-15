@@ -25,8 +25,9 @@ dialogs). Edit mode must be able to re-enable any disabled panel.
 - **Version:** starts at `0.1.0`. `./VERSION` is the single source of truth,
   embedded at build time (`//go:embed VERSION`); release tags `vX.Y.Z`
   mirror it.
-- **Language / stack:** Go 1.24+, the minimum set by `gioui.org` v0.10.3
-  (latest as of 2026-10-14, whose `go.mod` declares `go 1.24.0`). The
+- **Language / stack:** Go 1.25+, the minimum set by
+  `google.golang.org/grpc` v1.84.0 (latest as of 2026-10-15, whose
+  `go.mod` declares `go 1.25.0`; `gioui.org` v0.10.3 needs 1.24). The
   local toolchain is go1.27.2 (`/usr/local/go`).
 - **GUI:** [Gio](https://gioui.org) (`gioui.org`), immediate mode. Gio needs
   cgo on Linux (Wayland/X11, EGL/Vulkan, xkbcommon), so the host binary is
@@ -70,7 +71,10 @@ dialogs). Edit mode must be able to re-enable any disabled panel.
 - `cmd/tessera`: the host (Gio window, layout, plugin manager).
 - `internal/config`: loading, validating, saving, and watching the user
   config.
-- `proto/`: the plugin protocol (`.proto`) and generated Go code.
+- `proto/`: the plugin protocol. The `.proto` files and the Go code
+  generated from them live in `proto/tessera/v1` (Go package
+  `tesserav1`); `buf.yaml` and `buf.gen.yaml` sit in `proto/`. The
+  protocol is described in `docs/protocol.md`.
 - `sdk/`: the Go helper library plugin authors import, which hides the
   go-plugin/gRPC boilerplate.
 - `plugins/<name>`: first-party panels, each its own `main` package.
@@ -84,10 +88,16 @@ Use the local toolchain: `export PATH=/usr/local/go/bin:$PATH`.
 - Vet: `go vet ./...`
 - Format check: `gofmt -l .` (must print nothing).
 - Lint: `go run honnef.co/go/tools/cmd/staticcheck@v0.8.2 ./...`
+- Regenerate protocol code after editing a `.proto`: `go generate ./proto`.
+  It runs `buf` and the protoc plugins through `go run`, so no `protoc`
+  install is needed. Generated files are committed.
+- Lint the protocol (from `proto/`):
+  `go run github.com/bufbuild/buf/cmd/buf@v1.74.0 lint` and
+  `go run github.com/bufbuild/buf/cmd/buf@v1.74.0 format -d --exit-code`.
 - CI (`.github/workflows/ci.yml`) builds, tests, vets, and checks the
   `CGO_ENABLED=0` build on both the `go.mod` minimum and stable Go. On
-  stable only, it also runs the format check, staticcheck, a `go generate`
-  drift check, and an SPDX header check. It does not run the host.
+  stable only, it also runs the format check, staticcheck, `buf lint` and
+  `buf format`, a `go generate` drift check, and an SPDX header check. It does not run the host.
 - Plugins and `sdk/` must also build with `CGO_ENABLED=0`.
 
 The host needs Gio's system packages. On Fedora: `wayland-devel`,
@@ -113,11 +123,12 @@ bare binary, not a signed `.app` bundle.
 ## Status
 
 The module and source skeleton exist (#4): the host opens an empty Gio
-window, and `proto/`, `sdk/`, and `plugins/` are placeholders. The backlog
-is tracked as GitHub issues. CI (#5), the release workflow (#6), and the
-config file (#7) are in place. The host loads the config at startup but
-does not yet apply reloads; that comes with the grid (#10). Next is the
-plugin protocol (#8).
+window, and `sdk/` and `plugins/` are placeholders. The backlog is tracked
+as GitHub issues. CI (#5), the release workflow (#6), the config file
+(#7), and plugin protocol v1 (#8) are in place. The host loads the config
+at startup but does not yet apply reloads; that comes with the grid (#10).
+Nothing speaks the protocol yet: the host side is #12 to #14 and the SDK
+is #18.
 
 ## Git workflow
 
