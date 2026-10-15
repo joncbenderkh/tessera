@@ -97,9 +97,10 @@ Use the local toolchain: `export PATH=/usr/local/go/bin:$PATH`.
 - Lint the protocol (from `proto/`):
   `go run github.com/bufbuild/buf/cmd/buf@v1.74.0 lint` and
   `go run github.com/bufbuild/buf/cmd/buf@v1.74.0 format -d --exit-code`.
-- Check the protocol for breaking changes against the point where the
-  branch left `origin/main` (from the repo root, after `git fetch`):
-  `go run github.com/bufbuild/buf/cmd/buf@v1.74.0 breaking proto --against "$(git rev-parse --git-common-dir)#ref=$(git merge-base HEAD origin/main),subdir=proto"`.
+- Check the protocol for breaking changes, with CI's rules, against the
+  point where the branch left `origin/main` (from `proto/`, after
+  `git fetch`):
+  `go run github.com/bufbuild/buf/cmd/buf@v1.74.0 breaking --config '{"version":"v2","breaking":{"use":["FILE"]}}' --against "$(git rev-parse --path-format=absolute --git-common-dir)#ref=$(git merge-base HEAD origin/main),subdir=proto"`.
 - CI (`.github/workflows/ci.yml`) builds, tests, vets, and checks the
   `CGO_ENABLED=0` build on both the `go.mod` minimum and stable Go. On
   stable only, it also runs the format check, staticcheck, `buf lint`,
@@ -145,3 +146,5 @@ is #18.
 Never commit on or push to `main`; it is branch-protected on GitHub, and
 local `pre-commit`/`pre-push` hooks reject it. Each change goes on its own
 branch, in a worktree that sits beside `main/`, and lands through a PR.
+PRs are squash-merged; rebase merging is off on GitHub, so `HEAD~1` on
+`main` is always the previous `main` (CI relies on this).

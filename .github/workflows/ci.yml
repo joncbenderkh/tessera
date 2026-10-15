@@ -89,7 +89,10 @@ jobs:
           go run github.com/bufbuild/buf/cmd/buf@v1.74.0 format -d --exit-code
 
       # The rules are pinned here rather than read from proto/buf.yaml,
-      # so a change cannot weaken the check that judges it.
+      # so editing that file cannot weaken them. The pinned config
+      # replaces buf.yaml, so it must repeat any deps or excludes added
+      # there. HEAD~1 is the previous main because main takes only squash
+      # and merge commits (rebase merging is off).
       - name: Check protocol for breaking changes
         if: matrix.lint
         working-directory: proto
