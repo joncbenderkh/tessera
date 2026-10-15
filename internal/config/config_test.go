@@ -69,6 +69,21 @@ func TestParseRejectsFractionalIntegers(t *testing.T) {
 	}
 }
 
+func TestParseRejectsNonFiniteSettings(t *testing.T) {
+	for _, tt := range []struct{ value, path string }{
+		{".inf", "settings.show_seconds"},
+		{"-.Inf", "settings.show_seconds"},
+		{".nan", "settings.show_seconds"},
+		{"{deep: [1, .inf]}", "settings.show_seconds.deep[1]"},
+	} {
+		data := strings.Replace(example, "show_seconds: no", "show_seconds: "+tt.value, 1)
+		_, err := Parse([]byte(data))
+		if err == nil || !strings.Contains(err.Error(), tt.path+" must be a finite number") {
+			t.Errorf("%s: expected a finite-number error at %s, got %v", tt.value, tt.path, err)
+		}
+	}
+}
+
 func TestParseRejectsExtraDocuments(t *testing.T) {
 	_, err := Parse([]byte(example + "---\ngrid: {row_hieght: 200}\n"))
 	if err == nil || !strings.Contains(err.Error(), "YAML documents") {

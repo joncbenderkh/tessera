@@ -71,14 +71,17 @@ else needs a new version. `buf breaking` (`FILE` rules) is configured in
 `proto/buf.yaml` for checking this; CI does not run it yet.
 
 Since a field's type cannot change, a future view schema version is a new
-package (`tessera.v2.View`, say) carried in a new field next to `view` in
-`WatchResponse` and `RenderResponse`. The plugin sets only the field for
-the version it picked in `Describe`.
+package (`tessera.v2.View`, say) carried in a new field of the `content`
+oneof in `WatchResponse` and `RenderResponse`, beside `view`. The oneof
+makes the plugin set only the field for the version it picked in
+`Describe`.
 
 ## Lifecycle
 
 The host launches **one plugin process per panel** in the config, so two
-clocks with different time zones are two processes.
+clocks with different time zones are two processes. To fill the panel
+picker, it may also launch a plugin that has no panel, call only
+`Describe`, and shut it down.
 
 ```
 host                                    plugin
@@ -98,7 +101,9 @@ host                                    plugin
   stops polling; until a Configure succeeds, it makes no Watch or Render
   call.
 - **Watch** is the normal path: the plugin pushes a complete view each
-  time its content changes, starting with the current one. When nothing
+  time its content changes, starting with the current one. The first
+  response always carries a view: a plugin still fetching data sends
+  widgets marked `loading`. When nothing
   changes for `heartbeat_interval`, it sends a `WatchResponse` without a
   view, so a silent stream means a hung plugin. The host reads one
   stream per plugin and cancels it before opening another, but the
@@ -117,12 +122,15 @@ at a time and in order, so events never overtake each other. A call that
 misses its deadline counts as a hang: the host restarts the plugin
 before making another call, so a timed-out handler never overlaps the
 next one. A Watch stream that ends without the host cancelling it, other
-than with `UNIMPLEMENTED` before its first response, is a protocol
-failure.
+than with `UNIMPLEMENTED` before its first response or a view over a
+limit, is a protocol failure.
 
 Every view is complete: it replaces the previous one rather than patching
 it. Views are small, and this keeps plugins stateless about what the host
-has drawn.
+has drawn. A response is at most 4 MiB encoded, gRPC's default receive
+limit, and widgets nest at most 16 deep. A view over either limit fails
+its stream or Render call; the host shows an error tile naming the limit,
+does not restart the plugin, and tries again after the next Configure.
 
 The host puts a deadline on every unary call, treats a Watch stream that
 stays silent for twice the heartbeat interval as hung, and restarts a
@@ -145,6 +153,8 @@ panel's `settings` block in the config file. The host passes the settings
 to `Configure` as a `google.protobuf.Struct`, which has the JSON data
 model: mappings become structs, sequences lists, and every number a
 double, so integers beyond ±2^53 lose precision (quote them as strings).
+JSON has no infinity or NaN, so the host rejects `.inf` and `.nan`
+settings when it loads the config.
 Dates arrive as strings as written, and `!!binary` values as base64
 strings. Checking settings against the schema, and building a form from
 it, is #16; until then, the plugin validates them and answers

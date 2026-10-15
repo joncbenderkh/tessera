@@ -71,7 +71,7 @@ func (c *counter) Watch(req *tesserav1.WatchRequest, stream grpc.ServerStreaming
 		heartbeat = ticker.C
 	}
 	for n := 0; ; n++ {
-		if err := stream.Send(&tesserav1.WatchResponse{View: c.view(n)}); err != nil {
+		if err := stream.Send(&tesserav1.WatchResponse{Content: &tesserav1.WatchResponse_View{View: c.view(n)}}); err != nil {
 			return err
 		}
 	idle:
@@ -141,6 +141,10 @@ func TestPanelLifecycle(t *testing.T) {
 	}
 	if _, err := client.Configure(ctx, &tesserav1.ConfigureRequest{PanelId: "c", Settings: settings}); err != nil {
 		t.Fatal(err)
+	}
+	_, err = client.Configure(ctx, &tesserav1.ConfigureRequest{PanelId: "c"})
+	if status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("rejected reconfigure: got %v, want InvalidArgument", err)
 	}
 
 	stream, err := client.Watch(ctx, &tesserav1.WatchRequest{})

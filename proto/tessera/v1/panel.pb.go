@@ -96,7 +96,8 @@ type DescribeResponse struct {
 	// One-line description shown in the panel picker.
 	Description string `protobuf:"bytes,3,opt,name=description,proto3" json:"description,omitempty"`
 	// The plugin protocol version the plugin speaks. Must equal the
-	// version agreed in the transport handshake.
+	// version agreed in the transport handshake; otherwise the host stops
+	// the plugin and shows an error tile.
 	ProtocolVersion uint32 `protobuf:"varint,4,opt,name=protocol_version,json=protocolVersion,proto3" json:"protocol_version,omitempty"`
 	// The view schema version the plugin will send. Must be one of
 	// DescribeRequest.view_versions; otherwise the host stops the plugin
@@ -400,11 +401,15 @@ func (x *WatchRequest) GetHeartbeatInterval() *durationpb.Duration {
 // WatchResponse is one view update.
 type WatchResponse struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// The panel's complete new view, in view schema version 1. It replaces
-	// the previous one. Unset makes the response a heartbeat, which keeps
-	// the current view. A later view schema version gets its own field
-	// here, and the plugin sets only the one for the negotiated version.
-	View          *View `protobuf:"bytes,1,opt,name=view,proto3" json:"view,omitempty"`
+	// The panel's complete new view, in the negotiated view schema version.
+	// It replaces the previous one. None set makes the response a
+	// heartbeat, which keeps the current view. A later view schema version
+	// adds its own field here.
+	//
+	// Types that are valid to be assigned to Content:
+	//
+	//	*WatchResponse_View
+	Content       isWatchResponse_Content `protobuf_oneof:"content"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -439,12 +444,32 @@ func (*WatchResponse) Descriptor() ([]byte, []int) {
 	return file_tessera_v1_panel_proto_rawDescGZIP(), []int{6}
 }
 
-func (x *WatchResponse) GetView() *View {
+func (x *WatchResponse) GetContent() isWatchResponse_Content {
 	if x != nil {
-		return x.View
+		return x.Content
 	}
 	return nil
 }
+
+func (x *WatchResponse) GetView() *View {
+	if x != nil {
+		if x, ok := x.Content.(*WatchResponse_View); ok {
+			return x.View
+		}
+	}
+	return nil
+}
+
+type isWatchResponse_Content interface {
+	isWatchResponse_Content()
+}
+
+type WatchResponse_View struct {
+	// The view in view schema version 1.
+	View *View `protobuf:"bytes,1,opt,name=view,proto3,oneof"`
+}
+
+func (*WatchResponse_View) isWatchResponse_Content() {}
 
 // RenderRequest asks for the current view.
 type RenderRequest struct {
@@ -486,10 +511,13 @@ func (*RenderRequest) Descriptor() ([]byte, []int) {
 // RenderResponse is the current view.
 type RenderResponse struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// The panel's complete current view, in view schema version 1. A later
-	// view schema version gets its own field here, and the plugin sets
-	// only the one for the negotiated version.
-	View *View `protobuf:"bytes,1,opt,name=view,proto3" json:"view,omitempty"`
+	// The panel's complete current view, in the negotiated view schema
+	// version. A later view schema version adds its own field here.
+	//
+	// Types that are valid to be assigned to Content:
+	//
+	//	*RenderResponse_View
+	Content isRenderResponse_Content `protobuf_oneof:"content"`
 	// How long the host should wait before polling again. Unset or zero
 	// means the host's default interval. The host may clamp it.
 	PollInterval  *durationpb.Duration `protobuf:"bytes,2,opt,name=poll_interval,json=pollInterval,proto3" json:"poll_interval,omitempty"`
@@ -527,9 +555,18 @@ func (*RenderResponse) Descriptor() ([]byte, []int) {
 	return file_tessera_v1_panel_proto_rawDescGZIP(), []int{8}
 }
 
+func (x *RenderResponse) GetContent() isRenderResponse_Content {
+	if x != nil {
+		return x.Content
+	}
+	return nil
+}
+
 func (x *RenderResponse) GetView() *View {
 	if x != nil {
-		return x.View
+		if x, ok := x.Content.(*RenderResponse_View); ok {
+			return x.View
+		}
 	}
 	return nil
 }
@@ -540,6 +577,17 @@ func (x *RenderResponse) GetPollInterval() *durationpb.Duration {
 	}
 	return nil
 }
+
+type isRenderResponse_Content interface {
+	isRenderResponse_Content()
+}
+
+type RenderResponse_View struct {
+	// The view in view schema version 1.
+	View *View `protobuf:"bytes,1,opt,name=view,proto3,oneof"`
+}
+
+func (*RenderResponse_View) isRenderResponse_Content() {}
 
 // HandleEventRequest is one user input event.
 type HandleEventRequest struct {
@@ -803,13 +851,15 @@ const file_tessera_v1_panel_proto_rawDesc = "" +
 	"\x04size\x18\x03 \x01(\v2\x14.tessera.v1.GridSizeR\x04size\"\x13\n" +
 	"\x11ConfigureResponse\"X\n" +
 	"\fWatchRequest\x12H\n" +
-	"\x12heartbeat_interval\x18\x01 \x01(\v2\x19.google.protobuf.DurationR\x11heartbeatInterval\"5\n" +
-	"\rWatchResponse\x12$\n" +
-	"\x04view\x18\x01 \x01(\v2\x10.tessera.v1.ViewR\x04view\"\x0f\n" +
-	"\rRenderRequest\"v\n" +
-	"\x0eRenderResponse\x12$\n" +
-	"\x04view\x18\x01 \x01(\v2\x10.tessera.v1.ViewR\x04view\x12>\n" +
-	"\rpoll_interval\x18\x02 \x01(\v2\x19.google.protobuf.DurationR\fpollInterval\"\x89\x01\n" +
+	"\x12heartbeat_interval\x18\x01 \x01(\v2\x19.google.protobuf.DurationR\x11heartbeatInterval\"B\n" +
+	"\rWatchResponse\x12&\n" +
+	"\x04view\x18\x01 \x01(\v2\x10.tessera.v1.ViewH\x00R\x04viewB\t\n" +
+	"\acontent\"\x0f\n" +
+	"\rRenderRequest\"\x83\x01\n" +
+	"\x0eRenderResponse\x12&\n" +
+	"\x04view\x18\x01 \x01(\v2\x10.tessera.v1.ViewH\x00R\x04view\x12>\n" +
+	"\rpoll_interval\x18\x02 \x01(\v2\x19.google.protobuf.DurationR\fpollIntervalB\t\n" +
+	"\acontent\"\x89\x01\n" +
 	"\x12HandleEventRequest\x127\n" +
 	"\bactivate\x18\x01 \x01(\v2\x19.tessera.v1.ActivateEventH\x00R\bactivate\x121\n" +
 	"\x06scroll\x18\x02 \x01(\v2\x17.tessera.v1.ScrollEventH\x00R\x06scrollB\a\n" +
@@ -892,6 +942,12 @@ func file_tessera_v1_panel_proto_init() {
 		return
 	}
 	file_tessera_v1_view_proto_init()
+	file_tessera_v1_panel_proto_msgTypes[6].OneofWrappers = []any{
+		(*WatchResponse_View)(nil),
+	}
+	file_tessera_v1_panel_proto_msgTypes[8].OneofWrappers = []any{
+		(*RenderResponse_View)(nil),
+	}
 	file_tessera_v1_panel_proto_msgTypes[9].OneofWrappers = []any{
 		(*HandleEventRequest_Activate)(nil),
 		(*HandleEventRequest_Scroll)(nil),

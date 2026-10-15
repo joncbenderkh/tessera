@@ -50,7 +50,9 @@ type PanelServiceClient interface {
 	// and makes no Watch or Render call until a later Configure succeeds.
 	Configure(ctx context.Context, in *ConfigureRequest, opts ...grpc.CallOption) (*ConfigureResponse, error)
 	// Watch streams a new view whenever the panel's content changes,
-	// starting with the current view, and a heartbeat when nothing changed
+	// starting with the current view (the first response always carries
+	// one; a plugin still fetching data sends widgets marked loading), and
+	// a heartbeat when nothing changed
 	// within WatchRequest.heartbeat_interval. The host reads at most one
 	// stream per plugin and cancels it before opening another, but the
 	// cancelled handler may still be returning when the next one starts,
@@ -158,7 +160,9 @@ type PanelServiceServer interface {
 	// and makes no Watch or Render call until a later Configure succeeds.
 	Configure(context.Context, *ConfigureRequest) (*ConfigureResponse, error)
 	// Watch streams a new view whenever the panel's content changes,
-	// starting with the current view, and a heartbeat when nothing changed
+	// starting with the current view (the first response always carries
+	// one; a plugin still fetching data sends widgets marked loading), and
+	// a heartbeat when nothing changed
 	// within WatchRequest.heartbeat_interval. The host reads at most one
 	// stream per plugin and cancels it before opening another, but the
 	// cancelled handler may still be returning when the next one starts,

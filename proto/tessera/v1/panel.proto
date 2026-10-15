@@ -30,7 +30,9 @@ service PanelService {
   rpc Configure(ConfigureRequest) returns (ConfigureResponse);
 
   // Watch streams a new view whenever the panel's content changes,
-  // starting with the current view, and a heartbeat when nothing changed
+  // starting with the current view (the first response always carries
+  // one; a plugin still fetching data sends widgets marked loading), and
+  // a heartbeat when nothing changed
   // within WatchRequest.heartbeat_interval. The host reads at most one
   // stream per plugin and cancels it before opening another, but the
   // cancelled handler may still be returning when the next one starts,
@@ -74,7 +76,8 @@ message DescribeResponse {
   // One-line description shown in the panel picker.
   string description = 3;
   // The plugin protocol version the plugin speaks. Must equal the
-  // version agreed in the transport handshake.
+  // version agreed in the transport handshake; otherwise the host stops
+  // the plugin and shows an error tile.
   uint32 protocol_version = 4;
   // The view schema version the plugin will send. Must be one of
   // DescribeRequest.view_versions; otherwise the host stops the plugin
@@ -121,11 +124,14 @@ message WatchRequest {
 
 // WatchResponse is one view update.
 message WatchResponse {
-  // The panel's complete new view, in view schema version 1. It replaces
-  // the previous one. Unset makes the response a heartbeat, which keeps
-  // the current view. A later view schema version gets its own field
-  // here, and the plugin sets only the one for the negotiated version.
-  View view = 1;
+  // The panel's complete new view, in the negotiated view schema version.
+  // It replaces the previous one. None set makes the response a
+  // heartbeat, which keeps the current view. A later view schema version
+  // adds its own field here.
+  oneof content {
+    // The view in view schema version 1.
+    View view = 1;
+  }
 }
 
 // RenderRequest asks for the current view.
@@ -133,10 +139,12 @@ message RenderRequest {}
 
 // RenderResponse is the current view.
 message RenderResponse {
-  // The panel's complete current view, in view schema version 1. A later
-  // view schema version gets its own field here, and the plugin sets
-  // only the one for the negotiated version.
-  View view = 1;
+  // The panel's complete current view, in the negotiated view schema
+  // version. A later view schema version adds its own field here.
+  oneof content {
+    // The view in view schema version 1.
+    View view = 1;
+  }
   // How long the host should wait before polling again. Unset or zero
   // means the host's default interval. The host may clamp it.
   google.protobuf.Duration poll_interval = 2;

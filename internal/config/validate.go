@@ -5,8 +5,10 @@ package config
 import (
 	"errors"
 	"fmt"
+	"maps"
 	"math"
 	"regexp"
+	"slices"
 )
 
 // pluginName is the grammar of plugin names, which are also executable
@@ -18,8 +20,8 @@ var pluginName = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,63}$`)
 var windowsDevice = regexp.MustCompile(`^(con|prn|aux|nul|com[0-9]|lpt[0-9])$`)
 
 // Validate checks the config's internal consistency. Plugin settings are
-// not checked here: that needs each plugin's config schema from its
-// handshake.
+// checked only for numbers JSON cannot carry; checking them against each
+// plugin's config schema needs its handshake.
 func (c Config) Validate() error {
 	var errs []error
 	if c.Version != SchemaVersion {
@@ -54,6 +56,9 @@ func (c Config) Validate() error {
 		case windowsDevice.MatchString(p.Plugin):
 			errs = append(errs, fmt.Errorf("%s: plugin %q is a reserved device name on Windows", name, p.Plugin))
 		}
+		if path, ok := nonFinite(p.Settings, "settings"); ok {
+			errs = append(errs, fmt.Errorf("%s: %s must be a finite number", name, path))
+		}
 		if p.W < 1 || p.H < 1 {
 			errs = append(errs, fmt.Errorf("%s: w and h must be at least 1, got %dx%d", name, p.W, p.H))
 			continue
@@ -80,6 +85,28 @@ func (c Config) Validate() error {
 		placed = append(placed, placement{p, name})
 	}
 	return errors.Join(errs...)
+}
+
+// nonFinite returns the path of the first infinite or NaN number in v,
+// which reaches plugins as JSON-model settings and so must be finite.
+func nonFinite(v any, path string) (string, bool) {
+	switch v := v.(type) {
+	case float64:
+		return path, math.IsInf(v, 0) || math.IsNaN(v)
+	case map[string]any:
+		for _, k := range slices.Sorted(maps.Keys(v)) {
+			if p, ok := nonFinite(v[k], path+"."+k); ok {
+				return p, true
+			}
+		}
+	case []any:
+		for i, e := range v {
+			if p, ok := nonFinite(e, fmt.Sprintf("%s[%d]", path, i)); ok {
+				return p, true
+			}
+		}
+	}
+	return "", false
 }
 
 type placement struct {
