@@ -3,6 +3,7 @@
 package pluginhost
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -15,12 +16,31 @@ import (
 // without shutting it down.
 func ownProcessGroup(*exec.Cmd) {}
 
-// killStatus is the status of a plugin the host killed: Kill ends it
-// with exit code 1.
-const killStatus = "exit status 1"
+// killCode is the exit code killGroup gives the plugin: 128 plus
+// SIGKILL's number, as a Unix shell reports a killed process, and
+// unlike the 1 of os.Process.Kill, which plugins also exit with.
+const killCode = 137
 
-// killGroup kills the plugin.
-func killGroup(p *os.Process) { _ = p.Kill() }
+// killStatus is the status of a plugin the host killed.
+const killStatus = "exit status 137"
+
+// badExecutable reports whether err, from starting the plugin, says its
+// file is not a program this system runs.
+func badExecutable(err error) bool { return errors.Is(err, windows.ERROR_BAD_EXE_FORMAT) }
+
+// killGroup kills the plugin. Go holds its handle until Wait, so the
+// PID still names it.
+func killGroup(p *os.Process) {
+	h, err := windows.OpenProcess(windows.PROCESS_TERMINATE, false, uint32(p.Pid))
+	if err != nil {
+		_ = p.Kill()
+		return
+	}
+	defer windows.CloseHandle(h)
+	if windows.TerminateProcess(h, killCode) != nil {
+		_ = p.Kill()
+	}
+}
 
 // canAwaitExit says awaitExit can wait without reaping.
 const canAwaitExit = true

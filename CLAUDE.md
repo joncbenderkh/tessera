@@ -77,9 +77,10 @@ dialogs). Edit mode must be able to re-enable any disabled panel.
 - `internal/config`: loading, validating, saving, and watching the user
   config.
 - `internal/pluginhost`: finding, launching, describing, configuring,
-  and shutting down plugins, one process per enabled panel. Its tests
-  run the test binary itself as a plugin whose behaviour follows its
-  file name (`plugin_test.go`).
+  supervising, and shutting down plugins, one process per enabled
+  panel: restarts with backoff, panel states, and each panel's logs.
+  Its tests run the test binary itself as a plugin whose behaviour
+  follows its file name (`plugin_test.go`).
 - `proto/`: the plugin protocol. The `.proto` files and the Go code
   generated from them live in `proto/tessera/v1` (Go package
   `tesserav1`); `buf.yaml` and `buf.gen.yaml` sit in `proto/`. The

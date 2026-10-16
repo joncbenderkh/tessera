@@ -130,7 +130,7 @@ type Manager struct {
 type panel struct {
 	PanelState
 	cfg     config.Panel
-	inst    *Instance
+	inst    *Instance // the live one, if any; under mu
 	logs    *ring
 	restart chan struct{} // a manual Restart; buffered, coalesced
 }
@@ -212,8 +212,8 @@ func (m *Manager) supervise(pn *panel) {
 			var lived time.Duration
 			var restart bool
 			exit, lived, restart, err = m.watchLive(pn, inst)
-			inst.Close()
 			m.update(pn, func(*PanelState) { pn.inst = nil })
+			m.closeLater(inst)
 			switch {
 			case m.ctx.Err() != nil:
 				return
@@ -262,6 +262,17 @@ func (m *Manager) supervise(pn *panel) {
 		case <-time.After(delay):
 		}
 	}
+}
+
+// closeLater shuts inst down in the background, which can take
+// seconds for a plugin that ignores Shutdown, so its panel shows what
+// comes next meanwhile. Close waits for it.
+func (m *Manager) closeLater(inst *Instance) {
+	m.wg.Add(1)
+	go func() {
+		defer m.wg.Done()
+		inst.Close()
+	}()
 }
 
 // watchLive waits while inst is live: until it exits, fails a health
@@ -495,8 +506,12 @@ func (m *Manager) Close() {
 	})
 }
 
-// logLines is how many lines each panel's Logs keeps.
-const logLines = 500
+// logLines is how many lines each panel's Logs keeps, and logLine the
+// bytes of each line it keeps.
+const (
+	logLines = 500
+	logLine  = 4 << 10
+)
 
 // ring keeps the last lines added to it, each stamped with the time and
 // a source tag.
@@ -512,6 +527,9 @@ func newRing(n int) *ring { return &ring{buf: make([]string, n)} }
 func (r *ring) add(source, line string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if len(line) > logLine {
+		line = strings.ToValidUTF8(line[:logLine], "") + "…"
+	}
 	r.buf[r.next] = time.Now().Format("15:04:05") + "  " + source + "  " + line
 	r.next = (r.next + 1) % len(r.buf)
 	r.full = r.full || r.next == 0

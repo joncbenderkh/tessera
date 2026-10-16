@@ -125,7 +125,7 @@ func launch(ctx context.Context, dir, name string, output func(line string), log
 		// handshake failed, which is no exit of its own.
 		var exit string
 		var hung hangError
-		if inst.runner.reaped != nil && Retryable(err) && !errors.As(err, &hung) && ctx.Err() == nil {
+		if inst.runner.started() && Retryable(err) && !errors.As(err, &hung) && ctx.Err() == nil {
 			select {
 			case <-inst.Done():
 				if s := awaitStatus(inst); inst.runner.ownExit(s) {
@@ -163,6 +163,9 @@ func (inst *Instance) start(ctx context.Context, name string, timeout time.Durat
 	// only in its error text; TestLaunchRejects pins the wording.
 	if err != nil && strings.Contains(err.Error(), "incompatible API version") {
 		return permanent(fmt.Errorf("plugin %q does not speak protocol %d: %w", name, tesserav1.ProtocolVersion, err))
+	}
+	if err != nil && badExecutable(err) {
+		return permanent(fmt.Errorf("plugin %q is not a valid executable: %w", name, err))
 	}
 	// As is a handshake that never comes.
 	if err != nil && strings.Contains(err.Error(), "timeout while waiting for plugin to start") {

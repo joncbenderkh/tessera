@@ -169,21 +169,23 @@ and restarts a plugin that crashes, hangs, or breaks the protocol:
 
 - A plugin whose process exits, that misses a call's deadline, or that
   fails the health check the host makes every 10 seconds while it is
-  live (go-plugin's `grpc.health.v1.Health`, also with a 5-second
-  deadline; any status but `SERVING` fails it), is shut down and launched again after 1 second, then 2,
-  4, and 8 after each further failure in a row. A launch that fails,
+  live (the health service above, for the service name `plugin`, also
+  with a 5-second deadline; any status but `SERVING` fails it), is shut
+  down and launched again after 1 second, then 2, 4, and 8 after each
+  further failure in a row. A launch that fails,
   short of the permanent failures below, counts the same way.
 - At the fifth failure in a row the host gives up and shows the panel
   as crashed, with the last error and, for a plugin that exited by
   itself, its exit status, until the user restarts it.
 - A plugin that stays up for a minute starts its count again.
 - Failures a restart cannot fix are not retried: a missing,
-  non-executable, or misnamed plugin, a version the host does not
+  non-executable, invalid (such as a script without a `#!` line), or
+  misnamed plugin, a version the host does not
   speak, and settings the plugin rejects with `INVALID_ARGUMENT`.
 
-The host keeps each panel's last 500 lines of plugin output and its
-lifecycle events (started, exited with status, restart scheduled, gave
-up) for the panel's Logs view.
+The host keeps each panel's last 500 lines of plugin output, each cut
+to 4 KiB, and its lifecycle events (started, exited with status,
+restart scheduled, gave up) for the panel's Logs view.
 
 Plugins are installed in `tessera/plugins` under the user data
 directory: `$XDG_DATA_HOME` (or `~/.local/share`) on Linux,

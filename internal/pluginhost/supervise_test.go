@@ -153,7 +153,9 @@ func TestManualRestart(t *testing.T) {
 		defer m.mu.Unlock()
 		return s.State == Live && m.panels[1].inst != nil && m.panels[1].inst != first
 	})
-	if !first.Exited() {
+	select { // shut down in the background
+	case <-first.Done():
+	case <-time.After(killTimeout + reapTimeout + pipeTimeout):
 		t.Error("the replaced plugin is still running")
 	}
 
@@ -445,6 +447,26 @@ func TestQueuedRestartResetsFailures(t *testing.T) {
 	}
 }
 
+func TestRestartDoesNotWaitForShutdown(t *testing.T) {
+	if !canFreeze {
+		t.Skip("cannot stop a process on this OS")
+	}
+	dir := install(t, "freezes-live") // never answers Shutdown, so Close takes seconds
+	logger, _ := newLogger()
+	m := StartWith(panels("freezes-live"), dir, logger, fast) // no health check in the test's time
+	defer m.Close()
+	waitFor(t, m, "p0", "live", is(Live))
+	time.Sleep(500 * time.Millisecond) // frozen by now
+	start := time.Now()
+	if err := m.Restart("p0"); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, m, "p0", "no longer live", func(s PanelState) bool { return s.State != Live })
+	if d := time.Since(start); d > time.Second {
+		t.Errorf("the panel stayed Live for %v after Restart", d)
+	}
+}
+
 func TestRing(t *testing.T) {
 	r := newRing(3)
 	for i := range 5 {
@@ -453,5 +475,10 @@ func TestRing(t *testing.T) {
 	got := r.lines()
 	if len(got) != 3 || !strings.HasSuffix(got[0], "HOST  2") || !strings.HasSuffix(got[2], "HOST  4") {
 		t.Fatalf("got %q", got)
+	}
+	r.add("PLUGIN", strings.Repeat("x", logLine-1)+"éé") // cut inside the first é
+	last := r.lines()[2]
+	if line := last[strings.Index(last, "PLUGIN  ")+len("PLUGIN  "):]; line != strings.Repeat("x", logLine-1)+"…" {
+		t.Errorf("a long line became %d bytes: …%q", len(line), line[max(0, len(line)-8):])
 	}
 }

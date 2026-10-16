@@ -5,6 +5,7 @@
 package pluginhost
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"syscall"
@@ -12,6 +13,10 @@ import (
 
 // killStatus is the status of a plugin the host killed.
 const killStatus = "signal: killed"
+
+// badExecutable reports whether err, from starting the plugin, says its
+// file is not a program this system runs.
+func badExecutable(err error) bool { return errors.Is(err, syscall.ENOEXEC) }
 
 // killGroup kills the plugin's process group.
 func killGroup(p *os.Process) {
