@@ -61,7 +61,7 @@ func TestRestartsAfterCrashes(t *testing.T) {
 	m := StartWith(panels("flaky"), dir, logger, fast)
 	defer m.Close()
 	s := waitFor(t, m, "p0", "restarting", is(Restarting))
-	if s.Attempt != 1 || s.RestartAt.IsZero() || !strings.Contains(s.Err.Error(), "exited unexpectedly") {
+	if s.Failures != 1 || s.RestartAt.IsZero() || !strings.Contains(s.Err.Error(), "exited unexpectedly") {
 		t.Errorf("first restart: %+v", s)
 	}
 	waitFor(t, m, "p0", "live after two crashes", func(s PanelState) bool {
@@ -81,13 +81,13 @@ func TestGivesUpAfterMaxAttempts(t *testing.T) {
 	m := StartWith(panels("crashes"), dir, logger, fast)
 	defer m.Close()
 	s := waitFor(t, m, "p0", "crashed", is(Crashed))
-	if s.Attempt != fast.MaxAttempts || s.ExitStatus != "exit status 3" {
-		t.Errorf("got attempt %d, status %q; want %d, exit status 3", s.Attempt, s.ExitStatus, fast.MaxAttempts)
+	if s.Failures != fast.MaxAttempts || s.ExitStatus != "exit status 3" {
+		t.Errorf("got attempt %d, status %q; want %d, exit status 3", s.Failures, s.ExitStatus, fast.MaxAttempts)
 	}
 	if n := countLines(m.Logs("p0"), "starting plugin"); n != fast.MaxAttempts {
 		t.Errorf("launched %d times, want %d", n, fast.MaxAttempts)
 	}
-	if countLines(m.Logs("p0"), "giving up after 3 failed attempts") != 1 {
+	if countLines(m.Logs("p0"), "giving up after failure 3/3") != 1 {
 		t.Errorf("no give-up event:\n%s", strings.Join(m.Logs("p0"), "\n"))
 	}
 	if strings.Contains(logs.String(), "plugin process exited") {
@@ -103,7 +103,7 @@ func TestHangCountsAsFailure(t *testing.T) {
 	m := StartWith(panels("hangs-configure"), dir, logger, opts)
 	defer m.Close()
 	s := waitFor(t, m, "p0", "crashed", is(Crashed))
-	if s.Attempt != 2 || !strings.Contains(s.Err.Error(), "hung: Configure did not answer within 300ms") {
+	if s.Failures != 2 || !strings.Contains(s.Err.Error(), "hung: Configure did not answer within 300ms") {
 		t.Errorf("got %+v", s)
 	}
 }
@@ -115,8 +115,8 @@ func TestPermanentFailureIsNotRetried(t *testing.T) {
 	defer m.Close()
 	s := waitFor(t, m, "p0", "crashed", is(Crashed))
 	time.Sleep(10 * fast.Backoff)
-	if n := countLines(m.Logs("p0"), "starting plugin"); s.Attempt != 1 || n != 1 {
-		t.Errorf("attempt %d, %d launches; want 1 of each", s.Attempt, n)
+	if n := countLines(m.Logs("p0"), "starting plugin"); s.Failures != 1 || n != 1 {
+		t.Errorf("attempt %d, %d launches; want 1 of each", s.Failures, n)
 	}
 	if countLines(m.Logs("p0"), "not restarting: ") != 1 {
 		t.Errorf("no not-restarting event:\n%s", strings.Join(m.Logs("p0"), "\n"))
@@ -307,6 +307,43 @@ func TestBackoffIsCapped(t *testing.T) {
 	}
 	if o := (Options{Backoff: -time.Second, MaxAttempts: -1}).withDefaults(); o.Backoff != time.Second || o.MaxAttempts != 5 {
 		t.Errorf("negative options not defaulted: %+v", o)
+	}
+}
+
+func TestExitStatusOfStartupCrash(t *testing.T) {
+	dir := install(t, "dies-at-start")
+	logger, _ := newLogger()
+	opts := fast
+	opts.MaxAttempts = 1
+	m := StartWith(panels("dies-at-start"), dir, logger, opts)
+	defer m.Close()
+	s := waitFor(t, m, "p0", "crashed", is(Crashed))
+	if s.ExitStatus != "exit status 7" {
+		t.Errorf("got exit status %q, want exit status 7", s.ExitStatus)
+	}
+	logs := m.Logs("p0")
+	for _, want := range []string{"PLUGIN  boom", "plugin exited: exit status 7"} {
+		if countLines(logs, want) == 0 {
+			t.Errorf("logs lack %q:\n%s", want, strings.Join(logs, "\n"))
+		}
+	}
+	for _, l := range logs {
+		if strings.Contains(l, "\n") {
+			t.Errorf("a Logs entry spans lines: %q", l)
+		}
+	}
+}
+
+func TestPluginsOwnDeadlineIsNoHang(t *testing.T) {
+	dir := install(t, "upstream-timeout")
+	logger, _ := newLogger()
+	opts := fast
+	opts.MaxAttempts = 1
+	m := StartWith(panels("upstream-timeout"), dir, logger, opts)
+	defer m.Close()
+	s := waitFor(t, m, "p0", "crashed", is(Crashed))
+	if strings.Contains(s.Err.Error(), "hung") || !strings.Contains(s.Err.Error(), "weather service did not answer") {
+		t.Errorf("got %v, want the plugin's own error, not a hang", s.Err)
 	}
 }
 

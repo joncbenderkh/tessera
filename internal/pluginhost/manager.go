@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"strings"
 	"sync"
 	"time"
 
@@ -56,12 +57,13 @@ type PanelState struct {
 
 	// For Restarting and Crashed: why the plugin failed, how its process
 	// ended if it ran, and how many launches in a row have failed.
-	// Attempt counts failures so far (also while Starting, for "attempt
-	// n/MaxAttempts"), and RestartAt is the Backoff for that count: 1 s
-	// after the first failure, 2 s after the second, and so on.
+	// Failures counts the failed launches so far, also while Starting
+	// (the launch under way is attempt Failures+1 of MaxAttempts), and
+	// RestartAt is the Backoff for that count: 1 s after the first
+	// failure, 2 s after the second, and so on.
 	Err         error
 	ExitStatus  string
-	Attempt     int
+	Failures    int
 	MaxAttempts int
 	RestartAt   time.Time // Restarting only
 }
@@ -175,7 +177,7 @@ func StartWith(cfg config.Config, dir string, logger *log.Logger, opts Options) 
 // permanent failure (see Retryable) and the last failed attempt leave
 // the panel Crashed until Restart.
 func (m *Manager) supervise(pn *panel) {
-	attempt := 0 // failed launches in a row
+	failures := 0 // failed launches in a row
 	for {
 		m.update(pn, func(s *PanelState) {
 			// A Restart asked for before this launch is this launch; one
@@ -186,7 +188,7 @@ func (m *Manager) supervise(pn *panel) {
 			default:
 			}
 			s.State, s.Info, s.Err, s.ExitStatus = Starting, nil, nil, ""
-			s.Attempt, s.RestartAt = attempt, time.Time{}
+			s.Failures, s.RestartAt = failures, time.Time{}
 		})
 		m.event(pn, "starting plugin %s", pn.Plugin)
 		inst, exit, err := m.launch(pn)
@@ -214,46 +216,46 @@ func (m *Manager) supervise(pn *panel) {
 				return
 			case restart:
 				m.event(pn, "restart requested")
-				attempt = 0
+				failures = 0
 				continue
 			}
 			if lived >= m.opts.ResetAfter {
-				attempt = 0
+				failures = 0
 			}
 		}
 		if exit != "" {
 			m.event(pn, "plugin exited: %s", exit)
 		}
 
-		attempt++
-		if !Retryable(err) || attempt >= m.opts.MaxAttempts {
+		failures++
+		if !Retryable(err) || failures >= m.opts.MaxAttempts {
 			if Retryable(err) {
-				m.event(pn, "giving up after %d failed attempts: %v", attempt, err)
+				m.event(pn, "giving up after failure %d/%d: %v", failures, m.opts.MaxAttempts, err)
 			} else {
 				m.event(pn, "not restarting: %v", err)
 			}
-			m.update(pn, func(s *PanelState) { s.State, s.Err, s.ExitStatus, s.Attempt = Crashed, err, exit, attempt })
+			m.update(pn, func(s *PanelState) { s.State, s.Err, s.ExitStatus, s.Failures = Crashed, err, exit, failures })
 			select {
 			case <-m.ctx.Done():
 				return
 			case <-pn.restart:
 				m.event(pn, "restart requested")
-				attempt = 0
+				failures = 0
 				continue
 			}
 		}
-		delay := m.opts.backoff(attempt)
-		m.event(pn, "%v; restarting in %v (attempt %d/%d failed)", err, delay, attempt, m.opts.MaxAttempts)
+		delay := m.opts.backoff(failures)
+		m.event(pn, "%v; restarting in %v (%d/%d failures)", err, delay, failures, m.opts.MaxAttempts)
 		m.update(pn, func(s *PanelState) {
 			s.State, s.Err, s.ExitStatus = Restarting, err, exit
-			s.Attempt, s.RestartAt = attempt, time.Now().Add(delay)
+			s.Failures, s.RestartAt = failures, time.Now().Add(delay)
 		})
 		select {
 		case <-m.ctx.Done():
 			return
 		case <-pn.restart:
 			m.event(pn, "restart requested")
-			attempt = 0
+			failures = 0
 		case <-time.After(delay):
 		}
 	}
@@ -281,10 +283,12 @@ func (m *Manager) watchLive(pn *panel, inst *Instance) (exit string, lived time.
 			perr := inst.Ping(ctx)
 			cancel()
 			if perr != nil && m.ctx.Err() == nil {
+				// A plugin that died makes the check fail before its exit
+				// is seen; give the exit a moment to show.
 				select {
-				case <-inst.Done(): // it exited meanwhile; report that instead
-					continue
-				default:
+				case <-inst.Done():
+					continue // reported by the case above
+				case <-time.After(500 * time.Millisecond):
 				}
 				return "", time.Since(start), false, hangError{fmt.Errorf("plugin %q hung: health check failed within %v: %w", inst.Info.GetName(), m.opts.CallTimeout, perr)}
 			}
@@ -300,9 +304,9 @@ func (m *Manager) launch(pn *panel) (*Instance, string, error) {
 		m.logger.Printf("[panel %s] %s", pn.ID, line)
 		pn.logs.add("PLUGIN", line)
 	}
-	inst, err := launch(m.ctx, m.dir, pn.Plugin, output, m.logger, m.opts.CallTimeout)
+	inst, exit, err := launch(m.ctx, m.dir, pn.Plugin, output, m.logger, m.opts.CallTimeout)
 	if err != nil {
-		return nil, "", err
+		return nil, exit, err
 	}
 	if err := configure(m.ctx, inst, pn.cfg, m.opts.CallTimeout); err != nil {
 		// A plugin that died while configuring says how. Its lost
@@ -357,8 +361,11 @@ func configure(ctx context.Context, inst *Instance, p config.Panel, timeout time
 	if s, ok := status.FromError(err); ok && s.Code() == codes.InvalidArgument {
 		return permanent(fmt.Errorf("plugin %q rejected the settings: %s", p.Plugin, s.Message()))
 	}
-	// The plugin sees the deadline too, and may report it first.
-	if errors.Is(ctx.Err(), context.DeadlineExceeded) || status.Code(err) == codes.DeadlineExceeded {
+	// The plugin sees the deadline too, and may report it first; a
+	// DeadlineExceeded well before the deadline is the plugin's own.
+	deadline, _ := ctx.Deadline()
+	if errors.Is(ctx.Err(), context.DeadlineExceeded) ||
+		status.Code(err) == codes.DeadlineExceeded && time.Until(deadline) < min(timeout/10, 250*time.Millisecond) {
 		return hangError{fmt.Errorf("plugin %q hung: Configure did not answer within %v", p.Plugin, timeout)}
 	}
 	if err != nil {
@@ -390,7 +397,9 @@ func (m *Manager) event(pn *panel, format string, args ...any) {
 		return
 	}
 	msg := fmt.Sprintf(format, args...)
-	pn.logs.add("HOST", msg)
+	for _, line := range strings.Split(msg, "\n") { // Logs holds lines
+		pn.logs.add("HOST", line)
+	}
 	m.logger.Printf("panel %q: %s", pn.ID, msg)
 }
 
@@ -408,9 +417,9 @@ func (m *Manager) States() []PanelState {
 // Changed receives a value after a panel's state changes.
 func (m *Manager) Changed() <-chan struct{} { return m.changed }
 
-// Restart relaunches panel id's plugin now, at attempt 1: one that is
-// live is shut down first, and one waiting to restart or crashed starts
-// at once. It is the error tile's Restart button.
+// Restart relaunches panel id's plugin now, its failure count reset:
+// one that is live is shut down first, and one waiting to restart or
+// crashed starts at once. It is the error tile's Restart button.
 //
 // A panel already Starting is left alone: the launch under way is the
 // restart.

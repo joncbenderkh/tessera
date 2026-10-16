@@ -50,6 +50,10 @@ var rawStdout, rawStderr *os.File
 
 func servePlugin(mode string) {
 	rawStdout, rawStderr = os.Stdout, os.Stderr
+	if mode == "dies-at-start" {
+		fmt.Fprintln(os.Stderr, "boom")
+		os.Exit(7)
+	}
 	if mode == "escapes-early" {
 		child := exec.Command(os.Args[0])
 		child.Env = []string{sleeperKey + "=1"}
@@ -110,6 +114,10 @@ func (testPlugin) GRPCClient(context.Context, *plugin.GRPCBroker, *grpc.ClientCo
 //   - flaky: as crashes on its first two launches, then well-behaved.
 //   - hangs-configure: Configure never answers.
 //   - dies-configuring: exits with status 4 inside Configure.
+//   - dies-at-start: prints "boom" and exits with status 7 before the
+//     handshake.
+//   - upstream-timeout: Configure answers DeadlineExceeded at once, as
+//     a plugin whose own upstream call timed out would.
 //   - crash-then-hang: as crashes on its first launch; then Configure
 //     never answers.
 //   - freezes-live: stops itself shortly after Configure.
@@ -201,6 +209,8 @@ func (s *server) Configure(ctx context.Context, req *tesserav1.ConfigureRequest)
 		}
 	case "dies-configuring":
 		os.Exit(4)
+	case "upstream-timeout":
+		return nil, status.Error(codes.DeadlineExceeded, "weather service did not answer")
 	case "crash-then-hang":
 		if launches() == 1 {
 			crashSoon()

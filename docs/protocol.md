@@ -199,10 +199,10 @@ mutual TLS connection fails, it does not answer `Describe` within the
 call deadline, its `Describe` gives a different name or protocol
 version, or it picks a view schema version the host did not offer; a
 rejected `Configure` is recorded the same way. Of these, a failed
-handshake or connection and a `Describe` that does not answer are
-retried as above; the rest are the permanent failures. The reason is
-logged now and will be shown in the panel's place once the host draws
-the grid (#10, #11).
+handshake or connection and a `Describe` that does not answer, or
+answers with an error, are retried as above; the rest are the
+permanent failures. The reason is logged now and will be shown in the
+panel's place once the host draws the grid (#10, #11).
 Names are 1 to 64 lowercase letters, digits, and hyphens, starting with a
 letter or digit, so they can never name a path outside the plugins
 directory. Names Windows reserves for devices (`con`, `prn`, `aux`,

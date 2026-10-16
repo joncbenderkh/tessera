@@ -130,8 +130,8 @@ func TestStartReportsFailures(t *testing.T) {
 		`plugin "rejects" rejected the settings: timezone: unknown`,
 		`plugin "missing" is not installed in ` + dir,
 	} {
-		if s := states[i]; s.State != Crashed || s.Attempt != 1 || s.Err == nil || s.Err.Error() != want {
-			t.Errorf("panel %s: got %v after %d attempts: %v, want crashed after 1: %s", s.ID, s.State, s.Attempt, s.Err, want)
+		if s := states[i]; s.State != Crashed || s.Failures != 1 || s.Err == nil || s.Err.Error() != want {
+			t.Errorf("panel %s: got %v after %d attempts: %v, want crashed after 1: %s", s.ID, s.State, s.Failures, s.Err, want)
 		}
 		if !strings.Contains(logs.String(), want) {
 			t.Errorf("log lacks %q", want)
