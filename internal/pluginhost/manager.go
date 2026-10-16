@@ -63,12 +63,13 @@ type PanelState struct {
 	// process ended if it exited by itself, and how many failures in a
 	// row there have been. Stopping carries only the new failure's Err;
 	// Failures there still counts the earlier ones. A failure is a
-	// launch that failed, or an exit or failed health check once live. Failures is kept while
-	// Starting (the launch under way is attempt Failures+1 of
-	// MaxAttempts), and RestartAt is the Backoff for that count: 1 s
-	// after the first failure, 2 s after the second, and so on. A
-	// permanent failure (see Retryable) is Crashed at once, whatever
-	// MaxAttempts says.
+	// launch that failed, or an exit or failed health check once live.
+	// Failures is kept while Starting (the launch under way is attempt
+	// Failures+1 of MaxAttempts) and while Live, until the panel has
+	// been live for ResetAfter. RestartAt is the Backoff for that
+	// count: 1 s after the first failure, 2 s after the second, and so
+	// on. A permanent failure (see Retryable) is Crashed at once,
+	// whatever MaxAttempts says.
 	Err         error
 	ExitStatus  string
 	Failures    int
@@ -138,7 +139,7 @@ type Manager struct {
 type panel struct {
 	PanelState
 	cfg     config.Panel
-	inst    *Instance // the live one, if any; under mu
+	inst    *Instance // the live one, if any; under mu; read by tests
 	logs    *ring
 	restart chan struct{} // a manual Restart; buffered, coalesced
 	told    bool          // Logs already name this failure; supervisor only
@@ -316,6 +317,8 @@ func (m *Manager) watchLive(pn *panel, inst *Instance) (exited bool, lived time.
 	start := time.Now()
 	tick := time.NewTicker(m.opts.PingInterval)
 	defer tick.Stop()
+	settled := time.NewTimer(m.opts.ResetAfter)
+	defer settled.Stop()
 	exit := func() (bool, time.Duration, bool, error) {
 		return true, time.Since(start), false, fmt.Errorf("plugin %q exited unexpectedly", inst.Info.GetName())
 	}
@@ -327,6 +330,9 @@ func (m *Manager) watchLive(pn *panel, inst *Instance) (exited bool, lived time.
 			return false, time.Since(start), true, nil
 		case <-inst.Done():
 			return exit()
+		case <-settled.C:
+			m.update(pn, func(s *PanelState) { s.Failures = 0 })
+			continue
 		case <-tick.C:
 		}
 		ctx, cancel := context.WithTimeout(m.ctx, m.opts.CallTimeout)

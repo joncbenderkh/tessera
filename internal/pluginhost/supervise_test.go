@@ -186,6 +186,17 @@ func TestAttemptsResetAfterStayingLive(t *testing.T) {
 	}
 }
 
+func TestFailuresClearOnceSettled(t *testing.T) {
+	dir := install(t, "flaky")
+	logger, _ := newLogger()
+	opts := fast
+	opts.ResetAfter = 500 * time.Millisecond // longer than a crash takes
+	m := StartWith(panels("flaky"), dir, logger, opts)
+	defer m.Close()
+	waitFor(t, m, "p0", "live after two failures", func(s PanelState) bool { return s.State == Live && s.Failures == 2 })
+	waitFor(t, m, "p0", "cleared its failures", func(s PanelState) bool { return s.State == Live && s.Failures == 0 })
+}
+
 func TestCloseDuringBackoff(t *testing.T) {
 	dir := install(t, "crashes")
 	logger, _ := newLogger()
