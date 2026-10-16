@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"syscall"
 
 	"github.com/adrg/xdg"
 
@@ -65,9 +66,9 @@ func cutExeSuffix(file string) (string, bool) {
 }
 
 // find returns the path of the plugin called name in dir, or an error
-// saying why it cannot be run. Those that name the file are permanent,
-// as restarting does not change it; one that stat itself returns is
-// not.
+// saying why it cannot be run. Those about the file or the way to it
+// are permanent, as restarting does not change them; others, such as an
+// I/O error, are not.
 func find(dir, name string) (string, error) {
 	if err := config.ValidPluginName(name); err != nil {
 		return "", permanent(err)
@@ -77,8 +78,11 @@ func find(dir, name string) (string, error) {
 	if errors.Is(err, fs.ErrNotExist) {
 		return "", permanent(fmt.Errorf("plugin %q is not installed in %s", name, dir))
 	}
+	if errors.Is(err, fs.ErrPermission) || errors.Is(err, syscall.ENOTDIR) {
+		return "", permanent(fmt.Errorf("plugin %q: %w", name, err))
+	}
 	if err != nil {
-		return "", err // such as EIO, or a mount not ready yet: worth retrying
+		return "", err // such as EIO: worth retrying
 	}
 	if !info.Mode().IsRegular() {
 		return "", permanent(fmt.Errorf("plugin %q: %s is not a regular file", name, path))

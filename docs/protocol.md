@@ -186,14 +186,15 @@ and restarts a plugin that crashes, hangs, or breaks the protocol:
   itself, its exit status, until the user restarts it.
 - A plugin that stays up for a minute starts its count again.
 - Failures a restart cannot fix are not retried: a missing,
-  non-executable, or misnamed plugin, one the system cannot run (not a
+  unreadable, non-executable, or misnamed plugin, one the system cannot run (not a
   program for it, a script whose interpreter is missing, or a file on
   a `noexec` mount), a version the host does not speak, and settings
   the plugin rejects with `INVALID_ARGUMENT`.
 
 The host keeps each panel's last 500 lines of plugin output, each cut
 to 4 KiB, and its lifecycle events (started, exited with status,
-restart scheduled, gave up) for the panel's Logs view.
+stopping with the reason, restart scheduled, gave up) for the panel's
+Logs view.
 
 Plugins are installed in `tessera/plugins` under the user data
 directory: `$XDG_DATA_HOME` (or `~/.local/share`) on Linux,

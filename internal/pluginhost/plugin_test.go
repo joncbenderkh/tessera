@@ -137,6 +137,8 @@ func (testPlugin) GRPCClient(context.Context, *plugin.GRPCBroker, *grpc.ClientCo
 //   - crashes: exits with status 3 shortly after each Configure.
 //   - flaky: as crashes on its first two launches, then well-behaved.
 //   - hangs-configure: Configure never answers.
+//   - freezes-configuring: the process stops itself inside Configure,
+//     so neither Configure nor Shutdown is answered.
 //   - dies-configuring: exits with status 4 inside Configure.
 //   - dies-at-start: prints "boom" and exits with status 7 before the
 //     handshake.
@@ -226,6 +228,8 @@ func (s *server) Configure(ctx context.Context, req *tesserav1.ConfigureRequest)
 	case "hangs-configure":
 		<-ctx.Done()
 		return nil, ctx.Err()
+	case "freezes-configuring":
+		freeze()
 	case "crashes":
 		crashSoon()
 	case "flaky":

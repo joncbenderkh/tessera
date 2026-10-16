@@ -13,6 +13,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -139,6 +140,7 @@ type panel struct {
 	inst    *Instance // the live one, if any; under mu
 	logs    *ring
 	restart chan struct{} // a manual Restart; buffered, coalesced
+	told    bool          // Logs already name this failure; supervisor only
 }
 
 // Start launches the plugin of every enabled panel in cfg from dir,
@@ -200,6 +202,7 @@ func (m *Manager) supervise(pn *panel) {
 			s.Failures, s.RestartAt = failures, time.Time{}
 		})
 		m.event(pn, "starting plugin %s", pn.Plugin)
+		pn.told = false
 		inst, exit, err := m.launch(pn)
 		if m.ctx.Err() != nil {
 			if inst != nil {
@@ -220,13 +223,11 @@ func (m *Manager) supervise(pn *panel) {
 			exited, lived, restart, err = m.watchLive(pn, inst)
 			if restart {
 				m.event(pn, "restart requested")
+				m.update(pn, func(s *PanelState) { s.State = Stopping })
+			} else if m.ctx.Err() == nil {
+				m.stopping(pn, err)
 			}
-			// Shown while the plugin is shut down, which can take
-			// seconds; the next one starts only after.
-			m.update(pn, func(s *PanelState) {
-				s.State, s.Err = Stopping, err
-				pn.inst = nil
-			})
+			m.update(pn, func(*PanelState) { pn.inst = nil })
 			if exited {
 				exit = orUnknown(awaitStatus(m.ctx, inst))
 			}
@@ -249,9 +250,9 @@ func (m *Manager) supervise(pn *panel) {
 		failures++
 		if !Retryable(err) || failures >= m.opts.MaxAttempts {
 			if Retryable(err) {
-				m.event(pn, "giving up after failure %d/%d: %v", failures, m.opts.MaxAttempts, err)
+				m.event(pn, "giving up after failure %d/%d%s", failures, m.opts.MaxAttempts, pn.untold(err))
 			} else {
-				m.event(pn, "not restarting: %v", err)
+				m.event(pn, "not restarting%s", pn.untold(err))
 			}
 			m.update(pn, func(s *PanelState) { s.State, s.Err, s.ExitStatus, s.Failures = Crashed, err, exit, failures })
 			select {
@@ -264,7 +265,7 @@ func (m *Manager) supervise(pn *panel) {
 			}
 		}
 		delay := m.opts.backoff(failures)
-		m.event(pn, "%v; restarting in %v (%d/%d failures)", err, delay, failures, m.opts.MaxAttempts)
+		m.event(pn, "restarting in %v (%d/%d failures)%s", delay, failures, m.opts.MaxAttempts, pn.untold(err))
 		m.update(pn, func(s *PanelState) {
 			s.State, s.Err, s.ExitStatus = Restarting, err, exit
 			s.Failures, s.RestartAt = failures, time.Now().Add(delay)
@@ -278,6 +279,22 @@ func (m *Manager) supervise(pn *panel) {
 		case <-time.After(delay):
 		}
 	}
+}
+
+// stopping logs err and shows pn as Stopping, before its failed plugin
+// is shut down, which can take seconds; the next one starts only after.
+func (m *Manager) stopping(pn *panel, err error) {
+	m.event(pn, "stopping plugin: %v", err)
+	pn.told = true
+	m.update(pn, func(s *PanelState) { s.State, s.Err = Stopping, err })
+}
+
+// untold is ": err" for a log line, unless the Logs already name err.
+func (pn *panel) untold(err error) string {
+	if pn.told {
+		return ""
+	}
+	return fmt.Sprintf(": %v", err)
 }
 
 // shutDown closes inst, and says so in pn's Logs if the process
@@ -358,11 +375,14 @@ func (m *Manager) launch(pn *panel) (*Instance, string, error) {
 		m.logger.Printf("[panel %s] %s", pn.ID, line)
 		pn.logs.add("PLUGIN", line)
 	}
-	inst, exit, err := launch(m.ctx, m.dir, pn.Plugin, output, m.logger, m.opts.CallTimeout)
+	inst, exit, err := launch(m.ctx, m.dir, pn.Plugin, output, m.logger, m.opts.CallTimeout, func(err error) { m.stopping(pn, err) })
 	if err != nil {
 		return nil, exit, err
 	}
 	if err := configure(m.ctx, inst, pn.cfg, m.opts.CallTimeout); err != nil {
+		if m.ctx.Err() == nil {
+			m.stopping(pn, err)
+		}
 		// A plugin that died while configuring says how. Its lost
 		// connection can fail the call before the exit is seen, so
 		// wait briefly for it. One that hung, or only rejected its
@@ -566,7 +586,11 @@ func (r *ring) add(source, line string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if len(line) > logLine {
-		line = strings.ToValidUTF8(line[:logLine], "") + "…"
+		cut := logLine - len("…")
+		for cut > 0 && !utf8.RuneStart(line[cut]) {
+			cut--
+		}
+		line = line[:cut] + "…"
 	}
 	r.buf[r.next] = time.Now().Format("15:04:05") + "  " + source + "  " + line
 	r.next = (r.next + 1) % len(r.buf)

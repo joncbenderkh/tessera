@@ -55,7 +55,7 @@ func settle(t *testing.T, m *Manager) []PanelState {
 		states := m.States()
 		done := true
 		for _, s := range states {
-			done = done && s.State != Starting
+			done = done && s.State != Starting && s.State != Stopping
 		}
 		if done {
 			return states
@@ -63,7 +63,7 @@ func settle(t *testing.T, m *Manager) []PanelState {
 		select {
 		case <-m.Changed():
 		case <-deadline:
-			t.Fatalf("panels still starting: %+v", states)
+			t.Fatalf("panels still starting or stopping: %+v", states)
 		}
 	}
 }
@@ -667,6 +667,26 @@ func TestLineWriter(t *testing.T) {
 	w.Flush()
 	if want := []string{"last"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("after finish: got %q, want %q", got, want)
+	}
+
+	// A Write whose callback stalls stops passing lines on once dropped.
+	got = nil
+	proceed := make(chan struct{})
+	var mu sync.Mutex
+	slow := &lineWriter{output: func(line string) {
+		<-proceed
+		mu.Lock()
+		got = append(got, line)
+		mu.Unlock()
+	}}
+	wrote := make(chan struct{})
+	go func() { slow.Write([]byte("a\nb\nc\n")); close(wrote) }()
+	time.Sleep(10 * time.Millisecond) // stalled on "a"
+	slow.drop()
+	close(proceed)
+	<-wrote
+	if want := []string{"a"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("after drop: got %q, want %q", got, want)
 	}
 }
 

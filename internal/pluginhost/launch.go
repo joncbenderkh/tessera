@@ -83,13 +83,15 @@ type Instance struct {
 // forwards over the GRPCStdio service. Canceling ctx stops the launch,
 // the handshake included. On error, no process is left running.
 func Launch(ctx context.Context, dir, name string, output func(line string), logger *log.Logger) (*Instance, error) {
-	inst, _, err := launch(ctx, dir, name, output, logger, callTimeout)
+	inst, _, err := launch(ctx, dir, name, output, logger, callTimeout, nil)
 	return inst, err
 }
 
 // launch is Launch with timeout as Describe's deadline. On failure it
-// also says how the plugin's process ended, if it started at all.
-func launch(ctx context.Context, dir, name string, output func(line string), logger *log.Logger, timeout time.Duration) (*Instance, string, error) {
+// also says how the plugin's process ended, if it started at all, and
+// calls stopping, if not nil, before it waits for or shuts down a
+// process that started.
+func launch(ctx context.Context, dir, name string, output func(line string), logger *log.Logger, timeout time.Duration, stopping func(error)) (*Instance, string, error) {
 	path, err := find(dir, name)
 	if err != nil {
 		return nil, "", err
@@ -126,6 +128,9 @@ func launch(ctx context.Context, dir, name string, output func(line string), log
 		// decide before Close ends it. One refused for good, or one
 		// that hung, is still running. go-plugin kills one whose
 		// handshake failed, which is no exit of its own.
+		if stopping != nil && inst.runner.started() && ctx.Err() == nil {
+			stopping(err)
+		}
 		var exit string
 		var hung hangError
 		if inst.runner.started() && Retryable(err) && !errors.As(err, &hung) && ctx.Err() == nil {
@@ -248,6 +253,9 @@ func (inst *Instance) Close() {
 		select {
 		case <-flushed:
 		case <-time.After(flushTimeout):
+			for _, w := range inst.outputs {
+				w.drop()
+			}
 		}
 		// go-plugin removes it only for a plugin that started.
 		if inst.runner.tmpDir != "" {
@@ -346,10 +354,10 @@ type lineWriter struct {
 func (w *lineWriter) Write(b []byte) (int, error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	if w.finished.Load() {
-		return len(b), nil
-	}
 	for _, c := range b {
+		if w.finished.Load() {
+			return len(b), nil
+		}
 		if c == '\n' {
 			w.output(string(bytes.TrimSuffix(w.line, []byte("\r")))) // Windows line ends
 			w.line = w.line[:0]
@@ -392,10 +400,19 @@ func (w *lineWriter) Flush() {
 	}
 }
 
-// finish flushes w and drops whatever is written to it afterwards:
-// go-plugin can still be passing on output a plugin sent before Close,
-// which must not land after the next launch's.
+// finish waits for a Write under way, flushes w, and drops whatever
+// is written to it afterwards: go-plugin can still be passing on output
+// a plugin sent before Close, which must not land after the next
+// launch's. Close bounds the wait and then calls drop.
 func (w *lineWriter) finish() {
-	w.Flush()
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if !w.finished.Load() && len(w.line) > 0 {
+		w.output(string(w.line))
+		w.line = w.line[:0]
+	}
 	w.finished.Store(true)
 }
+
+// drop stops w passing on any more lines, even in a Write under way.
+func (w *lineWriter) drop() { w.finished.Store(true) }

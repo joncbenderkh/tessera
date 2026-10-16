@@ -123,8 +123,8 @@ func TestPermanentFailureIsNotRetried(t *testing.T) {
 	if n := countLines(m.Logs("p0"), "starting plugin"); s.Failures != 1 || n != 1 {
 		t.Errorf("attempt %d, %d launches; want 1 of each", s.Failures, n)
 	}
-	if countLines(m.Logs("p0"), "not restarting: ") != 1 {
-		t.Errorf("no not-restarting event:\n%s", strings.Join(m.Logs("p0"), "\n"))
+	if logs := m.Logs("p0"); countLines(logs, "stopping plugin: ") != 1 || countLines(logs, "HOST  not restarting") != 1 {
+		t.Errorf("no stopping and not-restarting events:\n%s", strings.Join(logs, "\n"))
 	}
 }
 
@@ -322,7 +322,7 @@ func TestFailedHandshakeHasNoExitStatus(t *testing.T) {
 	t.Parallel()
 	dir := install(t, "junk-stdout")
 	logger, _ := newLogger()
-	_, exit, err := launch(context.Background(), dir, "junk-stdout", ignore, logger, callTimeout)
+	_, exit, err := launch(context.Background(), dir, "junk-stdout", ignore, logger, callTimeout, nil)
 	if err == nil || !strings.Contains(err.Error(), "Unrecognized remote plugin message") {
 		t.Fatalf("got %v, want a handshake error", err)
 	}
@@ -335,7 +335,7 @@ func TestNoHandshakeIsAHang(t *testing.T) {
 	t.Parallel() // waits startTimeout
 	dir := install(t, "slow-start")
 	logger, _ := newLogger()
-	_, exit, err := launch(context.Background(), dir, "slow-start", ignore, logger, callTimeout)
+	_, exit, err := launch(context.Background(), dir, "slow-start", ignore, logger, callTimeout, nil)
 	var hung hangError
 	if !errors.As(err, &hung) || !strings.Contains(err.Error(), "hung: no handshake within") {
 		t.Fatalf("got %v, want a hang", err)
@@ -553,7 +553,7 @@ func TestMissingInterpreterIsPermanent(t *testing.T) {
 	}
 }
 
-func TestUnreadableDirIsRetried(t *testing.T) {
+func TestUnreadableDirIsPermanent(t *testing.T) {
 	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
 		t.Skip("needs Unix permissions that bind")
 	}
@@ -563,8 +563,28 @@ func TestUnreadableDirIsRetried(t *testing.T) {
 	}
 	defer os.Chmod(dir, 0o700)
 	_, err := find(dir, "clock")
-	if err == nil || !Retryable(err) {
-		t.Fatalf("got %v, want a retryable error", err)
+	if err == nil || Retryable(err) {
+		t.Fatalf("got %v, want a permanent error", err)
+	}
+}
+
+func TestFailedLaunchShowsStopping(t *testing.T) {
+	if !canFreeze {
+		t.Skip("cannot stop a process on this OS")
+	}
+	dir := install(t, "freezes-configuring") // so Close takes seconds
+	logger, _ := newLogger()
+	m := StartWith(panels("freezes-configuring"), dir, logger, fast)
+	defer m.Close()
+	s := waitFor(t, m, "p0", "stopping", is(Stopping))
+	if s.Err == nil || !strings.Contains(s.Err.Error(), "hung: Configure") {
+		t.Errorf("got %v", s.Err)
+	}
+	if countLines(m.Logs("p0"), "stopping plugin: ") == 0 {
+		t.Errorf("Stopping shown before Logs say why:\n%s", strings.Join(m.Logs("p0"), "\n"))
+	}
+	if err := m.Restart("p0"); err != nil {
+		t.Errorf("Restart while stopping: %v", err)
 	}
 }
 
@@ -577,9 +597,9 @@ func TestRing(t *testing.T) {
 	if len(got) != 3 || !strings.HasSuffix(got[0], "HOST  2") || !strings.HasSuffix(got[2], "HOST  4") {
 		t.Fatalf("got %q", got)
 	}
-	r.add("PLUGIN", strings.Repeat("x", logLine-1)+"éé") // cut inside the first é
+	r.add("PLUGIN", strings.Repeat("x", logLine-4)+"ééé") // the cut falls inside the first é
 	last := r.lines()[2]
-	if line := last[strings.Index(last, "PLUGIN  ")+len("PLUGIN  "):]; line != strings.Repeat("x", logLine-1)+"…" {
+	if line := last[strings.Index(last, "PLUGIN  ")+len("PLUGIN  "):]; line != strings.Repeat("x", logLine-4)+"…" {
 		t.Errorf("a long line became %d bytes: …%q", len(line), line[max(0, len(line)-8):])
 	}
 }

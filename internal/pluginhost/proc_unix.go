@@ -27,7 +27,9 @@ func badExecutable(err error) bool {
 }
 
 // killGroup kills the plugin's process group and returns the status
-// that gives the plugin, or "" if the group is gone.
+// that gives the plugin, or "" if the group is gone. An exited plugin
+// not yet reaped still counts, so one killed by something else (the
+// OOM killer) before watch sees it exit reads as the host's kill.
 func killGroup(p *os.Process) string {
 	if syscall.Kill(-p.Pid, syscall.SIGKILL) != nil {
 		return ""
