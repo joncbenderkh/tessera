@@ -392,12 +392,12 @@ func (m *Manager) launch(pn *panel) (*Instance, string, error) {
 		}
 		// A plugin that died while configuring says how. Its lost
 		// connection can fail the call before the exit is seen, so
-		// wait briefly for it. One that hung, or only rejected its
-		// settings, is still running and has nothing to say, and Close
+		// wait briefly for it. One that hung, or answered with an
+		// error, is still running and has nothing to say, and Close
 		// does not wait.
 		var exit string
 		var hung hangError
-		if Retryable(err) && !errors.As(err, &hung) && m.ctx.Err() == nil {
+		if Retryable(err) && !errors.As(err, &hung) && !answered(err) && m.ctx.Err() == nil {
 			select {
 			case <-inst.Done():
 				exit = orUnknown(awaitStatus(m.ctx, inst))
@@ -445,6 +445,13 @@ func hung(ctx context.Context, err error, timeout time.Duration) bool {
 	deadline, _ := ctx.Deadline()
 	return errors.Is(ctx.Err(), context.DeadlineExceeded) ||
 		status.Code(err) == codes.DeadlineExceeded && time.Until(deadline) < min(timeout/10, 250*time.Millisecond)
+}
+
+// answered reports whether err is a status the plugin sent, not a lost
+// connection, so the plugin is still running.
+func answered(err error) bool {
+	s, ok := status.FromError(err)
+	return ok && s.Code() != codes.Unavailable && s.Code() != codes.Canceled
 }
 
 func configure(ctx context.Context, inst *Instance, p config.Panel, timeout time.Duration) error {

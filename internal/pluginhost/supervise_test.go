@@ -404,12 +404,17 @@ func TestPluginsOwnDeadlineIsNoHang(t *testing.T) {
 	dir := install(t, "upstream-timeout")
 	logger, _ := newLogger()
 	opts := fast
-	opts.MaxAttempts = 1
+	t.Setenv("GORACE", "atexit_sleep_ms=0") // a race-built plugin waits 1s to exit
+	start := time.Now()
 	m := StartWith(panels("upstream-timeout"), dir, logger, opts)
 	defer m.Close()
 	s := waitFor(t, m, "p0", "crashed", is(Crashed))
 	if strings.Contains(s.Err.Error(), "hung") || !strings.Contains(s.Err.Error(), "weather service did not answer") {
 		t.Errorf("got %v, want the plugin's own error, not a hang", s.Err)
+	}
+	// A plugin that answered is not waited for to exit.
+	if d := time.Since(start); d > time.Duration(opts.MaxAttempts)*time.Second {
+		t.Errorf("%d failures that the plugin answered took %v\n%s", opts.MaxAttempts, d, strings.Join(m.Logs("p0"), "\n"))
 	}
 }
 
