@@ -15,6 +15,10 @@ import (
 // without shutting it down.
 func ownProcessGroup(*exec.Cmd) {}
 
+// killStatus is the status of a plugin the host killed: Kill ends it
+// with exit code 1.
+const killStatus = "exit status 1"
+
 // killGroup kills the plugin.
 func killGroup(p *os.Process) { _ = p.Kill() }
 

@@ -284,6 +284,7 @@ func (m *Manager) watchLive(pn *panel, inst *Instance) (exit string, lived time.
 		case <-tick.C:
 			ctx, cancel := context.WithTimeout(m.ctx, m.opts.CallTimeout)
 			perr := inst.Ping(ctx)
+			hang := perr != nil && hung(ctx, perr, m.opts.CallTimeout)
 			cancel()
 			if perr != nil && m.ctx.Err() == nil {
 				// A plugin that died makes the check fail before its exit
@@ -293,7 +294,10 @@ func (m *Manager) watchLive(pn *panel, inst *Instance) (exit string, lived time.
 					continue // reported by the case above
 				case <-time.After(500 * time.Millisecond):
 				}
-				return "", time.Since(start), false, hangError{fmt.Errorf("plugin %q hung: health check failed within %v: %w", inst.Info.GetName(), m.opts.CallTimeout, perr)}
+				if !hang {
+					return "", time.Since(start), false, fmt.Errorf("plugin %q failed its health check: %w", inst.Info.GetName(), perr)
+				}
+				return "", time.Since(start), false, hangError{fmt.Errorf("plugin %q hung: health check did not answer within %v", inst.Info.GetName(), m.opts.CallTimeout)}
 			}
 		}
 	}
@@ -357,6 +361,16 @@ func orUnknown(s string) string {
 	return s
 }
 
+// hung reports whether err, from a failed call bounded by ctx with
+// timeout, means the plugin did not answer in time. The plugin sees the
+// deadline too, and may report it first; a DeadlineExceeded well before
+// the deadline is the plugin's own.
+func hung(ctx context.Context, err error, timeout time.Duration) bool {
+	deadline, _ := ctx.Deadline()
+	return errors.Is(ctx.Err(), context.DeadlineExceeded) ||
+		status.Code(err) == codes.DeadlineExceeded && time.Until(deadline) < min(timeout/10, 250*time.Millisecond)
+}
+
 func configure(ctx context.Context, inst *Instance, p config.Panel, timeout time.Duration) error {
 	settings, err := toStruct(p.Settings)
 	if err != nil {
@@ -375,11 +389,7 @@ func configure(ctx context.Context, inst *Instance, p config.Panel, timeout time
 	if s, ok := status.FromError(err); ok && s.Code() == codes.InvalidArgument {
 		return permanent(fmt.Errorf("plugin %q rejected the settings: %s", p.Plugin, s.Message()))
 	}
-	// The plugin sees the deadline too, and may report it first; a
-	// DeadlineExceeded well before the deadline is the plugin's own.
-	deadline, _ := ctx.Deadline()
-	if errors.Is(ctx.Err(), context.DeadlineExceeded) ||
-		status.Code(err) == codes.DeadlineExceeded && time.Until(deadline) < min(timeout/10, 250*time.Millisecond) {
+	if hung(ctx, err, timeout) {
 		return hangError{fmt.Errorf("plugin %q hung: Configure did not answer within %v", p.Plugin, timeout)}
 	}
 	return fmt.Errorf("plugin %q: Configure: %w", p.Plugin, err)

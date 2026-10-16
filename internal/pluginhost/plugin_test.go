@@ -20,6 +20,7 @@ import (
 	"github.com/hashicorp/go-plugin"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/health/grpc_health_v1"
 	"google.golang.org/grpc/status"
 
 	tesserav1 "github.com/joncbenderkh/tessera/proto/tessera/v1"
@@ -63,7 +64,10 @@ func servePlugin(mode string) {
 			fmt.Fprintf(rawStderr, "child %d\n", child.Process.Pid)
 		}
 	}
-	if mode == "slow-start" || mode == "escapes-early" {
+	if mode == "junk-stdout" {
+		fmt.Fprintln(rawStdout, "hello") // not a handshake line
+	}
+	if mode == "slow-start" || mode == "escapes-early" || mode == "junk-stdout" {
 		time.Sleep(time.Minute) // never reaches the handshake in a test
 	}
 	hs := handshake
@@ -73,12 +77,26 @@ func servePlugin(mode string) {
 	case "plaintext":
 		os.Unsetenv("PLUGIN_CLIENT_CERT") // go-plugin then serves without TLS
 	}
+	newServer := plugin.DefaultGRPCServer
+	if mode == "not-serving" {
+		newServer = func(opts []grpc.ServerOption) *grpc.Server {
+			return grpc.NewServer(append(opts, grpc.ChainUnaryInterceptor(notServing))...)
+		}
+	}
 	plugin.Serve(&plugin.ServeConfig{
 		HandshakeConfig: hs,
 		Plugins:         plugin.PluginSet{"panel": testPlugin{mode: mode}},
-		GRPCServer:      plugin.DefaultGRPCServer,
+		GRPCServer:      newServer,
 		Logger:          hclog.New(&hclog.LoggerOptions{Output: io.Discard}),
 	})
+}
+
+// notServing answers every health check NOT_SERVING.
+func notServing(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
+	if info.FullMethod == grpc_health_v1.Health_Check_FullMethodName {
+		return &grpc_health_v1.HealthCheckResponse{Status: grpc_health_v1.HealthCheckResponse_NOT_SERVING}, nil
+	}
+	return handler(ctx, req)
 }
 
 type testPlugin struct {
@@ -102,6 +120,9 @@ func (testPlugin) GRPCClient(context.Context, *plugin.GRPCBroker, *grpc.ClientCo
 //   - slow-start: no handshake for a minute.
 //   - escapes-early: as slow-start, after starting a child that leaves
 //     its process group and holds its stdout.
+//   - junk-stdout: writes a line that is not a handshake to stdout,
+//     then as slow-start.
+//   - not-serving: answers every health check NOT_SERVING.
 //   - proto-two: the handshake offers protocol 2.
 //   - plaintext: serves without mutual TLS.
 //   - view-nine: Describe picks view schema 9.

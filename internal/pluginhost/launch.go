@@ -121,13 +121,16 @@ func launch(ctx context.Context, dir, name string, output func(line string), log
 	if err := inst.start(ctx, name, timeout); err != nil {
 		// Only a plugin that ended by itself has an exit to report:
 		// decide before Close ends it. One refused for good, or one
-		// that hung, is still running.
+		// that hung, is still running. go-plugin kills one whose
+		// handshake failed, which is no exit of its own.
 		var exit string
 		var hung hangError
 		if inst.runner.reaped != nil && Retryable(err) && !errors.As(err, &hung) && ctx.Err() == nil {
 			select {
 			case <-inst.Done():
-				exit = orUnknown(awaitStatus(inst))
+				if s := awaitStatus(inst); inst.runner.ownExit(s) {
+					exit = orUnknown(s)
+				}
 			case <-time.After(time.Second):
 			}
 		}
@@ -156,10 +159,14 @@ func (inst *Instance) start(ctx context.Context, name string, timeout time.Durat
 		return fmt.Errorf("plugin %q: %w", name, ctx.Err())
 	}
 	rpc, err := s.rpc, s.err
-	// go-plugin (v1.8.0) reports a protocol mismatch only in its error
-	// text; TestLaunchRejects pins the wording.
+	// go-plugin (v1.8.0) reports a protocol mismatch and a start timeout
+	// only in its error text; TestLaunchRejects pins the wording.
 	if err != nil && strings.Contains(err.Error(), "incompatible API version") {
 		return permanent(fmt.Errorf("plugin %q does not speak protocol %d: %w", name, tesserav1.ProtocolVersion, err))
+	}
+	// As is a handshake that never comes.
+	if err != nil && strings.Contains(err.Error(), "timeout while waiting for plugin to start") {
+		return hangError{fmt.Errorf("plugin %q hung: no handshake within %v", name, startTimeout)}
 	}
 	if err != nil {
 		return fmt.Errorf("plugin %q failed to start: %w", name, err)
@@ -177,8 +184,8 @@ func (inst *Instance) start(ctx context.Context, name string, timeout time.Durat
 		HostVersion:  tessera.Version,
 		ViewVersions: viewVersions,
 	})
-	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
-		return hangError{fmt.Errorf("plugin %q: Describe: %w", name, err)}
+	if err != nil && hung(ctx, err, timeout) {
+		return hangError{fmt.Errorf("plugin %q hung: Describe did not answer within %v", name, timeout)}
 	}
 	if err != nil {
 		return fmt.Errorf("plugin %q: Describe: %w", name, err)
@@ -267,8 +274,14 @@ func (inst *Instance) Ping(ctx context.Context) error {
 	if !ok {
 		return errors.New("plugin has no gRPC connection")
 	}
-	_, err := grpc_health_v1.NewHealthClient(rpc.Conn).Check(ctx, &grpc_health_v1.HealthCheckRequest{Service: plugin.GRPCServiceName})
-	return err
+	resp, err := grpc_health_v1.NewHealthClient(rpc.Conn).Check(ctx, &grpc_health_v1.HealthCheckRequest{Service: plugin.GRPCServiceName})
+	if err != nil {
+		return err
+	}
+	if s := resp.GetStatus(); s != grpc_health_v1.HealthCheckResponse_SERVING {
+		return fmt.Errorf("plugin reports %v", s)
+	}
+	return nil
 }
 
 // Done is closed once the plugin process has exited.

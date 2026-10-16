@@ -37,6 +37,7 @@ type procRunner struct {
 	proc     *os.Process
 	pid      int // proc.Pid, kept since Release clears it
 	canceled bool
+	killed   bool          // kill signalled it
 	exited   bool          // reaped: its PID, and so its group ID, may be reused
 	reaping  bool          // Wait is reaping it without watch
 	exitSeen bool          // watch saw it exit, unreaped
@@ -235,10 +236,20 @@ func (r *procRunner) kill() {
 	switch {
 	case r.proc == nil || r.exited:
 	case r.reaping:
+		r.killed = true
 		_ = r.proc.Kill()
 	default:
+		r.killed = true
 		killGroup(r.proc)
 	}
+}
+
+// ownExit reports whether status, from status(), is an exit the plugin
+// made itself rather than the host's kill.
+func (r *procRunner) ownExit(status string) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return !r.killed || status != "" && status != killStatus
 }
 
 // Wait reaps the plugin. When watch saw it exit (Linux, macOS, the

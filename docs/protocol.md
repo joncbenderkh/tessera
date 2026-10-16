@@ -170,12 +170,12 @@ and restarts a plugin that crashes, hangs, or breaks the protocol:
 - A plugin whose process exits, that misses a call's deadline, or that
   fails the health check the host makes every 10 seconds while it is
   live (go-plugin's `grpc.health.v1.Health`, also with a 5-second
-  deadline), is shut down and launched again after 1 second, then 2,
+  deadline; any status but `SERVING` fails it), is shut down and launched again after 1 second, then 2,
   4, and 8 after each further failure in a row. A launch that fails,
   short of the permanent failures below, counts the same way.
 - At the fifth failure in a row the host gives up and shows the panel
-  as crashed, with the last error and exit status, until the user
-  restarts it.
+  as crashed, with the last error and, for a plugin that exited by
+  itself, its exit status, until the user restarts it.
 - A plugin that stays up for a minute starts its count again.
 - Failures a restart cannot fix are not retried: a missing,
   non-executable, or misnamed plugin, a version the host does not

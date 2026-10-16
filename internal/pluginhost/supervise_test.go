@@ -3,6 +3,7 @@
 package pluginhost
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"strings"
@@ -279,7 +280,7 @@ func TestLivenessCheckCatchesFrozenPlugin(t *testing.T) {
 	m := StartWith(panels("freezes-live"), dir, logger, opts)
 	defer m.Close()
 	s := waitFor(t, m, "p0", "restarting", is(Restarting))
-	if !strings.Contains(s.Err.Error(), "hung: health check failed") {
+	if !strings.Contains(s.Err.Error(), "hung: health check did not answer") {
 		t.Errorf("got %v", s.Err)
 	}
 }
@@ -292,9 +293,52 @@ func TestDescribeUsesCallTimeout(t *testing.T) {
 	start := time.Now()
 	m := StartWith(panels("slow-describe"), dir, logger, opts)
 	defer m.Close()
-	waitFor(t, m, "p0", "crashed", is(Crashed))
+	s := waitFor(t, m, "p0", "crashed", is(Crashed))
 	if d := time.Since(start); d > 3*time.Second {
 		t.Errorf("a hung Describe took %v with a %v call timeout", d, opts.CallTimeout)
+	}
+	if !strings.Contains(s.Err.Error(), "hung: Describe did not answer") {
+		t.Errorf("got %v", s.Err)
+	}
+}
+
+func TestUnhealthyPluginIsRestarted(t *testing.T) {
+	dir := install(t, "not-serving")
+	logger, _ := newLogger()
+	opts := fast
+	opts.PingInterval = 100 * time.Millisecond
+	m := StartWith(panels("not-serving"), dir, logger, opts)
+	defer m.Close()
+	s := waitFor(t, m, "p0", "restarting", is(Restarting))
+	if !strings.Contains(s.Err.Error(), "failed its health check: plugin reports NOT_SERVING") {
+		t.Errorf("got %v", s.Err)
+	}
+}
+
+func TestFailedHandshakeHasNoExitStatus(t *testing.T) {
+	t.Parallel()
+	dir := install(t, "junk-stdout")
+	logger, _ := newLogger()
+	_, exit, err := launch(context.Background(), dir, "junk-stdout", ignore, logger, callTimeout)
+	if err == nil || !strings.Contains(err.Error(), "Unrecognized remote plugin message") {
+		t.Fatalf("got %v, want a handshake error", err)
+	}
+	if exit != "" {
+		t.Errorf("got exit status %q for a plugin the host killed", exit)
+	}
+}
+
+func TestNoHandshakeIsAHang(t *testing.T) {
+	t.Parallel() // waits startTimeout
+	dir := install(t, "slow-start")
+	logger, _ := newLogger()
+	_, exit, err := launch(context.Background(), dir, "slow-start", ignore, logger, callTimeout)
+	var hung hangError
+	if !errors.As(err, &hung) || !strings.Contains(err.Error(), "hung: no handshake within") {
+		t.Fatalf("got %v, want a hang", err)
+	}
+	if exit != "" {
+		t.Errorf("got exit status %q", exit)
 	}
 }
 

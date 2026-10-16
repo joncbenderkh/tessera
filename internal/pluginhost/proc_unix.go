@@ -10,6 +10,9 @@ import (
 	"syscall"
 )
 
+// killStatus is the status of a plugin the host killed.
+const killStatus = "signal: killed"
+
 // killGroup kills the plugin's process group.
 func killGroup(p *os.Process) {
 	_ = syscall.Kill(-p.Pid, syscall.SIGKILL)

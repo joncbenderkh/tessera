@@ -150,7 +150,7 @@ func TestLaunchRejects(t *testing.T) {
 		{"proto-two", `plugin "proto-two" does not speak protocol 1: incompatible API version`},
 		{"plaintext", `plugin "plaintext": Describe: rpc error: code = Unavailable`},
 		{"view-nine", `plugin "view-nine" chose view schema 9; this host renders [1]`},
-		{"slow-describe", `plugin "slow-describe": Describe: rpc error: code = DeadlineExceeded`},
+		{"slow-describe", `plugin "slow-describe" hung: Describe did not answer within 5s`},
 		{"noexec", `plugin "noexec": ` + filepath.Join(dir, "noexec") + ` is not executable`},
 		{"Bad", `plugin "Bad" must be lowercase`},
 	} {
