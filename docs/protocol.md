@@ -174,8 +174,13 @@ and restarts a plugin that crashes, hangs, or breaks the protocol:
   down and launched again after 1 second, then 2, 4, and 8 after each
   further failure in a row. A launch that fails, short of the
   permanent failures below, counts the same way. The next launch, after
-  a failure or a restart, waits until the old process is gone, so a
-  panel never runs two at once.
+  a failure or a restart, waits until the old process is gone, or until
+  shutting it down gives up (about 6 seconds; a process stuck in the
+  kernel can outlive SIGKILL), which the panel's Logs then say. On
+  Windows, children the plugin started are not shut down with it.
+- The health check catches a plugin frozen as a whole. go-plugin
+  answers it outside the plugin's own code, so a plugin hung inside
+  that code still passes; the Watch heartbeat (#14) catches those.
 - At the fifth failure in a row the host gives up and shows the panel
   as crashed, with the last error and, for a plugin that exited by
   itself, its exit status, until the user restarts it.

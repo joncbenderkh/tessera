@@ -240,10 +240,9 @@ func (r *procRunner) kill() {
 		r.killed, r.killedAs = true, procKillStatus
 		_ = r.proc.Kill()
 	default:
-		if !r.exitSeen {
-			r.killed, r.killedAs = true, killStatus
+		if as := killGroup(r.proc); !r.exitSeen {
+			r.killed, r.killedAs = true, as
 		}
-		killGroup(r.proc)
 	}
 }
 

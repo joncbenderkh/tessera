@@ -230,7 +230,7 @@ func (m *Manager) supervise(pn *panel) {
 			if exited {
 				exit = orUnknown(awaitStatus(m.ctx, inst))
 			}
-			inst.Close()
+			m.shutDown(pn, inst)
 			switch {
 			case m.ctx.Err() != nil:
 				return
@@ -277,6 +277,15 @@ func (m *Manager) supervise(pn *panel) {
 			failures = 0
 		case <-time.After(delay):
 		}
+	}
+}
+
+// shutDown closes inst before pn's next launch, and says so in its
+// Logs if the process outlived Close, so two can then run at once.
+func (m *Manager) shutDown(pn *panel, inst *Instance) {
+	inst.Close()
+	if !inst.Exited() {
+		m.event(pn, "plugin %s did not exit when shut down; starting the next one anyway", pn.Plugin)
 	}
 }
 
@@ -369,7 +378,7 @@ func (m *Manager) launch(pn *panel) (*Instance, string, error) {
 			case <-time.After(time.Second):
 			}
 		}
-		inst.Close()
+		m.shutDown(pn, inst)
 		return nil, exit, err
 	}
 	return inst, "", nil
@@ -526,8 +535,8 @@ func (m *Manager) find(id string) *panel {
 // Close stops supervision and shuts every plugin down in parallel. It
 // returns once every plugin has exited or been killed, or Instance.Close
 // has given up on it, and every launch still starting has stopped, which
-// can take up to startTimeout; also when called again while a first call
-// is still shutting them down.
+// can take up to startTimeout and then an Instance.Close; also when
+// called again while a first call is still shutting them down.
 func (m *Manager) Close() {
 	m.closeOnce.Do(func() {
 		m.cancel() // each supervisor closes its own instance

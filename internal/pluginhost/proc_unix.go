@@ -27,8 +27,9 @@ func badExecutable(err error) bool {
 }
 
 // killGroup kills the plugin's process group.
-func killGroup(p *os.Process) {
+func killGroup(p *os.Process) string {
 	_ = syscall.Kill(-p.Pid, syscall.SIGKILL)
+	return killStatus
 }
 
 // reapPID reaps the exited process pid without closing anything of the

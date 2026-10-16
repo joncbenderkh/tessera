@@ -225,7 +225,9 @@ func Describe(ctx context.Context, dir, name string, output func(line string), l
 // holding its stderr open, Close kills the plugin's process group (on
 // Windows, the plugin alone). Where watch runs, the group of a plugin
 // that exits is killed as it exits, so its children go with it.
-// It returns within killTimeout, reapTimeout, and pipeTimeout together.
+// It returns within killTimeout, reapTimeout, pipeTimeout, and
+// flushTimeout together, even if the plugin is still running then, as
+// one stuck in the kernel can be after SIGKILL.
 //
 // A plugin whose exited process left its pipes to a child outside its
 // group is finished by watch instead, within pipeGrace plus

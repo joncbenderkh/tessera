@@ -21,8 +21,8 @@ func ownProcessGroup(*exec.Cmd) {}
 // unlike the 1 of os.Process.Kill, which plugins also exit with.
 const killCode = 137
 
-// killStatus is the status of a plugin killGroup killed, and
-// procKillStatus of one os.Process.Kill killed.
+// killStatus is the status of a plugin TerminateProcess killed with
+// killCode, and procKillStatus of one os.Process.Kill killed.
 const (
 	killStatus     = "exit status 137"
 	procKillStatus = "exit status 1"
@@ -34,18 +34,20 @@ func badExecutable(err error) bool {
 	return errors.Is(err, windows.ERROR_BAD_EXE_FORMAT) || errors.Is(err, windows.ERROR_EXE_MACHINE_TYPE_MISMATCH)
 }
 
-// killGroup kills the plugin. Go holds its handle until Wait, so the
-// PID still names it.
-func killGroup(p *os.Process) {
+// killGroup kills the plugin and returns the status that gives it. Go
+// holds its handle until Wait, so the PID still names it.
+func killGroup(p *os.Process) string {
 	h, err := windows.OpenProcess(windows.PROCESS_TERMINATE, false, uint32(p.Pid))
 	if err != nil {
 		_ = p.Kill()
-		return
+		return procKillStatus
 	}
 	defer windows.CloseHandle(h)
 	if windows.TerminateProcess(h, killCode) != nil {
 		_ = p.Kill()
+		return procKillStatus
 	}
+	return killStatus
 }
 
 // canAwaitExit says awaitExit can wait without reaping.
