@@ -229,7 +229,9 @@ func (s *server) Configure(ctx context.Context, req *tesserav1.ConfigureRequest)
 		<-ctx.Done()
 		return nil, ctx.Err()
 	case "freezes-configuring":
-		freeze()
+		freeze() // the stop can land after kill returns
+		<-ctx.Done()
+		return nil, ctx.Err()
 	case "crashes":
 		crashSoon()
 	case "flaky":
