@@ -44,16 +44,38 @@ languages can follow its documented handshake:
    the standard gRPC health service (`grpc.health.v1.Health`), reporting
    the service name `plugin` as serving, and go-plugin's
    `plugin.GRPCController`, whose `Shutdown` makes the plugin exit; a
-   plugin still running 2 seconds later is killed. go-plugin's
-   `GRPCBroker` and `GRPCStdio` services are optional. The plugin's
-   stderr goes to the host's log for that panel.
+   plugin still running 2 seconds later is killed, as is one that
+   leaves `Shutdown` unanswered for 3 seconds. go-plugin's `GRPCBroker`
+   and `GRPCStdio` services are optional. The plugin's stderr, and any
+   output it forwards over `GRPCStdio`, go to the host's log for that
+   panel.
+
+A plugin's stdin is empty, and its stdout carries only the handshake
+line: anything written there later is discarded. An output line longer
+than 64 KiB is logged in pieces.
+
+On Unix each plugin runs in a process group of its own. On Linux,
+macOS, and the BSDs the host kills that group as soon as the plugin
+exits, and when it shuts the plugin down, so children that stay in the
+group cannot outlive the plugin or keep the host from exiting by
+holding the plugin's stderr open. A child that leaves the group is
+on its own, though the host still sees the plugin exit; if it holds
+the plugin's stdout or stderr open, the host reads them for up to 3
+more seconds and then closes them. On other Unix systems the group is
+killed only when a plugin has to be killed. On Windows only the plugin
+itself is killed, and a plugin that crashes while a child holds its
+stderr is seen to exit only once that child exits. All of this holds
+while the host runs: on Linux the kernel also kills a plugin whose host
+dies without shutting it down, but not the plugin's children;
+elsewhere such a plugin outlives its host.
 
 Mutual TLS is what go-plugin calls AutoMTLS, and the host always enables
 it: without it, any local process could connect to a plugin, read its
 view, and trigger its actions. That matters most for TCP, which every
 local user can reach, but it covers unix sockets as well.
 
-The host-side launcher is #12; the Go SDK that hides all of this is #18.
+The host side is `internal/pluginhost`; the Go SDK that hides all of
+this is #18.
 
 ## Versions
 
@@ -147,10 +169,21 @@ stays silent for twice the heartbeat interval as hung, and restarts a
 plugin that crashes, hangs, or breaks the protocol, with backoff, showing
 an error tile meanwhile (#13).
 
-A plugin's `DescribeResponse.name` must equal its executable's file name,
-which is how the config's `plugin:` field finds it: the name itself on
-Unix, the name plus `.exe` on Windows. Other files in the plugins
-directory, such as `clock.py` next to `clock`, are ignored.
+Plugins are installed in `tessera/plugins` under the user data
+directory: `$XDG_DATA_HOME` (or `~/.local/share`) on Linux,
+`~/Library/Application Support` on macOS, and `%LOCALAPPDATA%` on
+Windows. A plugin's `DescribeResponse.name` must equal its executable's
+file name, which is how the config's `plugin:` field finds it: the name
+itself on Unix, the name plus `.exe` on Windows. Other files in the
+plugins directory, such as `clock.py` next to `clock`, are ignored.
+
+The host refuses a plugin, shutting it down and recording the reason,
+when its file is missing or not executable, the handshake or the
+mutual TLS connection fails, it does not answer `Describe` within 5
+seconds, its `Describe` gives a different name or protocol version, or
+it picks a view schema version the host did not offer. A rejected
+`Configure` is recorded the same way. The reason is logged now and will
+be shown in the panel's place once the host draws the grid (#10, #13).
 Names are 1 to 64 lowercase letters, digits, and hyphens, starting with a
 letter or digit, so they can never name a path outside the plugins
 directory. Names Windows reserves for devices (`con`, `prn`, `aux`,

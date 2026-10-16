@@ -55,16 +55,21 @@ func (c Config) Validate() error {
 		switch {
 		case p.Plugin == "":
 			errs = append(errs, fmt.Errorf("%s: plugin is required", name))
-		case !pluginName.MatchString(p.Plugin):
-			errs = append(errs, fmt.Errorf("%s: plugin %q must be lowercase letters, digits, and hyphens, starting with a letter or digit, at most 64 characters", name, p.Plugin))
-		case windowsDevice.MatchString(p.Plugin):
-			errs = append(errs, fmt.Errorf("%s: plugin %q is a reserved device name on Windows", name, p.Plugin))
+		default:
+			if err := ValidPluginName(p.Plugin); err != nil {
+				errs = append(errs, fmt.Errorf("%s: %w", name, err))
+			}
 		}
 		if err := checkSettings(p.Settings, "settings"); err != nil {
 			errs = append(errs, fmt.Errorf("%s: %w", name, err))
 		}
 		if p.W < 1 || p.H < 1 {
 			errs = append(errs, fmt.Errorf("%s: w and h must be at least 1, got %dx%d", name, p.W, p.H))
+			continue
+		}
+		// Plugins receive the size as two uint32s.
+		if int64(p.W) > math.MaxUint32 || int64(p.H) > math.MaxUint32 {
+			errs = append(errs, fmt.Errorf("%s: w and h must be at most %d, got %dx%d", name, uint32(math.MaxUint32), p.W, p.H))
 			continue
 		}
 		if p.X < 0 || p.Y < 0 {
@@ -89,6 +94,17 @@ func (c Config) Validate() error {
 		placed = append(placed, placement{p, name})
 	}
 	return errors.Join(errs...)
+}
+
+// ValidPluginName reports why name cannot be a plugin name, or nil.
+func ValidPluginName(name string) error {
+	switch {
+	case !pluginName.MatchString(name):
+		return fmt.Errorf("plugin %q must be lowercase letters, digits, and hyphens, starting with a letter or digit, at most 64 characters", name)
+	case windowsDevice.MatchString(name):
+		return fmt.Errorf("plugin %q is a reserved device name on Windows", name)
+	}
+	return nil
 }
 
 // checkSettings reports the first value in v, at path, that Marshal

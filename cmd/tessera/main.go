@@ -9,6 +9,8 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"os/signal"
+	"syscall"
 
 	"gioui.org/app"
 	"gioui.org/op"
@@ -16,6 +18,7 @@ import (
 
 	"github.com/joncbenderkh/tessera"
 	"github.com/joncbenderkh/tessera/internal/config"
+	"github.com/joncbenderkh/tessera/internal/pluginhost"
 )
 
 func main() {
@@ -34,14 +37,37 @@ func main() {
 		}
 		*configPath = path
 	}
-	if _, err := config.Load(*configPath); err != nil {
+	cfg, err := config.Load(*configPath)
+	if err != nil {
 		log.Fatal(err)
 	}
 
+	plugins := pluginhost.Start(cfg, pluginhost.DefaultDir(), log.Default())
+	signals := make(chan os.Signal, 1)
+	// SIGHUP too: plugins run in their own process groups, so a closed
+	// terminal reaches only the host.
+	signal.Notify(signals, os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
 	go func() {
+		sig := <-signals
+		signal.Stop(signals) // a second signal ends a slow shutdown at once
+		plugins.Close()
+		// The shell convention for a signalled exit, so a supervisor sees
+		// why the host stopped.
+		os.Exit(128 + int(sig.(syscall.Signal)))
+	}()
+
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				plugins.Close()
+				panic(r)
+			}
+		}()
 		window := new(app.Window)
 		window.Option(app.Title("tessera"), app.Size(unit.Dp(1440), unit.Dp(900)))
-		if err := run(window); err != nil {
+		err := run(window)
+		plugins.Close()
+		if err != nil {
 			log.Fatal(err)
 		}
 		os.Exit(0)

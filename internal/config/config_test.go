@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -278,11 +279,12 @@ func TestValidate(t *testing.T) {
 	disabled := panel("b", 0, 0, 1, 1)
 	disabled.Enabled = new(bool)
 
-	tests := []struct {
+	type test struct {
 		name   string
 		panels []Panel
 		want   string
-	}{
+	}
+	tests := []test{
 		{"valid", []Panel{panel("a", 0, 0, 2, 1), panel("b", 2, 0, 2, 2)}, ""},
 		{"duplicate id", []Panel{panel("a", 0, 0, 1, 1), panel("a", 1, 0, 1, 1)}, "not unique"},
 		{"missing id", []Panel{panel("", 0, 0, 1, 1)}, "id is required"},
@@ -302,9 +304,16 @@ func TestValidate(t *testing.T) {
 		{"x past the grid", []Panel{panel("a", 4, 0, 1, 1)}, "4 columns"},
 		{"x+w overflows", []Panel{panel("a", math.MaxInt, 0, 1, 1)}, "4 columns"},
 		{"y+h overflows", []Panel{panel("a", 0, math.MaxInt, 1, 1)}, "out of range"},
-		{"huge panels overlap", []Panel{panel("a", 0, 0, 1, math.MaxInt/2), panel("b", 0, 1_000_000_000, 1, 1)}, `overlaps panel "a"`},
+		{"huge panels overlap", []Panel{panel("a", 0, 0, 1, math.MaxInt32), panel("b", 0, 1_000_000_000, 1, 1)}, `overlaps panel "a"`},
 		{"overlap", []Panel{panel("a", 0, 0, 2, 2), panel("b", 1, 1, 1, 1)}, `overlaps panel "a"`},
 		{"disabled panels may overlap", []Panel{panel("a", 0, 0, 1, 1), disabled}, ""},
+	}
+	if strconv.IntSize == 64 {
+		maxSpan := int(^uint(0) >> 32) // 2^32-1 where int has 64 bits
+		tests = append(tests,
+			test{"h of 2^32-1", []Panel{panel("a", 0, 0, 1, maxSpan)}, ""},
+			test{"h beyond uint32", []Panel{panel("a", 0, 0, 1, maxSpan+1)}, "at most 4294967295"},
+		)
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
