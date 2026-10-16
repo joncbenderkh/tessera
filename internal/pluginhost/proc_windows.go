@@ -34,20 +34,20 @@ func badExecutable(err error) bool {
 	return errors.Is(err, windows.ERROR_BAD_EXE_FORMAT) || errors.Is(err, windows.ERROR_EXE_MACHINE_TYPE_MISMATCH)
 }
 
-// killGroup kills the plugin and returns the status that gives it. Go
-// holds its handle until Wait, so the PID still names it.
+// killGroup kills the plugin and returns the status that gives it, or
+// "" if it was not killed: one that has exited cannot be. Go holds its
+// handle until Wait, so the PID still names it.
 func killGroup(p *os.Process) string {
-	h, err := windows.OpenProcess(windows.PROCESS_TERMINATE, false, uint32(p.Pid))
-	if err != nil {
-		_ = p.Kill()
+	if h, err := windows.OpenProcess(windows.PROCESS_TERMINATE, false, uint32(p.Pid)); err == nil {
+		defer windows.CloseHandle(h)
+		if windows.TerminateProcess(h, killCode) == nil {
+			return killStatus
+		}
+	}
+	if p.Kill() == nil {
 		return procKillStatus
 	}
-	defer windows.CloseHandle(h)
-	if windows.TerminateProcess(h, killCode) != nil {
-		_ = p.Kill()
-		return procKillStatus
-	}
-	return killStatus
+	return ""
 }
 
 // canAwaitExit says awaitExit can wait without reaping.

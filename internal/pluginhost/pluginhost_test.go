@@ -659,6 +659,15 @@ func TestLineWriter(t *testing.T) {
 	if len(got) != 3 || len(got[0]) != maxLine || len(got[1]) != maxLine || got[2] != "x" {
 		t.Fatalf("a line of 2*maxLine+1 bytes: got pieces of %d bytes", len(got))
 	}
+
+	got = nil
+	w.Write([]byte("last"))
+	w.finish()
+	w.Write([]byte("late\n"))
+	w.Flush()
+	if want := []string{"last"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("after finish: got %q, want %q", got, want)
+	}
 }
 
 func TestDescribe(t *testing.T) {

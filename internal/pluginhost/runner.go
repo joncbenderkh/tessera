@@ -237,10 +237,11 @@ func (r *procRunner) kill() {
 	switch {
 	case r.proc == nil || r.exited:
 	case r.reaping:
-		r.killed, r.killedAs = true, procKillStatus
-		_ = r.proc.Kill()
+		if r.proc.Kill() == nil {
+			r.killed, r.killedAs = true, procKillStatus
+		}
 	default:
-		if as := killGroup(r.proc); !r.exitSeen {
+		if as := killGroup(r.proc); as != "" && !r.exitSeen {
 			r.killed, r.killedAs = true, as
 		}
 	}

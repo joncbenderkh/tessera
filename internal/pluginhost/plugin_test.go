@@ -51,8 +51,11 @@ var rawStdout, rawStderr *os.File
 
 func servePlugin(mode string) {
 	rawStdout, rawStderr = os.Stdout, os.Stderr
-	if mode == "dies-at-start" {
+	if mode == "dies-at-start" || mode == "fails-at-start" {
 		fmt.Fprintln(os.Stderr, "boom")
+		if mode == "fails-at-start" {
+			os.Exit(1) // as log.Fatal does
+		}
 		os.Exit(7)
 	}
 	if mode == "escapes-early" {
@@ -137,6 +140,7 @@ func (testPlugin) GRPCClient(context.Context, *plugin.GRPCBroker, *grpc.ClientCo
 //   - dies-configuring: exits with status 4 inside Configure.
 //   - dies-at-start: prints "boom" and exits with status 7 before the
 //     handshake.
+//   - fails-at-start: as dies-at-start, with status 1.
 //   - upstream-timeout: Configure answers DeadlineExceeded at once, as
 //     a plugin whose own upstream call timed out would.
 //   - crash-then-hang: as crashes on its first launch; then Configure

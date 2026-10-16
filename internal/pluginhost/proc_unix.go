@@ -26,9 +26,12 @@ func badExecutable(err error) bool {
 	return errors.Is(err, syscall.ENOEXEC) || errors.Is(err, syscall.ENOENT) || errors.Is(err, syscall.EACCES)
 }
 
-// killGroup kills the plugin's process group.
+// killGroup kills the plugin's process group and returns the status
+// that gives the plugin, or "" if the group is gone.
 func killGroup(p *os.Process) string {
-	_ = syscall.Kill(-p.Pid, syscall.SIGKILL)
+	if syscall.Kill(-p.Pid, syscall.SIGKILL) != nil {
+		return ""
+	}
 	return killStatus
 }
 

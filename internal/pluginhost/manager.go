@@ -280,12 +280,12 @@ func (m *Manager) supervise(pn *panel) {
 	}
 }
 
-// shutDown closes inst before pn's next launch, and says so in its
-// Logs if the process outlived Close, so two can then run at once.
+// shutDown closes inst, and says so in pn's Logs if the process
+// outlived Close, so the next launch can run beside it.
 func (m *Manager) shutDown(pn *panel, inst *Instance) {
 	inst.Close()
 	if !inst.Exited() {
-		m.event(pn, "plugin %s did not exit when shut down; starting the next one anyway", pn.Plugin)
+		m.event(pn, "plugin %s did not exit when shut down", pn.Plugin)
 	}
 }
 

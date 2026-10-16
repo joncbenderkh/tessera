@@ -361,12 +361,17 @@ func TestBackoffIsCapped(t *testing.T) {
 }
 
 func TestExitStatusOfStartupCrash(t *testing.T) {
-	dir := install(t, "dies-at-start")
+	dir := install(t, "dies-at-start", "fails-at-start")
 	logger, _ := newLogger()
 	opts := fast
 	opts.MaxAttempts = 1
-	m := StartWith(panels("dies-at-start"), dir, logger, opts)
+	m := StartWith(panels("dies-at-start", "fails-at-start"), dir, logger, opts)
 	defer m.Close()
+	// Status 1 is also what Windows's fallback kill gives: a kill that
+	// hits the exited plugin must not be taken for its cause.
+	if s := waitFor(t, m, "p1", "crashed", is(Crashed)); s.ExitStatus != "exit status 1" {
+		t.Errorf("got exit status %q, want exit status 1", s.ExitStatus)
+	}
 	s := waitFor(t, m, "p0", "crashed", is(Crashed))
 	if s.ExitStatus != "exit status 7" {
 		t.Errorf("got exit status %q, want exit status 7", s.ExitStatus)
@@ -545,6 +550,21 @@ func TestMissingInterpreterIsPermanent(t *testing.T) {
 	_, err := Launch(context.Background(), dir, "clock", ignore, logger)
 	if err == nil || Retryable(err) || !strings.Contains(err.Error(), "cannot be run") {
 		t.Fatalf("got %v, want a permanent error", err)
+	}
+}
+
+func TestUnreadableDirIsRetried(t *testing.T) {
+	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
+		t.Skip("needs Unix permissions that bind")
+	}
+	dir := t.TempDir()
+	if err := os.Chmod(dir, 0); err != nil {
+		t.Fatal(err)
+	}
+	defer os.Chmod(dir, 0o700)
+	_, err := find(dir, "clock")
+	if err == nil || !Retryable(err) {
+		t.Fatalf("got %v, want a retryable error", err)
 	}
 }
 

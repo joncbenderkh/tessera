@@ -13,6 +13,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unicode/utf8"
 
@@ -240,7 +241,7 @@ func (inst *Instance) Close() {
 		flushed := make(chan struct{})
 		go func() {
 			for _, w := range inst.outputs {
-				w.Flush()
+				w.finish()
 			}
 			close(flushed)
 		}()
@@ -333,16 +334,21 @@ func (l quietStderr) Named(name string) hclog.Logger {
 // pieces.
 const maxLine = 64 << 10
 
-// lineWriter passes each complete line written to it to output.
+// lineWriter passes each complete line written to it to output, until
+// finish.
 type lineWriter struct {
-	output func(string)
-	mu     sync.Mutex
-	line   []byte
+	output   func(string)
+	mu       sync.Mutex
+	line     []byte
+	finished atomic.Bool
 }
 
 func (w *lineWriter) Write(b []byte) (int, error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
+	if w.finished.Load() {
+		return len(b), nil
+	}
 	for _, c := range b {
 		if c == '\n' {
 			w.output(string(bytes.TrimSuffix(w.line, []byte("\r")))) // Windows line ends
@@ -384,4 +390,12 @@ func (w *lineWriter) Flush() {
 		w.output(string(w.line))
 		w.line = w.line[:0]
 	}
+}
+
+// finish flushes w and drops whatever is written to it afterwards:
+// go-plugin can still be passing on output a plugin sent before Close,
+// which must not land after the next launch's.
+func (w *lineWriter) finish() {
+	w.Flush()
+	w.finished.Store(true)
 }
