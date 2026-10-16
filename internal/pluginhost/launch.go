@@ -3,6 +3,7 @@
 package pluginhost
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -67,6 +68,7 @@ type Instance struct {
 	Info    *tesserav1.DescribeResponse
 	Client  tesserav1.PanelServiceClient
 	client  *plugin.Client
+	rpc     plugin.ClientProtocol
 	runner  *procRunner
 	outputs []*lineWriter
 }
@@ -138,6 +140,7 @@ func (inst *Instance) start(ctx context.Context, name string) error {
 	if err != nil {
 		return fmt.Errorf("plugin %q failed to start: %w", name, err)
 	}
+	inst.rpc = rpc
 	raw, err := rpc.Dispense("panel")
 	if err != nil {
 		return fmt.Errorf("plugin %q: %w", name, err)
@@ -189,9 +192,12 @@ func Describe(ctx context.Context, dir, name string, output func(line string), l
 // drainTimeout of its exit, which is less than killTimeout.
 func (inst *Instance) Close() {
 	defer func() {
-		for _, w := range inst.outputs {
-			w.Flush()
-		}
+		// Not waited for: a stalled output callback must not hold up Close.
+		go func() {
+			for _, w := range inst.outputs {
+				w.Flush()
+			}
+		}()
 		// go-plugin removes it only for a plugin that started.
 		if inst.runner.tmpDir != "" {
 			_ = os.RemoveAll(inst.runner.tmpDir)
@@ -215,8 +221,12 @@ func (inst *Instance) Close() {
 	case <-time.After(reapTimeout):
 	}
 	// Only a child that left the group can still hold the pipes, on a
-	// plugin whose exit watch did not see; go-plugin waits for them.
+	// plugin whose exit watch did not see, or the plugin's connection;
+	// go-plugin waits for both.
 	inst.runner.closePipes()
+	if rpc, ok := inst.rpc.(*plugin.GRPCClient); ok {
+		rpc.Conn.Close() // ends a Shutdown call that nothing will answer
+	}
 	select {
 	case <-done:
 	case <-time.After(pipeTimeout):
@@ -260,7 +270,7 @@ func (w *lineWriter) Write(b []byte) (int, error) {
 	defer w.mu.Unlock()
 	for _, c := range b {
 		if c == '\n' {
-			w.output(string(w.line))
+			w.output(string(bytes.TrimSuffix(w.line, []byte("\r")))) // Windows line ends
 			w.line = w.line[:0]
 			continue
 		}
@@ -288,9 +298,12 @@ func runeCut(b []byte) int {
 	return len(b)
 }
 
-// Flush passes on a final line that has no newline.
+// Flush passes on a final line that has no newline, unless Write is
+// busy passing one on, which only a stalled output callback makes last.
 func (w *lineWriter) Flush() {
-	w.mu.Lock()
+	if !w.mu.TryLock() {
+		return
+	}
 	defer w.mu.Unlock()
 	if len(w.line) > 0 {
 		w.output(string(w.line))

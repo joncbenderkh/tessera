@@ -5,6 +5,7 @@ package pluginhost
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -452,6 +453,54 @@ func TestCloseKillsPluginWhenWatchFails(t *testing.T) {
 	}
 }
 
+func TestCanceledStartClosesPipes(t *testing.T) {
+	r := &procRunner{path: os.Args[0]}
+	if _, err := r.runnerFunc(nil, exec.Command(""), ""); err != nil {
+		t.Fatal(err)
+	}
+	r.kill()
+	if err := r.Start(context.Background()); err == nil {
+		t.Fatal("Start ran after kill")
+	}
+	for i, f := range r.childEnds {
+		if _, err := f.Write([]byte("x")); !errors.Is(err, os.ErrClosed) {
+			t.Errorf("child end %d: got %v, want it closed", i, err)
+		}
+	}
+	for i, rc := range []io.Reader{r.stdout, r.stderr} {
+		if _, err := rc.Read(make([]byte, 1)); !errors.Is(err, os.ErrClosed) {
+			t.Errorf("read end %d: got %v, want it closed", i, err)
+		}
+	}
+}
+
+func TestCloseDespiteStalledOutput(t *testing.T) {
+	if !canFreeze {
+		t.Skip("needs process groups")
+	}
+	dir := install(t, "detached")
+	logger, _ := newLogger()
+	stall := make(chan struct{})
+	defer close(stall)
+	var child childPID
+	inst, err := Launch(context.Background(), dir, "detached", func(line string) {
+		child.output(line)
+		<-stall // the host's log never returns
+	}, logger)
+	if err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(500 * time.Millisecond) // until the callback has stalled
+	start := time.Now()
+	inst.Close()
+	if d := time.Since(start); d > killTimeout+reapTimeout+pipeTimeout+time.Second {
+		t.Errorf("Close took %v", d)
+	}
+	if pid := child.get(); pid != 0 && !gone(pid) {
+		t.Errorf("child %d still running", pid)
+	}
+}
+
 func TestFailedStartCleansUp(t *testing.T) {
 	tmp := t.TempDir()
 	t.Setenv("TMPDIR", tmp)
@@ -548,6 +597,24 @@ func TestLineWriter(t *testing.T) {
 	if want := []string{"one", "two", "three"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("got %q, want %q", got, want)
 	}
+
+	got = nil
+	w.Write([]byte("crlf\r\nbare\r"))
+	w.Flush()
+	if want := []string{"crlf", "bare\r"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+
+	got = nil
+	w.mu.Lock() // as Write holds it while a stalled callback runs
+	flushed := make(chan struct{})
+	go func() { w.Flush(); close(flushed) }()
+	select {
+	case <-flushed:
+	case <-time.After(time.Second):
+		t.Fatal("Flush waited for a busy Write")
+	}
+	w.mu.Unlock()
 
 	got = nil
 	w.Write(append(bytes.Repeat([]byte("x"), maxLine-1), "é\n"...))

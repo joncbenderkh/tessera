@@ -29,6 +29,9 @@ type procRunner struct {
 	cmd    *exec.Cmd
 	stdout io.ReadCloser
 	stderr io.ReadCloser
+	// childEnds are the write ends of the pipes, which the host closes
+	// once the plugin has started with its own copies.
+	childEnds []*os.File
 
 	mu       sync.Mutex
 	proc     *os.Process
@@ -66,14 +69,23 @@ func (r *procRunner) runnerFunc(_ hclog.Logger, spec *exec.Cmd, tmpDir string) (
 	// No stdin: go-plugin would pass the host's, and a plugin in its own
 	// process group that read a terminal would be stopped by SIGTTIN.
 	ownProcessGroup(r.cmd)
-	stdout, err := r.cmd.StdoutPipe()
+	// The pipes are made here rather than by Cmd.StdoutPipe, so the host
+	// holds both ends and can close them all if the launch is canceled
+	// before the process starts.
+	stdout, childStdout, err := os.Pipe()
 	if err != nil {
 		return nil, err
 	}
-	r.stdout = &lineLimiter{ReadCloser: stdout}
-	if r.stderr, err = r.cmd.StderrPipe(); err != nil {
+	stderr, childStderr, err := os.Pipe()
+	if err != nil {
+		stdout.Close()
+		childStdout.Close()
 		return nil, err
 	}
+	r.cmd.Stdout, r.cmd.Stderr = childStdout, childStderr
+	r.childEnds = []*os.File{childStdout, childStderr}
+	r.stdout = &lineLimiter{ReadCloser: stdout}
+	r.stderr = stderr
 	return r, nil
 }
 
@@ -85,11 +97,16 @@ func (r *procRunner) Start(context.Context) error {
 	canceled := r.canceled
 	r.mu.Unlock()
 	if canceled {
+		r.closeChildEnds()
+		r.closePipes()
 		return errors.New("launch canceled")
 	}
 	r.reaped = make(chan struct{})
 	r.drained = make(chan struct{})
-	if err := startOnOwnThread(r.cmd, r.reaped); err != nil {
+	err := startOnOwnThread(r.cmd, r.reaped)
+	r.closeChildEnds() // the plugin has its own copies, if it started
+	if err != nil {
+		r.closePipes()
 		return err
 	}
 	r.mu.Lock()
@@ -147,6 +164,14 @@ func (r *procRunner) watch() {
 	r.closePipes()
 }
 
+// closeChildEnds closes the host's copies of the pipe ends the plugin
+// writes to.
+func (r *procRunner) closeChildEnds() {
+	for _, f := range r.childEnds {
+		f.Close()
+	}
+}
+
 // closePipes closes the plugin's pipes, ending go-plugin's readers even
 // if a child that left the plugin's group holds them.
 func (r *procRunner) closePipes() {
@@ -158,6 +183,7 @@ func (r *procRunner) closePipes() {
 func (r *procRunner) reap() error {
 	r.reapOnce.Do(func() {
 		r.waitErr = r.cmd.Wait()
+		r.closePipes() // go-plugin has read them to the end (see Wait)
 		close(r.reaped)
 	})
 	return r.waitErr

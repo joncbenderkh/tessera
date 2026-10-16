@@ -156,6 +156,7 @@ jobs:
           go-version-file: ${{ matrix.go == 'minimum' && 'go.mod' || '' }}
 
       - name: Test
-        # -v lists skipped tests, which differ per OS. -race needs cgo,
-        # which the Windows runner lacks.
-        run: go test -v ${{ runner.os != 'Windows' && '-race' || '' }} ./internal/pluginhost ./internal/config
+        # -v lists skipped tests, which differ per OS. -race needs cgo.
+        env:
+          CGO_ENABLED: "1"
+        run: go test -v -race ./internal/pluginhost ./internal/config
