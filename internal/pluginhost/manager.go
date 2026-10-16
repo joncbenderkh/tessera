@@ -59,10 +59,11 @@ type PanelState struct {
 	Since      time.Time // when State last changed
 	Info       *tesserav1.DescribeResponse
 
-	// For Stopping, Restarting, and Crashed: why the plugin failed, how
-	// its process ended if it exited by itself, and how many failures
-	// in a row there have been. A failure is a launch that failed, or an
-	// exit or failed health check once live. Failures is kept while
+	// For Restarting and Crashed: why the plugin failed, how its
+	// process ended if it exited by itself, and how many failures in a
+	// row there have been. Stopping carries only the new failure's Err;
+	// Failures there still counts the earlier ones. A failure is a
+	// launch that failed, or an exit or failed health check once live. Failures is kept while
 	// Starting (the launch under way is attempt Failures+1 of
 	// MaxAttempts), and RestartAt is the Backoff for that count: 1 s
 	// after the first failure, 2 s after the second, and so on. A
