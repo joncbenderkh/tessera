@@ -299,13 +299,17 @@ func (m *Manager) launch(pn *panel) (*Instance, string, error) {
 		return nil, "", err
 	}
 	if err := configure(m.ctx, inst, pn.cfg, m.opts.CallTimeout); err != nil {
-		// A plugin that died while configuring says how; one that hung
-		// was killed by Close, which is not news.
+		// A plugin that died while configuring says how. Its lost
+		// connection can fail the call before the exit is seen, so
+		// wait briefly for it; a plugin that only rejected its settings
+		// is still running and has nothing to say.
 		var exit string
-		select {
-		case <-inst.Done():
-			exit = orUnknown(awaitStatus(inst))
-		default:
+		if Retryable(err) {
+			select {
+			case <-inst.Done():
+				exit = orUnknown(awaitStatus(inst))
+			case <-time.After(time.Second):
+			}
 		}
 		inst.Close()
 		return nil, exit, err
