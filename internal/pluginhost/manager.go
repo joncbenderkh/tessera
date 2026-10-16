@@ -166,12 +166,14 @@ func (m *Manager) supervise(pn *panel) {
 			}
 			return
 		}
+		// Each event is logged before the state it explains, so a
+		// panel's Logs already say why when States shows the change.
 		if err == nil {
+			m.event(pn, "plugin %s %s live", pn.Plugin, inst.Info.GetVersion())
 			m.update(pn, func(s *PanelState) {
 				s.State, s.Info, s.Err, s.ExitStatus = Live, inst.Info, nil, ""
 				pn.inst = inst
 			})
-			m.event(pn, "plugin %s %s live", pn.Plugin, inst.Info.GetVersion())
 			live := time.Now()
 			var exit string
 			select {
@@ -193,18 +195,18 @@ func (m *Manager) supervise(pn *panel) {
 				attempt = 0
 			}
 			err = fmt.Errorf("plugin %q exited unexpectedly", pn.Plugin)
-			m.update(pn, func(s *PanelState) { s.ExitStatus = exit })
 			m.event(pn, "plugin exited: %s", orUnknown(exit))
+			m.update(pn, func(s *PanelState) { s.ExitStatus = exit })
 		}
 
 		attempt++
 		if !Retryable(err) || attempt >= m.opts.MaxAttempts {
-			m.update(pn, func(s *PanelState) { s.State, s.Err, s.Attempt = Crashed, err, attempt })
 			if Retryable(err) {
 				m.event(pn, "giving up after %d failed attempts: %v", attempt, err)
 			} else {
 				m.event(pn, "not restarting: %v", err)
 			}
+			m.update(pn, func(s *PanelState) { s.State, s.Err, s.Attempt = Crashed, err, attempt })
 			select {
 			case <-m.ctx.Done():
 				return
@@ -215,10 +217,10 @@ func (m *Manager) supervise(pn *panel) {
 			}
 		}
 		delay := m.opts.Backoff << (attempt - 1)
+		m.event(pn, "%v; restarting in %v (attempt %d/%d failed)", err, delay, attempt, m.opts.MaxAttempts)
 		m.update(pn, func(s *PanelState) {
 			s.State, s.Err, s.Attempt, s.RestartAt = Restarting, err, attempt, time.Now().Add(delay)
 		})
-		m.event(pn, "%v; restarting in %v (attempt %d/%d failed)", err, delay, attempt, m.opts.MaxAttempts)
 		select {
 		case <-m.ctx.Done():
 			return
