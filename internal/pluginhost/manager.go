@@ -28,6 +28,7 @@ const (
 	Starting   State = iota // launching, describing, or configuring
 	Live                    // configured and running
 	Stale                   // running, but its view is old; set by view updates (#14)
+	Stopping                // failed or restarted; being shut down
 	Restarting              // failed; a restart is scheduled for RestartAt
 	Crashed                 // failed for good, or too often; waits for Restart
 )
@@ -40,6 +41,8 @@ func (s State) String() string {
 		return "live"
 	case Stale:
 		return "stale"
+	case Stopping:
+		return "stopping"
 	case Restarting:
 		return "restarting"
 	case Crashed:
@@ -55,7 +58,7 @@ type PanelState struct {
 	Since      time.Time // when State last changed
 	Info       *tesserav1.DescribeResponse
 
-	// For Restarting and Crashed: why the plugin failed, how its process
+	// For Stopping, Restarting, and Crashed: why the plugin failed, how its process
 	// ended if it ran, and how many launches in a row have failed.
 	// Failures counts the failed launches so far, also while Starting
 	// (the launch under way is attempt Failures+1 of MaxAttempts), and
@@ -209,16 +212,26 @@ func (m *Manager) supervise(pn *panel) {
 				s.State, s.Info = Live, inst.Info
 				pn.inst = inst
 			})
+			var exited, restart bool
 			var lived time.Duration
-			var restart bool
-			exit, lived, restart, err = m.watchLive(pn, inst)
-			m.update(pn, func(*PanelState) { pn.inst = nil })
-			m.closeLater(inst)
+			exited, lived, restart, err = m.watchLive(pn, inst)
+			if restart {
+				m.event(pn, "restart requested")
+			}
+			// Shown while the plugin is shut down, which can take
+			// seconds; the next one starts only after.
+			m.update(pn, func(s *PanelState) {
+				s.State, s.Err = Stopping, err
+				pn.inst = nil
+			})
+			if exited {
+				exit = orUnknown(awaitStatus(m.ctx, inst))
+			}
+			inst.Close()
 			switch {
 			case m.ctx.Err() != nil:
 				return
 			case restart:
-				m.event(pn, "restart requested")
 				failures = 0
 				continue
 			}
@@ -264,53 +277,64 @@ func (m *Manager) supervise(pn *panel) {
 	}
 }
 
-// closeLater shuts inst down in the background, which can take
-// seconds for a plugin that ignores Shutdown, so its panel shows what
-// comes next meanwhile. Close waits for it.
-func (m *Manager) closeLater(inst *Instance) {
-	m.wg.Add(1)
-	go func() {
-		defer m.wg.Done()
-		inst.Close()
-	}()
-}
-
 // watchLive waits while inst is live: until it exits, fails a health
-// check (a hang), Restart is asked for, or Close. It returns how the
-// process ended, if it did, how long it was live, whether a Restart
-// ended it, and the failure, if any.
-func (m *Manager) watchLive(pn *panel, inst *Instance) (exit string, lived time.Duration, restart bool, err error) {
+// check, Restart is asked for, or Close; a Restart or Close also ends a
+// health check under way. It returns whether the process exited, how
+// long it was live, whether a Restart ended it, and the failure, if
+// any.
+func (m *Manager) watchLive(pn *panel, inst *Instance) (exited bool, lived time.Duration, restart bool, err error) {
 	start := time.Now()
 	tick := time.NewTicker(m.opts.PingInterval)
 	defer tick.Stop()
+	exit := func() (bool, time.Duration, bool, error) {
+		return true, time.Since(start), false, fmt.Errorf("plugin %q exited unexpectedly", inst.Info.GetName())
+	}
 	for {
 		select {
 		case <-m.ctx.Done():
-			return "", time.Since(start), false, nil
+			return false, time.Since(start), false, nil
 		case <-pn.restart:
-			return "", time.Since(start), true, nil
+			return false, time.Since(start), true, nil
 		case <-inst.Done():
-			lived = time.Since(start) // before the cleanup awaitStatus waits for
-			return orUnknown(awaitStatus(inst)), lived, false, fmt.Errorf("plugin %q exited unexpectedly", inst.Info.GetName())
+			return exit()
 		case <-tick.C:
-			ctx, cancel := context.WithTimeout(m.ctx, m.opts.CallTimeout)
-			perr := inst.Ping(ctx)
-			hang := perr != nil && hung(ctx, perr, m.opts.CallTimeout)
-			cancel()
-			if perr != nil && m.ctx.Err() == nil {
-				// A plugin that died makes the check fail before its exit
-				// is seen; give the exit a moment to show.
-				select {
-				case <-inst.Done():
-					continue // reported by the case above
-				case <-time.After(500 * time.Millisecond):
-				}
-				if !hang {
-					return "", time.Since(start), false, fmt.Errorf("plugin %q failed its health check: %w", inst.Info.GetName(), perr)
-				}
-				return "", time.Since(start), false, hangError{fmt.Errorf("plugin %q hung: health check did not answer within %v", inst.Info.GetName(), m.opts.CallTimeout)}
-			}
 		}
+		ctx, cancel := context.WithTimeout(m.ctx, m.opts.CallTimeout)
+		answer := make(chan error, 1)
+		go func() { answer <- inst.Ping(ctx) }()
+		var perr error
+		select {
+		case perr = <-answer:
+		case <-m.ctx.Done():
+			cancel()
+			return false, time.Since(start), false, nil
+		case <-pn.restart:
+			cancel()
+			return false, time.Since(start), true, nil
+		case <-inst.Done():
+			cancel()
+			return exit()
+		}
+		hang := perr != nil && hung(ctx, perr, m.opts.CallTimeout)
+		cancel()
+		if perr == nil {
+			continue
+		}
+		// A plugin that died makes the check fail before its exit is
+		// seen; give the exit a moment to show.
+		select {
+		case <-m.ctx.Done():
+			return false, time.Since(start), false, nil
+		case <-pn.restart:
+			return false, time.Since(start), true, nil
+		case <-inst.Done():
+			return exit()
+		case <-time.After(500 * time.Millisecond):
+		}
+		if !hang {
+			return false, time.Since(start), false, fmt.Errorf("plugin %q failed its health check: %w", inst.Info.GetName(), perr)
+		}
+		return false, time.Since(start), false, hangError{fmt.Errorf("plugin %q hung: health check did not answer within %v", inst.Info.GetName(), m.opts.CallTimeout)}
 	}
 }
 
@@ -337,7 +361,8 @@ func (m *Manager) launch(pn *panel) (*Instance, string, error) {
 		if Retryable(err) && !errors.As(err, &hung) && m.ctx.Err() == nil {
 			select {
 			case <-inst.Done():
-				exit = orUnknown(awaitStatus(inst))
+				exit = orUnknown(awaitStatus(m.ctx, inst))
+			case <-m.ctx.Done():
 			case <-time.After(time.Second):
 			}
 		}
@@ -355,11 +380,12 @@ var ErrStarting = errors.New("the plugin is already starting")
 // place a Restart exactly there.
 var beforeLaunchHook = func(*panel) {}
 
-// awaitStatus returns how inst's process ended, waiting briefly for the
-// reap that tells.
-func awaitStatus(inst *Instance) string {
+// awaitStatus returns how inst's process ended, waiting briefly, or
+// until ctx ends, for the reap that tells.
+func awaitStatus(ctx context.Context, inst *Instance) string {
 	select {
 	case <-inst.runner.reaped:
+	case <-ctx.Done():
 	case <-time.After(pipeGrace + 500*time.Millisecond): // watch may reap after pipeGrace
 	}
 	return inst.ExitStatus()

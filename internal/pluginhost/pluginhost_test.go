@@ -543,7 +543,7 @@ func TestFailedStartCleansUp(t *testing.T) {
 	}
 	logger, _ := newLogger()
 	_, err := Launch(context.Background(), dir, "junk", ignore, logger)
-	if err == nil || Retryable(err) || !strings.Contains(err.Error(), "plugin \"junk\" is not a valid executable: ") || strings.Contains(err.Error(), "protocol") {
+	if err == nil || Retryable(err) || !strings.Contains(err.Error(), "plugin \"junk\" cannot be run: ") || strings.Contains(err.Error(), "protocol") {
 		t.Fatalf("got %v, want a permanent start error without a protocol hint", err)
 	}
 	if entries, _ := os.ReadDir(tmp); len(entries) != 0 {

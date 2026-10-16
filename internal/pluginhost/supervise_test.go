@@ -6,6 +6,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -153,10 +156,8 @@ func TestManualRestart(t *testing.T) {
 		defer m.mu.Unlock()
 		return s.State == Live && m.panels[1].inst != nil && m.panels[1].inst != first
 	})
-	select { // shut down in the background
-	case <-first.Done():
-	case <-time.After(killTimeout + reapTimeout + pipeTimeout):
-		t.Error("the replaced plugin is still running")
+	if !first.Exited() {
+		t.Error("the replaced plugin is still running") // so two ran at once
 	}
 
 	if err := m.Restart("nope"); err == nil {
@@ -447,7 +448,7 @@ func TestQueuedRestartResetsFailures(t *testing.T) {
 	}
 }
 
-func TestRestartDoesNotWaitForShutdown(t *testing.T) {
+func TestRestartLeavesLiveAtOnce(t *testing.T) {
 	if !canFreeze {
 		t.Skip("cannot stop a process on this OS")
 	}
@@ -456,14 +457,94 @@ func TestRestartDoesNotWaitForShutdown(t *testing.T) {
 	m := StartWith(panels("freezes-live"), dir, logger, fast) // no health check in the test's time
 	defer m.Close()
 	waitFor(t, m, "p0", "live", is(Live))
+	m.mu.Lock()
+	first := m.panels[0].inst
+	m.mu.Unlock()
 	time.Sleep(500 * time.Millisecond) // frozen by now
+	start := time.Now()
+	if err := m.Restart("p0"); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, m, "p0", "stopping", is(Stopping))
+	if d := time.Since(start); d > time.Second {
+		t.Errorf("the panel stayed Live for %v after Restart", d)
+	}
+	waitFor(t, m, "p0", "starting again", is(Starting))
+	if !first.Exited() {
+		t.Error("the next plugin started while the old one still ran")
+	}
+}
+
+func TestRestartEndsHealthCheck(t *testing.T) {
+	if !canFreeze {
+		t.Skip("cannot stop a process on this OS")
+	}
+	dir := install(t, "freezes-live")
+	logger, _ := newLogger()
+	opts := fast
+	opts.CallTimeout = 5 * time.Second
+	opts.PingInterval = 100 * time.Millisecond
+	m := StartWith(panels("freezes-live"), dir, logger, opts)
+	defer m.Close()
+	waitFor(t, m, "p0", "live", is(Live))
+	time.Sleep(600 * time.Millisecond) // frozen, with a health check waiting on it
 	start := time.Now()
 	if err := m.Restart("p0"); err != nil {
 		t.Fatal(err)
 	}
 	waitFor(t, m, "p0", "no longer live", func(s PanelState) bool { return s.State != Live })
 	if d := time.Since(start); d > time.Second {
-		t.Errorf("the panel stayed Live for %v after Restart", d)
+		t.Errorf("Restart took %v to end the health check", d)
+	}
+}
+
+// TestExitLeavesLiveAtOnce has a plugin exit while a child that left its
+// group holds its stderr, so the reap that gives its status waits
+// pipeGrace.
+func TestExitLeavesLiveAtOnce(t *testing.T) {
+	if !canFreeze || !canAwaitExit {
+		t.Skip("needs process groups and an exit watcher")
+	}
+	dir := install(t, "escapes")
+	logger, _ := newLogger()
+	opts := fast
+	opts.MaxAttempts = 1
+	m := StartWith(panels("escapes"), dir, logger, opts)
+	defer m.Close()
+	defer func() {
+		for _, l := range m.Logs("p0") {
+			var pid int
+			if _, err := fmt.Sscanf(l[strings.Index(l, "PLUGIN  ")+len("PLUGIN  "):], "child %d", &pid); err == nil {
+				if p, err := os.FindProcess(pid); err == nil {
+					p.Kill()
+				}
+			}
+		}
+	}()
+	waitFor(t, m, "p0", "live", is(Live))
+	m.mu.Lock()
+	inst := m.panels[0].inst
+	m.mu.Unlock()
+	<-inst.Done()
+	start := time.Now()
+	waitFor(t, m, "p0", "no longer live", func(s PanelState) bool { return s.State != Live })
+	if d := time.Since(start); d > pipeGrace/2 {
+		t.Errorf("the panel stayed Live for %v after its plugin exited", d)
+	}
+}
+
+func TestMissingInterpreterIsPermanent(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("no #! scripts on Windows")
+	}
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "clock"), []byte("#!/nonexistent/interpreter\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	logger, _ := newLogger()
+	_, err := Launch(context.Background(), dir, "clock", ignore, logger)
+	if err == nil || Retryable(err) || !strings.Contains(err.Error(), "cannot be run") {
+		t.Fatalf("got %v, want a permanent error", err)
 	}
 }
 

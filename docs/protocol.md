@@ -172,16 +172,19 @@ and restarts a plugin that crashes, hangs, or breaks the protocol:
   live (the health service above, for the service name `plugin`, also
   with a 5-second deadline; any status but `SERVING` fails it), is shut
   down and launched again after 1 second, then 2, 4, and 8 after each
-  further failure in a row. A launch that fails,
-  short of the permanent failures below, counts the same way.
+  further failure in a row. A launch that fails, short of the
+  permanent failures below, counts the same way. The next launch, after
+  a failure or a restart, waits until the old process is gone, so a
+  panel never runs two at once.
 - At the fifth failure in a row the host gives up and shows the panel
   as crashed, with the last error and, for a plugin that exited by
   itself, its exit status, until the user restarts it.
 - A plugin that stays up for a minute starts its count again.
 - Failures a restart cannot fix are not retried: a missing,
-  non-executable, invalid (such as a script without a `#!` line), or
-  misnamed plugin, a version the host does not
-  speak, and settings the plugin rejects with `INVALID_ARGUMENT`.
+  non-executable, or misnamed plugin, one the system cannot run (not a
+  program for it, a script whose interpreter is missing, or a file on
+  a `noexec` mount), a version the host does not speak, and settings
+  the plugin rejects with `INVALID_ARGUMENT`.
 
 The host keeps each panel's last 500 lines of plugin output, each cut
 to 4 KiB, and its lifecycle events (started, exited with status,

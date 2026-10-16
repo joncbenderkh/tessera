@@ -26,7 +26,9 @@ const killStatus = "exit status 137"
 
 // badExecutable reports whether err, from starting the plugin, says its
 // file is not a program this system runs.
-func badExecutable(err error) bool { return errors.Is(err, windows.ERROR_BAD_EXE_FORMAT) }
+func badExecutable(err error) bool {
+	return errors.Is(err, windows.ERROR_BAD_EXE_FORMAT) || errors.Is(err, windows.ERROR_EXE_MACHINE_TYPE_MISMATCH)
+}
 
 // killGroup kills the plugin. Go holds its handle until Wait, so the
 // PID still names it.

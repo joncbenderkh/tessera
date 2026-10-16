@@ -128,9 +128,10 @@ func launch(ctx context.Context, dir, name string, output func(line string), log
 		if inst.runner.started() && Retryable(err) && !errors.As(err, &hung) && ctx.Err() == nil {
 			select {
 			case <-inst.Done():
-				if s := awaitStatus(inst); inst.runner.ownExit(s) {
+				if s := awaitStatus(ctx, inst); inst.runner.ownExit(s) {
 					exit = orUnknown(s)
 				}
+			case <-ctx.Done():
 			case <-time.After(time.Second):
 			}
 		}
@@ -165,7 +166,7 @@ func (inst *Instance) start(ctx context.Context, name string, timeout time.Durat
 		return permanent(fmt.Errorf("plugin %q does not speak protocol %d: %w", name, tesserav1.ProtocolVersion, err))
 	}
 	if err != nil && badExecutable(err) {
-		return permanent(fmt.Errorf("plugin %q is not a valid executable: %w", name, err))
+		return permanent(fmt.Errorf("plugin %q cannot be run: %w", name, err))
 	}
 	// As is a handshake that never comes.
 	if err != nil && strings.Contains(err.Error(), "timeout while waiting for plugin to start") {

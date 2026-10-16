@@ -15,8 +15,12 @@ import (
 const killStatus = "signal: killed"
 
 // badExecutable reports whether err, from starting the plugin, says its
-// file is not a program this system runs.
-func badExecutable(err error) bool { return errors.Is(err, syscall.ENOEXEC) }
+// file is not a program this system runs: not one at all, a script
+// whose interpreter is missing (find saw the file itself), or one on a
+// file system that forbids running it.
+func badExecutable(err error) bool {
+	return errors.Is(err, syscall.ENOEXEC) || errors.Is(err, syscall.ENOENT) || errors.Is(err, syscall.EACCES)
+}
 
 // killGroup kills the plugin's process group.
 func killGroup(p *os.Process) {
