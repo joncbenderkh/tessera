@@ -56,6 +56,9 @@ type PanelState struct {
 
 	// For Restarting and Crashed: why the plugin failed, how its process
 	// ended if it ran, and how many launches in a row have failed.
+	// Attempt counts failures so far (also while Starting, for "attempt
+	// n/MaxAttempts"), and RestartAt is the Backoff for that count: 1 s
+	// after the first failure, 2 s after the second, and so on.
 	Err         error
 	ExitStatus  string
 	Attempt     int
@@ -174,11 +177,14 @@ func StartWith(cfg config.Config, dir string, logger *log.Logger, opts Options) 
 func (m *Manager) supervise(pn *panel) {
 	attempt := 0 // failed launches in a row
 	for {
-		select { // a Restart asked for before this launch is this launch
-		case <-pn.restart:
-		default:
-		}
 		m.update(pn, func(s *PanelState) {
+			// A Restart asked for before this launch is this launch; one
+			// asked for while it is Starting, Restart ignores. Both hold
+			// mu, so none slips in between.
+			select {
+			case <-pn.restart:
+			default:
+			}
 			s.State, s.Info, s.Err, s.ExitStatus = Starting, nil, nil, ""
 			s.Attempt, s.RestartAt = attempt, time.Time{}
 		})
@@ -280,7 +286,7 @@ func (m *Manager) watchLive(pn *panel, inst *Instance) (exit string, lived time.
 					continue
 				default:
 				}
-				return "", time.Since(start), false, fmt.Errorf("plugin %q hung: health check failed within %v: %w", inst.Info.GetName(), m.opts.CallTimeout, perr)
+				return "", time.Since(start), false, hangError{fmt.Errorf("plugin %q hung: health check failed within %v: %w", inst.Info.GetName(), m.opts.CallTimeout, perr)}
 			}
 		}
 	}
@@ -301,10 +307,12 @@ func (m *Manager) launch(pn *panel) (*Instance, string, error) {
 	if err := configure(m.ctx, inst, pn.cfg, m.opts.CallTimeout); err != nil {
 		// A plugin that died while configuring says how. Its lost
 		// connection can fail the call before the exit is seen, so
-		// wait briefly for it; a plugin that only rejected its settings
-		// is still running and has nothing to say.
+		// wait briefly for it. One that hung, or only rejected its
+		// settings, is still running and has nothing to say, and Close
+		// does not wait.
 		var exit string
-		if Retryable(err) {
+		var hung hangError
+		if Retryable(err) && !errors.As(err, &hung) && m.ctx.Err() == nil {
 			select {
 			case <-inst.Done():
 				exit = orUnknown(awaitStatus(inst))
@@ -322,7 +330,7 @@ func (m *Manager) launch(pn *panel) (*Instance, string, error) {
 func awaitStatus(inst *Instance) string {
 	select {
 	case <-inst.runner.reaped:
-	case <-time.After(time.Second):
+	case <-time.After(pipeGrace + 500*time.Millisecond): // watch may reap after pipeGrace
 	}
 	return inst.ExitStatus()
 }
@@ -351,7 +359,7 @@ func configure(ctx context.Context, inst *Instance, p config.Panel, timeout time
 	}
 	// The plugin sees the deadline too, and may report it first.
 	if errors.Is(ctx.Err(), context.DeadlineExceeded) || status.Code(err) == codes.DeadlineExceeded {
-		return fmt.Errorf("plugin %q hung: Configure did not answer within %v", p.Plugin, timeout)
+		return hangError{fmt.Errorf("plugin %q hung: Configure did not answer within %v", p.Plugin, timeout)}
 	}
 	if err != nil {
 		return fmt.Errorf("plugin %q: Configure: %w", p.Plugin, err)
@@ -403,16 +411,25 @@ func (m *Manager) Changed() <-chan struct{} { return m.changed }
 // Restart relaunches panel id's plugin now, at attempt 1: one that is
 // live is shut down first, and one waiting to restart or crashed starts
 // at once. It is the error tile's Restart button.
+//
+// A panel already Starting is left alone: the launch under way is the
+// restart.
 func (m *Manager) Restart(id string) error {
-	pn := m.find(id)
-	if pn == nil {
-		return fmt.Errorf("no enabled panel %q", id)
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, pn := range m.panels {
+		if pn.ID != id {
+			continue
+		}
+		if pn.State != Starting {
+			select {
+			case pn.restart <- struct{}{}:
+			default: // one is already pending
+			}
+		}
+		return nil
 	}
-	select {
-	case pn.restart <- struct{}{}:
-	default: // one is already pending
-	}
-	return nil
+	return fmt.Errorf("no enabled panel %q", id)
 }
 
 // Logs returns panel id's recent output and lifecycle events, oldest

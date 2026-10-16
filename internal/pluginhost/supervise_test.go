@@ -226,9 +226,13 @@ func TestDoubleRestartRelaunchesOnce(t *testing.T) {
 	waitFor(t, m, "p0", "live again", func(s PanelState) bool {
 		return s.State == Live && countLines(m.Logs("p0"), "starting plugin") >= 2
 	})
-	time.Sleep(500 * time.Millisecond)
-	if n := countLines(m.Logs("p0"), "starting plugin"); n != 2 {
-		t.Errorf("%d launches for one restart:\n%s", n, strings.Join(m.Logs("p0"), "\n"))
+	// A Restart left queued would be taken at once by the live plugin's
+	// watch and shut it down, which a clock plugin finishes well within
+	// this.
+	time.Sleep(3 * time.Second)
+	logs := m.Logs("p0")
+	if n, r := countLines(logs, "starting plugin"), countLines(logs, "restart requested"); n != 2 || r != 1 {
+		t.Errorf("%d launches and %d restarts for one restart:\n%s", n, r, strings.Join(logs, "\n"))
 	}
 }
 

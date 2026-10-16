@@ -171,10 +171,10 @@ and restarts a plugin that crashes, hangs, or breaks the protocol:
   fails the health check the host makes every 10 seconds while it is
   live (go-plugin's `grpc.health.v1.Health`, also with a 5-second
   deadline), is shut down and launched again after 1 second, then 2,
-  4, 8, and 16 after each further failure in a row. A launch that
-  fails, short of the permanent failures below, counts the same way.
-- After 5 failures in a row the host gives up and shows the panel as
-  crashed, with the last error and exit status, until the user
+  4, and 8 after each further failure in a row. A launch that fails,
+  short of the permanent failures below, counts the same way.
+- At the fifth failure in a row the host gives up and shows the panel
+  as crashed, with the last error and exit status, until the user
   restarts it.
 - A plugin that stays up for a minute starts its count again.
 - Failures a restart cannot fix are not retried: a missing,
@@ -195,12 +195,14 @@ plugins directory, such as `clock.py` next to `clock`, are ignored.
 
 The host refuses a plugin, shutting it down and recording the reason,
 when its file is missing or not executable, the handshake or the
-mutual TLS connection fails, it does not answer `Describe` within 5
-seconds, its `Describe` gives a different name or protocol version, or
-it picks a view schema version the host did not offer. A rejected
-`Configure` is recorded the same way. These are the permanent failures
-above: the reason is logged now and will be shown in the panel's place
-once the host draws the grid (#10, #11).
+mutual TLS connection fails, it does not answer `Describe` within the
+call deadline, its `Describe` gives a different name or protocol
+version, or it picks a view schema version the host did not offer; a
+rejected `Configure` is recorded the same way. Of these, a failed
+handshake or connection and a `Describe` that does not answer are
+retried as above; the rest are the permanent failures. The reason is
+logged now and will be shown in the panel's place once the host draws
+the grid (#10, #11).
 Names are 1 to 64 lowercase letters, digits, and hyphens, starting with a
 letter or digit, so they can never name a path outside the plugins
 directory. Names Windows reserves for devices (`con`, `prn`, `aux`,

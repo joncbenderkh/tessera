@@ -285,6 +285,37 @@ func TestExitKillsChildren(t *testing.T) {
 	}
 }
 
+// TestExitSeenWhileChildHoldsStderr runs wherever an exit watcher
+// does, Windows included: there a child is never killed with its
+// plugin, so a plain child holds the plugin's stderr after it exits.
+func TestExitSeenWhileChildHoldsStderr(t *testing.T) {
+	if !canAwaitExit {
+		t.Skip("no exit watcher on this OS")
+	}
+	dir := install(t, "exits")
+	logger, _ := newLogger()
+	var child childPID
+	inst, err := Launch(context.Background(), dir, "exits", child.output, logger)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer inst.Close()
+	defer func() {
+		if p, err := os.FindProcess(child.get()); err == nil && child.get() != 0 {
+			p.Kill()
+		}
+	}()
+	select {
+	case <-inst.Done():
+	case <-time.After(10 * time.Second):
+		t.Fatal("exit not seen while a child holds the plugin's stderr")
+	}
+	time.Sleep(pipeGrace + drainTimeout + 500*time.Millisecond) // watch reaps and drains
+	if s := inst.ExitStatus(); s != "exit status 0" {
+		t.Errorf("got exit status %q, want exit status 0", s)
+	}
+}
+
 func TestExitSeenDespiteEscapedChild(t *testing.T) {
 	if !canFreeze || !canAwaitExit {
 		t.Skip("needs process groups and an exit watcher")

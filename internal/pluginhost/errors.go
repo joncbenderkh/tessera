@@ -14,6 +14,12 @@ func (e permanentError) Unwrap() error { return e.err }
 
 func permanent(err error) error { return permanentError{err} }
 
+// hangError marks a call the plugin did not answer in time; the
+// plugin is likely still running.
+type hangError struct{ error }
+
+func (e hangError) Unwrap() error { return e.error }
+
 // Retryable reports whether restarting the plugin could fix err.
 func Retryable(err error) bool {
 	var p permanentError
