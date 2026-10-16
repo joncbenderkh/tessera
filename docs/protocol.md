@@ -206,7 +206,9 @@ plugins directory, such as `clock.py` next to `clock`, are ignored.
 Install or update a plugin by renaming it into place (write it as
 `clock.new` in the plugins directory, then rename it to `clock`): a
 panel that restarts while its plugin is missing or half-written fails
-for good, as above, until the user restarts it.
+for good, as above, until the user restarts it. So does one whose
+launch Windows denies, which an antivirus scan of a new `.exe` can
+do for a moment.
 
 The host refuses a plugin, shutting it down and recording the reason,
 when its file is missing or not executable, the handshake or the
@@ -214,7 +216,8 @@ mutual TLS connection fails, it does not answer `Describe` within the
 call deadline, its `Describe` gives a different name or protocol
 version, or it picks a view schema version the host did not offer; a
 rejected `Configure` is recorded the same way. Of these, a failed
-handshake or connection and a `Describe` that does not answer, or
+handshake (other than one on a protocol version the host does not
+speak) or connection and a `Describe` that does not answer, or
 answers with an error, are retried as above; the rest are the
 permanent failures. The reason is logged now and will be shown in the
 panel's place once the host draws the grid (#10, #13).
