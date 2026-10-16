@@ -615,6 +615,26 @@ func TestFailedLaunchShowsStopping(t *testing.T) {
 	}
 }
 
+func TestFencedOutputSkipsLogs(t *testing.T) {
+	logger, logs := newLogger()
+	m := &Manager{logger: logger}
+	pn := &panel{PanelState: PanelState{ID: "p0"}, logs: newRing(10)}
+	before, after := m.output(pn), m.output(pn)
+	before("kept")
+	pn.fence()
+	after("late") // as a callback stalled past its launch's Close
+	if got := pn.logs.lines(); len(got) != 1 || !strings.HasSuffix(got[0], "PLUGIN  kept") {
+		t.Errorf("Logs after fence: %q", got)
+	}
+	if !strings.Contains(logs.String(), "[panel p0] late") {
+		t.Errorf("the host log lost a fenced line: %q", logs.String())
+	}
+	m.output(pn)("next")
+	if got := pn.logs.lines(); len(got) != 2 || !strings.HasSuffix(got[1], "PLUGIN  next") {
+		t.Errorf("Logs of the next launch: %q", got)
+	}
+}
+
 func TestRing(t *testing.T) {
 	r := newRing(3)
 	for i := range 5 {

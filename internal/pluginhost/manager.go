@@ -143,6 +143,9 @@ type panel struct {
 	logs    *ring
 	restart chan struct{} // a manual Restart; buffered, coalesced
 	told    bool          // Logs already name this failure; supervisor only
+
+	outMu  sync.Mutex
+	outGen int // bumped by fence as each launch ends
 }
 
 // Start launches the plugin of every enabled panel in cfg from dir,
@@ -209,6 +212,7 @@ func (m *Manager) supervise(pn *panel) {
 		if m.ctx.Err() != nil {
 			if inst != nil {
 				inst.Close()
+				pn.fence()
 			}
 			return
 		}
@@ -234,6 +238,7 @@ func (m *Manager) supervise(pn *panel) {
 				exit = orUnknown(awaitStatus(m.ctx, inst))
 			}
 			m.shutDown(pn, inst)
+			pn.fence()
 			switch {
 			case m.ctx.Err() != nil:
 				return
@@ -378,12 +383,9 @@ func (m *Manager) watchLive(pn *panel, inst *Instance) (exited bool, lived time.
 // deadline counts as a hang: the plugin is shut down before anything
 // else is called on it.
 func (m *Manager) launch(pn *panel) (*Instance, string, error) {
-	output := func(line string) {
-		m.logger.Printf("[panel %s] %s", pn.ID, line)
-		pn.logs.add("PLUGIN", line)
-	}
-	inst, exit, err := launch(m.ctx, m.dir, pn.Plugin, output, m.logger, m.opts.CallTimeout, func(err error) { m.stopping(pn, err) })
+	inst, exit, err := launch(m.ctx, m.dir, pn.Plugin, m.output(pn), m.logger, m.opts.CallTimeout, func(err error) { m.stopping(pn, err) })
 	if err != nil {
+		pn.fence()
 		return nil, exit, err
 	}
 	if err := configure(m.ctx, inst, pn.cfg, m.opts.CallTimeout); err != nil {
@@ -406,9 +408,36 @@ func (m *Manager) launch(pn *panel) (*Instance, string, error) {
 			}
 		}
 		m.shutDown(pn, inst)
+		pn.fence()
 		return nil, exit, err
 	}
 	return inst, "", nil
+}
+
+// output returns the output callback for a launch of pn's plugin. It
+// passes every line to the host log, but to pn's Logs only until fence
+// ends the launch: Close stops waiting for a stalled callback, which
+// must not add its line among the next launch's.
+func (m *Manager) output(pn *panel) func(line string) {
+	pn.outMu.Lock()
+	gen := pn.outGen
+	pn.outMu.Unlock()
+	return func(line string) {
+		m.logger.Printf("[panel %s] %s", pn.ID, line)
+		pn.outMu.Lock()
+		defer pn.outMu.Unlock()
+		if pn.outGen == gen {
+			pn.logs.add("PLUGIN", line)
+		}
+	}
+}
+
+// fence ends the output of pn's last launch, once its plugin is shut
+// down.
+func (pn *panel) fence() {
+	pn.outMu.Lock()
+	pn.outGen++
+	pn.outMu.Unlock()
 }
 
 // ErrStarting is Restart's answer for a panel whose plugin is already
