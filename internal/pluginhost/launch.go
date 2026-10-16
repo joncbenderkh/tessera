@@ -38,6 +38,8 @@ const (
 	// the plugin's pipes and waits up to pipeTimeout more.
 	reapTimeout = 2 * time.Second
 	pipeTimeout = time.Second
+	// flushTimeout bounds Close's wait for the plugin's last output.
+	flushTimeout = 100 * time.Millisecond
 )
 
 // handshake is the transport handshake of docs/protocol.md.
@@ -230,12 +232,20 @@ func Describe(ctx context.Context, dir, name string, output func(line string), l
 // drainTimeout of its exit, which is less than killTimeout.
 func (inst *Instance) Close() {
 	defer func() {
-		// Not waited for: a stalled output callback must not hold up Close.
+		// Waited for briefly, so a last unterminated line comes before
+		// whatever follows Close, but a stalled output callback cannot
+		// hold Close up.
+		flushed := make(chan struct{})
 		go func() {
 			for _, w := range inst.outputs {
 				w.Flush()
 			}
+			close(flushed)
 		}()
+		select {
+		case <-flushed:
+		case <-time.After(flushTimeout):
+		}
 		// go-plugin removes it only for a plugin that started.
 		if inst.runner.tmpDir != "" {
 			_ = os.RemoveAll(inst.runner.tmpDir)

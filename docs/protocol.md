@@ -197,6 +197,10 @@ Windows. A plugin's `DescribeResponse.name` must equal its executable's
 file name, which is how the config's `plugin:` field finds it: the name
 itself on Unix, the name plus `.exe` on Windows. Other files in the
 plugins directory, such as `clock.py` next to `clock`, are ignored.
+Install or update a plugin by renaming it into place (write it as
+`clock.new` in the plugins directory, then rename it to `clock`): a
+panel that restarts while its plugin is missing or half-written fails
+for good, as above, until the user restarts it.
 
 The host refuses a plugin, shutting it down and recording the reason,
 when its file is missing or not executable, the handshake or the
@@ -207,7 +211,7 @@ rejected `Configure` is recorded the same way. Of these, a failed
 handshake or connection and a `Describe` that does not answer, or
 answers with an error, are retried as above; the rest are the
 permanent failures. The reason is logged now and will be shown in the
-panel's place once the host draws the grid (#10, #11).
+panel's place once the host draws the grid (#10, #13).
 Names are 1 to 64 lowercase letters, digits, and hyphens, starting with a
 letter or digit, so they can never name a path outside the plugins
 directory. Names Windows reserves for devices (`con`, `prn`, `aux`,

@@ -21,8 +21,12 @@ func ownProcessGroup(*exec.Cmd) {}
 // unlike the 1 of os.Process.Kill, which plugins also exit with.
 const killCode = 137
 
-// killStatus is the status of a plugin the host killed.
-const killStatus = "exit status 137"
+// killStatus is the status of a plugin killGroup killed, and
+// procKillStatus of one os.Process.Kill killed.
+const (
+	killStatus     = "exit status 137"
+	procKillStatus = "exit status 1"
+)
 
 // badExecutable reports whether err, from starting the plugin, says its
 // file is not a program this system runs.

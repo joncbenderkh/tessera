@@ -152,8 +152,8 @@ at startup but does not yet apply reloads; that comes with the grid (#10).
 The host launches, describes, and configures each enabled panel's plugin
 and shuts them all down on exit (#12), and supervises them: crashes and
 hangs restart with backoff, and each panel keeps its state and logs
-(#13). It draws nothing yet; viewing and events are #14, and the SDK
-#18.
+(part of #13; the stale state and heartbeats come with #14). It draws
+nothing yet; viewing and events are #14, and the SDK #18.
 
 ## Git workflow
 

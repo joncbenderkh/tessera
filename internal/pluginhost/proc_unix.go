@@ -11,8 +11,12 @@ import (
 	"syscall"
 )
 
-// killStatus is the status of a plugin the host killed.
-const killStatus = "signal: killed"
+// killStatus is the status of a plugin killGroup killed, and
+// procKillStatus of one os.Process.Kill killed.
+const (
+	killStatus     = "signal: killed"
+	procKillStatus = killStatus
+)
 
 // badExecutable reports whether err, from starting the plugin, says its
 // file is not a program this system runs: not one at all, a script
