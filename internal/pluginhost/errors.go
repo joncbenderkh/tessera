@@ -1,0 +1,21 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
+package pluginhost
+
+import "errors"
+
+// permanentError marks a launch error that restarting the plugin cannot
+// fix: it is missing, misnamed, speaks another version, or rejects its
+// settings.
+type permanentError struct{ err error }
+
+func (e permanentError) Error() string { return e.err.Error() }
+func (e permanentError) Unwrap() error { return e.err }
+
+func permanent(err error) error { return permanentError{err} }
+
+// Retryable reports whether restarting the plugin could fix err.
+func Retryable(err error) bool {
+	var p permanentError
+	return !errors.As(err, &p)
+}

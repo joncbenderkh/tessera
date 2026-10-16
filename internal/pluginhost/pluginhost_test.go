@@ -85,8 +85,8 @@ func TestStartBringsPanelsUp(t *testing.T) {
 		t.Fatalf("want the 2 enabled panels, got %+v", states)
 	}
 	for _, s := range states {
-		if s.State != Ready || s.Info.GetName() != "clock" {
-			t.Errorf("panel %s: got %v %v, want ready clock", s.ID, s.State, s.Err)
+		if s.State != Live || s.Info.GetName() != "clock" {
+			t.Errorf("panel %s: got %v %v, want live clock", s.ID, s.State, s.Err)
 		}
 	}
 	// The plugins report Configure over GRPCStdio, which delivers it
@@ -130,8 +130,8 @@ func TestStartReportsFailures(t *testing.T) {
 		`plugin "rejects" rejected the settings: timezone: unknown`,
 		`plugin "missing" is not installed in ` + dir,
 	} {
-		if s := states[i]; s.State != Failed || s.Err == nil || s.Err.Error() != want {
-			t.Errorf("panel %s: got %v %v, want failed: %s", s.ID, s.State, s.Err, want)
+		if s := states[i]; s.State != Crashed || s.Attempt != 1 || s.Err == nil || s.Err.Error() != want {
+			t.Errorf("panel %s: got %v after %d attempts: %v, want crashed after 1: %s", s.ID, s.State, s.Attempt, s.Err, want)
 		}
 		if !strings.Contains(logs.String(), want) {
 			t.Errorf("log lacks %q", want)
@@ -263,7 +263,7 @@ func gone(pid int) bool {
 }
 
 func TestExitKillsChildren(t *testing.T) {
-	if !canAwaitExit {
+	if !canFreeze || !canAwaitExit {
 		t.Skip("children of an exited plugin are killed only by a forced Close on this OS")
 	}
 	dir := install(t, "exits")

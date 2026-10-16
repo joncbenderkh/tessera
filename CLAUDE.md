@@ -149,8 +149,10 @@ as GitHub issues. CI (#5), the release workflow (#6), the config file
 (#7), and plugin protocol v1 (#8) are in place. The host loads the config
 at startup but does not yet apply reloads; that comes with the grid (#10).
 The host launches, describes, and configures each enabled panel's plugin
-and shuts them all down on exit (#12), but draws nothing yet; viewing
-and events are #14, restarts #13, and the SDK #18.
+and shuts them all down on exit (#12), and supervises them: crashes and
+hangs restart with backoff, and each panel keeps its state and logs
+(#13). It draws nothing yet; viewing and events are #14, and the SDK
+#18.
 
 ## Git workflow
 

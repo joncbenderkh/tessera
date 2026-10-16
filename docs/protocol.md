@@ -63,11 +63,10 @@ on its own, though the host still sees the plugin exit; if it holds
 the plugin's stdout or stderr open, the host reads them for up to 3
 more seconds and then closes them. On other Unix systems the group is
 killed only when a plugin has to be killed. On Windows only the plugin
-itself is killed, and a plugin that crashes while a child holds its
-stderr is seen to exit only once that child exits. All of this holds
-while the host runs: on Linux the kernel also kills a plugin whose host
-dies without shutting it down, but not the plugin's children;
-elsewhere such a plugin outlives its host.
+itself is killed. All of this holds while the host runs: on Linux the
+kernel also kills a plugin whose host dies without shutting it down,
+but not the plugin's children; elsewhere such a plugin outlives its
+host.
 
 Mutual TLS is what go-plugin calls AutoMTLS, and the host always enables
 it: without it, any local process could connect to a plugin, read its
@@ -164,10 +163,25 @@ each `StackItem.widget` adds 1). A view over either limit fails
 its stream or Render call; the host shows an error tile naming the limit,
 does not restart the plugin, and tries again after the next Configure.
 
-The host puts a deadline on every unary call, treats a Watch stream that
-stays silent for twice the heartbeat interval as hung, and restarts a
-plugin that crashes, hangs, or breaks the protocol, with backoff, showing
-an error tile meanwhile (#13).
+The host puts a deadline on every unary call (5 seconds), treats a
+Watch stream that stays silent for twice the heartbeat interval as hung,
+and restarts a plugin that crashes, hangs, or breaks the protocol:
+
+- A plugin whose process exits, or that misses a call's deadline, is
+  shut down and launched again after 1 second, then 2, 4, 8, and 16
+  after each further failure in a row. A launch that fails, short of
+  the permanent failures below, counts the same way.
+- After 5 failures in a row the host gives up and shows the panel as
+  crashed, with the last error and exit status, until the user
+  restarts it.
+- A plugin that stays up for a minute starts its count again.
+- Failures a restart cannot fix are not retried: a missing,
+  non-executable, or misnamed plugin, a version the host does not
+  speak, and settings the plugin rejects with `INVALID_ARGUMENT`.
+
+The host keeps each panel's last 500 lines of plugin output and its
+lifecycle events (started, exited with status, restart scheduled, gave
+up) for the panel's Logs view.
 
 Plugins are installed in `tessera/plugins` under the user data
 directory: `$XDG_DATA_HOME` (or `~/.local/share`) on Linux,
@@ -182,8 +196,9 @@ when its file is missing or not executable, the handshake or the
 mutual TLS connection fails, it does not answer `Describe` within 5
 seconds, its `Describe` gives a different name or protocol version, or
 it picks a view schema version the host did not offer. A rejected
-`Configure` is recorded the same way. The reason is logged now and will
-be shown in the panel's place once the host draws the grid (#10, #13).
+`Configure` is recorded the same way. These are the permanent failures
+above: the reason is logged now and will be shown in the panel's place
+once the host draws the grid (#10, #11).
 Names are 1 to 64 lowercase letters, digits, and hyphens, starting with a
 letter or digit, so they can never name a path outside the plugins
 directory. Names Windows reserves for devices (`con`, `prn`, `aux`,

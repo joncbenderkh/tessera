@@ -106,6 +106,9 @@ func (testPlugin) GRPCClient(context.Context, *plugin.GRPCBroker, *grpc.ClientCo
 //   - frozen: the process stops itself after Describe, so it never
 //     answers Shutdown.
 //   - mute-frozen: as frozen, after closing its stdout and stderr.
+//   - crashes: exits with status 3 shortly after each Configure.
+//   - flaky: as crashes on its first two launches, then well-behaved.
+//   - hangs-configure: Configure never answers.
 //   - forks: Describe starts a long-lived child that shares the
 //     plugin's stderr, and reports its PID there.
 //   - exits: as forks, then the plugin exits on its own.
@@ -179,13 +182,41 @@ func (s *server) Describe(ctx context.Context, _ *tesserav1.DescribeRequest) (*t
 	return resp, nil
 }
 
-func (s *server) Configure(_ context.Context, req *tesserav1.ConfigureRequest) (*tesserav1.ConfigureResponse, error) {
-	if s.mode == "rejects" {
+func (s *server) Configure(ctx context.Context, req *tesserav1.ConfigureRequest) (*tesserav1.ConfigureResponse, error) {
+	switch s.mode {
+	case "rejects":
 		return nil, status.Error(codes.InvalidArgument, "timezone: unknown")
+	case "hangs-configure":
+		<-ctx.Done()
+		return nil, ctx.Err()
+	case "crashes":
+		crashSoon()
+	case "flaky":
+		if launches() <= 2 {
+			crashSoon()
+		}
 	}
 	fmt.Fprintf(os.Stderr, "configured %s %v %dx%d\n", req.GetPanelId(), req.GetSettings().AsMap(),
 		req.GetSize().GetColumns(), req.GetSize().GetRows())
 	return &tesserav1.ConfigureResponse{}, nil
+}
+
+// crashSoon exits with status 3 once Configure has answered.
+func crashSoon() {
+	go func() {
+		time.Sleep(100 * time.Millisecond)
+		os.Exit(3)
+	}()
+}
+
+// launches counts this plugin's launches in a file next to it and
+// returns the count, this one included.
+func launches() int {
+	path := os.Args[0] + ".launches"
+	b, _ := os.ReadFile(path)
+	n := len(b) + 1
+	os.WriteFile(path, bytes.Repeat([]byte("x"), n), 0o644)
+	return n
 }
 
 // sleeperKey makes the test binary sleep instead of running tests.

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//go:build windows || (unix && !linux && !darwin && !dragonfly && !freebsd && !netbsd && !openbsd)
+//go:build unix && !linux && !darwin && !dragonfly && !freebsd && !netbsd && !openbsd
 
 package pluginhost
 

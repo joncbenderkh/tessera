@@ -102,6 +102,10 @@ func Launch(ctx context.Context, dir, name string, output func(line string), log
 				Name:   "plugin " + name,
 				Output: logger.Writer(),
 				Level:  hclog.Warn,
+				// The supervisor reports exits itself, with the status.
+				Exclude: func(_ hclog.Level, msg string, _ ...any) bool {
+					return msg == "plugin process exited"
+				},
 			}),
 			stderr: filepath.Base(path),
 		},
@@ -135,7 +139,7 @@ func (inst *Instance) start(ctx context.Context, name string) error {
 	// go-plugin (v1.8.0) reports a protocol mismatch only in its error
 	// text; TestLaunchRejects pins the wording.
 	if err != nil && strings.Contains(err.Error(), "incompatible API version") {
-		return fmt.Errorf("plugin %q does not speak protocol %d: %w", name, tesserav1.ProtocolVersion, err)
+		return permanent(fmt.Errorf("plugin %q does not speak protocol %d: %w", name, tesserav1.ProtocolVersion, err))
 	}
 	if err != nil {
 		return fmt.Errorf("plugin %q failed to start: %w", name, err)
@@ -158,11 +162,11 @@ func (inst *Instance) start(ctx context.Context, name string) error {
 	}
 	switch {
 	case info.GetName() != name:
-		return fmt.Errorf("plugin %q calls itself %q; the name must match its file name", name, info.GetName())
+		return permanent(fmt.Errorf("plugin %q calls itself %q; the name must match its file name", name, info.GetName()))
 	case info.GetProtocolVersion() != tesserav1.ProtocolVersion:
-		return fmt.Errorf("plugin %q reports protocol %d in Describe; this host speaks %d", name, info.GetProtocolVersion(), tesserav1.ProtocolVersion)
+		return permanent(fmt.Errorf("plugin %q reports protocol %d in Describe; this host speaks %d", name, info.GetProtocolVersion(), tesserav1.ProtocolVersion))
 	case !slices.Contains(viewVersions, info.GetViewVersion()):
-		return fmt.Errorf("plugin %q chose view schema %d; this host renders %v", name, info.GetViewVersion(), viewVersions)
+		return permanent(fmt.Errorf("plugin %q chose view schema %d; this host renders %v", name, info.GetViewVersion(), viewVersions))
 	}
 	inst.Info = info
 	return nil
@@ -232,6 +236,14 @@ func (inst *Instance) Close() {
 	case <-time.After(pipeTimeout):
 	}
 }
+
+// Done is closed once the plugin process has exited.
+func (inst *Instance) Done() <-chan struct{} { return inst.runner.exitCh }
+
+// ExitStatus describes how the plugin process ended, such as "exit
+// status 3" or "signal: killed", once it has been reaped; until then,
+// and where the host cannot tell, it is "".
+func (inst *Instance) ExitStatus() string { return inst.runner.status() }
 
 // Exited reports whether the plugin process has exited.
 func (inst *Instance) Exited() bool {

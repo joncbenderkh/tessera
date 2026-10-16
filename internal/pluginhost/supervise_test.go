@@ -1,0 +1,218 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
+package pluginhost
+
+import (
+	"fmt"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/joncbenderkh/tessera/internal/config"
+)
+
+// fast is Options short enough for tests.
+var fast = Options{Backoff: 20 * time.Millisecond, MaxAttempts: 3, CallTimeout: 300 * time.Millisecond}
+
+func panels(plugins ...string) config.Config {
+	var c config.Config
+	for i, p := range plugins {
+		c.Panels = append(c.Panels, config.Panel{ID: fmt.Sprint("p", i), Plugin: p, X: i, W: 1, H: 1})
+	}
+	return c
+}
+
+// waitFor waits until panel id's state satisfies ok, and returns it.
+func waitFor(t *testing.T, m *Manager, id string, what string, ok func(PanelState) bool) PanelState {
+	t.Helper()
+	deadline := time.After(30 * time.Second)
+	for {
+		for _, s := range m.States() {
+			if s.ID == id && ok(s) {
+				return s
+			}
+		}
+		select {
+		case <-m.Changed():
+		case <-time.After(10 * time.Millisecond):
+		case <-deadline:
+			t.Fatalf("panel %s never %s: %+v\nlogs:\n%s", id, what, m.States(), strings.Join(m.Logs(id), "\n"))
+		}
+	}
+}
+
+func is(state State) func(PanelState) bool {
+	return func(s PanelState) bool { return s.State == state }
+}
+
+func countLines(lines []string, substr string) int {
+	n := 0
+	for _, l := range lines {
+		if strings.Contains(l, substr) {
+			n++
+		}
+	}
+	return n
+}
+
+func TestRestartsAfterCrashes(t *testing.T) {
+	dir := install(t, "flaky")
+	logger, _ := newLogger()
+	m := StartWith(panels("flaky"), dir, logger, fast)
+	defer m.Close()
+	s := waitFor(t, m, "p0", "restarting", is(Restarting))
+	if s.Attempt != 1 || s.RestartAt.IsZero() || !strings.Contains(s.Err.Error(), "exited unexpectedly") {
+		t.Errorf("first restart: %+v", s)
+	}
+	waitFor(t, m, "p0", "live after two crashes", func(s PanelState) bool {
+		return s.State == Live && countLines(m.Logs("p0"), "plugin exited: ") == 2
+	})
+	logs := m.Logs("p0")
+	for _, want := range []string{"HOST  plugin exited: exit status 3", "restarting in", "PLUGIN  configured p0"} {
+		if countLines(logs, want) == 0 {
+			t.Errorf("logs lack %q:\n%s", want, strings.Join(logs, "\n"))
+		}
+	}
+}
+
+func TestGivesUpAfterMaxAttempts(t *testing.T) {
+	dir := install(t, "crashes")
+	logger, logs := newLogger()
+	m := StartWith(panels("crashes"), dir, logger, fast)
+	defer m.Close()
+	s := waitFor(t, m, "p0", "crashed", is(Crashed))
+	if s.Attempt != fast.MaxAttempts || s.ExitStatus != "exit status 3" {
+		t.Errorf("got attempt %d, status %q; want %d, exit status 3", s.Attempt, s.ExitStatus, fast.MaxAttempts)
+	}
+	if n := countLines(m.Logs("p0"), "starting plugin"); n != fast.MaxAttempts {
+		t.Errorf("launched %d times, want %d", n, fast.MaxAttempts)
+	}
+	if countLines(m.Logs("p0"), "giving up after 3 failed attempts") != 1 {
+		t.Errorf("no give-up event:\n%s", strings.Join(m.Logs("p0"), "\n"))
+	}
+	if strings.Contains(logs.String(), "plugin process exited") {
+		t.Errorf("go-plugin repeats the exit in the host log:\n%s", logs)
+	}
+}
+
+func TestHangCountsAsFailure(t *testing.T) {
+	dir := install(t, "hangs-configure")
+	logger, _ := newLogger()
+	opts := fast
+	opts.MaxAttempts = 2
+	m := StartWith(panels("hangs-configure"), dir, logger, opts)
+	defer m.Close()
+	s := waitFor(t, m, "p0", "crashed", is(Crashed))
+	if s.Attempt != 2 || !strings.Contains(s.Err.Error(), "hung: Configure did not answer within 300ms") {
+		t.Errorf("got %+v", s)
+	}
+}
+
+func TestPermanentFailureIsNotRetried(t *testing.T) {
+	dir := install(t, "misnamed")
+	logger, _ := newLogger()
+	m := StartWith(panels("misnamed"), dir, logger, fast)
+	defer m.Close()
+	s := waitFor(t, m, "p0", "crashed", is(Crashed))
+	time.Sleep(10 * fast.Backoff)
+	if n := countLines(m.Logs("p0"), "starting plugin"); s.Attempt != 1 || n != 1 {
+		t.Errorf("attempt %d, %d launches; want 1 of each", s.Attempt, n)
+	}
+	if countLines(m.Logs("p0"), "not restarting: ") != 1 {
+		t.Errorf("no not-restarting event:\n%s", strings.Join(m.Logs("p0"), "\n"))
+	}
+}
+
+func TestManualRestart(t *testing.T) {
+	dir := install(t, "crashes", "clock")
+	logger, _ := newLogger()
+	opts := fast
+	opts.MaxAttempts = 1
+	m := StartWith(panels("crashes", "clock"), dir, logger, opts)
+	defer m.Close()
+
+	waitFor(t, m, "p0", "crashed", is(Crashed))
+	if err := m.Restart("p0"); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, m, "p0", "relaunched and crashed again", func(s PanelState) bool {
+		return s.State == Crashed && countLines(m.Logs("p0"), "starting plugin") == 2
+	})
+
+	waitFor(t, m, "p1", "live", is(Live))
+	m.mu.Lock()
+	first := m.panels[1].inst
+	m.mu.Unlock()
+	if err := m.Restart("p1"); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, m, "p1", "live again in a new process", func(s PanelState) bool {
+		m.mu.Lock()
+		defer m.mu.Unlock()
+		return s.State == Live && m.panels[1].inst != nil && m.panels[1].inst != first
+	})
+	if !first.Exited() {
+		t.Error("the replaced plugin is still running")
+	}
+
+	if err := m.Restart("nope"); err == nil {
+		t.Error("Restart of an unknown panel succeeded")
+	}
+	if m.Logs("nope") != nil {
+		t.Error("Logs of an unknown panel is not nil")
+	}
+}
+
+func TestAttemptsResetAfterStayingLive(t *testing.T) {
+	dir := install(t, "crashes")
+	logger, _ := newLogger()
+	opts := fast
+	opts.MaxAttempts = 2
+	opts.ResetAfter = 50 * time.Millisecond // shorter than its 100ms of life
+	m := StartWith(panels("crashes"), dir, logger, opts)
+	defer m.Close()
+	waitFor(t, m, "p0", "restarted three times", func(PanelState) bool {
+		return countLines(m.Logs("p0"), "plugin exited: ") >= 3
+	})
+	for _, s := range m.States() {
+		if s.State == Crashed {
+			t.Fatalf("gave up despite each launch staying live: %+v", s)
+		}
+	}
+}
+
+func TestCloseDuringBackoff(t *testing.T) {
+	dir := install(t, "crashes")
+	logger, _ := newLogger()
+	opts := fast
+	opts.Backoff = time.Hour
+	m := StartWith(panels("crashes"), dir, logger, opts)
+	waitFor(t, m, "p0", "restarting", is(Restarting))
+	start := time.Now()
+	m.Close()
+	if d := time.Since(start); d > time.Second {
+		t.Errorf("Close took %v during a backoff", d)
+	}
+}
+
+func TestCrashLeavesOthersLive(t *testing.T) {
+	dir := install(t, "crashes", "clock")
+	logger, _ := newLogger()
+	m := StartWith(panels("crashes", "clock"), dir, logger, fast)
+	defer m.Close()
+	waitFor(t, m, "p0", "crashed", is(Crashed))
+	if s := m.States()[1]; s.State != Live {
+		t.Errorf("clock is %v while another panel crashes", s.State)
+	}
+}
+
+func TestRing(t *testing.T) {
+	r := newRing(3)
+	for i := range 5 {
+		r.add("HOST", fmt.Sprint(i))
+	}
+	got := r.lines()
+	if len(got) != 3 || !strings.HasSuffix(got[0], "HOST  2") || !strings.HasSuffix(got[2], "HOST  4") {
+		t.Fatalf("got %q", got)
+	}
+}
