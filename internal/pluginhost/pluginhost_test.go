@@ -620,51 +620,45 @@ func TestLineLimiter(t *testing.T) {
 
 func TestLineWriter(t *testing.T) {
 	var got []string
-	w := &lineWriter{output: func(line string) { got = append(got, line) }}
+	writer := func() *lineWriter {
+		got = nil
+		return &lineWriter{output: func(line string) { got = append(got, line) }}
+	}
+
+	w := writer()
 	w.Write([]byte("one\ntw"))
 	w.Write([]byte("o\nthree"))
-	w.Flush()
-	w.Flush()
+	w.finish()
+	w.finish()
 	if want := []string{"one", "two", "three"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("got %q, want %q", got, want)
 	}
 
-	got = nil
+	w = writer()
 	w.Write([]byte("crlf\r\nbare\r"))
-	w.Flush()
+	w.finish()
 	if want := []string{"crlf", "bare\r"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("got %q, want %q", got, want)
 	}
 
-	got = nil
-	w.mu.Lock() // as Write holds it while a stalled callback runs
-	flushed := make(chan struct{})
-	go func() { w.Flush(); close(flushed) }()
-	select {
-	case <-flushed:
-	case <-time.After(time.Second):
-		t.Fatal("Flush waited for a busy Write")
-	}
-	w.mu.Unlock()
-
-	got = nil
+	w = writer()
 	w.Write(append(bytes.Repeat([]byte("x"), maxLine-1), "é\n"...))
 	if len(got) != 2 || len(got[0]) != maxLine-1 || got[1] != "é" {
 		t.Fatalf("a character across the cap: got pieces %d long", len(got))
 	}
 
-	got = nil
+	w = writer()
 	w.Write(bytes.Repeat([]byte("x"), 2*maxLine+1))
-	w.Flush()
+	w.finish()
 	if len(got) != 3 || len(got[0]) != maxLine || len(got[1]) != maxLine || got[2] != "x" {
 		t.Fatalf("a line of 2*maxLine+1 bytes: got pieces of %d bytes", len(got))
 	}
 
-	got = nil
+	w = writer()
 	w.Write([]byte("last"))
 	w.finish()
 	w.Write([]byte("late\n"))
-	w.Flush()
+	w.finish()
 	if want := []string{"last"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("after finish: got %q, want %q", got, want)
 	}

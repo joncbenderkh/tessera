@@ -387,19 +387,6 @@ func runeCut(b []byte) int {
 	return len(b)
 }
 
-// Flush passes on a final line that has no newline, unless Write is
-// busy passing one on, which only a stalled output callback makes last.
-func (w *lineWriter) Flush() {
-	if !w.mu.TryLock() {
-		return
-	}
-	defer w.mu.Unlock()
-	if len(w.line) > 0 {
-		w.output(string(w.line))
-		w.line = w.line[:0]
-	}
-}
-
 // finish waits for a Write under way, flushes w, and drops whatever
 // is written to it afterwards: go-plugin can still be passing on output
 // a plugin sent before Close, which must not land after the next
