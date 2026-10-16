@@ -167,10 +167,12 @@ The host puts a deadline on every unary call (5 seconds), treats a
 Watch stream that stays silent for twice the heartbeat interval as hung,
 and restarts a plugin that crashes, hangs, or breaks the protocol:
 
-- A plugin whose process exits, or that misses a call's deadline, is
-  shut down and launched again after 1 second, then 2, 4, 8, and 16
-  after each further failure in a row. A launch that fails, short of
-  the permanent failures below, counts the same way.
+- A plugin whose process exits, that misses a call's deadline, or that
+  fails the health check the host makes every 10 seconds while it is
+  live (go-plugin's `grpc.health.v1.Health`, also with a 5-second
+  deadline), is shut down and launched again after 1 second, then 2,
+  4, 8, and 16 after each further failure in a row. A launch that
+  fails, short of the permanent failures below, counts the same way.
 - After 5 failures in a row the host gives up and shows the panel as
   crashed, with the last error and exit status, until the user
   restarts it.

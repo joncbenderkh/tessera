@@ -206,6 +206,106 @@ func TestCrashLeavesOthersLive(t *testing.T) {
 	}
 }
 
+func TestHangReportedWhicheverSideTimesOut(t *testing.T) {
+	// The plugin also sees Configure's deadline and may answer
+	// DeadlineExceeded before the host's own timer fires.
+	for range 5 {
+		TestHangCountsAsFailure(t)
+	}
+}
+
+func TestDoubleRestartRelaunchesOnce(t *testing.T) {
+	dir := install(t, "clock")
+	logger, _ := newLogger()
+	m := StartWith(panels("clock"), dir, logger, fast)
+	defer m.Close()
+	waitFor(t, m, "p0", "live", is(Live))
+	m.Restart("p0")
+	waitFor(t, m, "p0", "starting", is(Starting))
+	m.Restart("p0") // while starting: the same relaunch
+	waitFor(t, m, "p0", "live again", func(s PanelState) bool {
+		return s.State == Live && countLines(m.Logs("p0"), "starting plugin") >= 2
+	})
+	time.Sleep(500 * time.Millisecond)
+	if n := countLines(m.Logs("p0"), "starting plugin"); n != 2 {
+		t.Errorf("%d launches for one restart:\n%s", n, strings.Join(m.Logs("p0"), "\n"))
+	}
+}
+
+func TestExitStatusOfFailedLaunch(t *testing.T) {
+	dir := install(t, "dies-configuring")
+	logger, _ := newLogger()
+	opts := fast
+	opts.MaxAttempts = 1
+	m := StartWith(panels("dies-configuring"), dir, logger, opts)
+	defer m.Close()
+	s := waitFor(t, m, "p0", "crashed", is(Crashed))
+	if s.ExitStatus != "exit status 4" {
+		t.Errorf("got exit status %q, want exit status 4", s.ExitStatus)
+	}
+	if countLines(m.Logs("p0"), "plugin exited: exit status 4") != 1 {
+		t.Errorf("exit not logged:\n%s", strings.Join(m.Logs("p0"), "\n"))
+	}
+}
+
+func TestExitStatusIsThisAttempts(t *testing.T) {
+	dir := install(t, "crash-then-hang")
+	logger, _ := newLogger()
+	opts := fast
+	opts.MaxAttempts = 2
+	m := StartWith(panels("crash-then-hang"), dir, logger, opts)
+	defer m.Close()
+	s := waitFor(t, m, "p0", "crashed", is(Crashed))
+	if !strings.Contains(s.Err.Error(), "hung") || s.ExitStatus != "" {
+		t.Errorf("got %v with exit status %q; want the hang, with no status", s.Err, s.ExitStatus)
+	}
+}
+
+func TestLivenessCheckCatchesFrozenPlugin(t *testing.T) {
+	if !canFreeze {
+		t.Skip("cannot stop a process on this OS")
+	}
+	dir := install(t, "freezes-live")
+	logger, _ := newLogger()
+	opts := fast
+	opts.PingInterval = 100 * time.Millisecond
+	m := StartWith(panels("freezes-live"), dir, logger, opts)
+	defer m.Close()
+	s := waitFor(t, m, "p0", "restarting", is(Restarting))
+	if !strings.Contains(s.Err.Error(), "hung: health check failed") {
+		t.Errorf("got %v", s.Err)
+	}
+}
+
+func TestDescribeUsesCallTimeout(t *testing.T) {
+	dir := install(t, "slow-describe")
+	logger, _ := newLogger()
+	opts := fast
+	opts.MaxAttempts = 1
+	start := time.Now()
+	m := StartWith(panels("slow-describe"), dir, logger, opts)
+	defer m.Close()
+	waitFor(t, m, "p0", "crashed", is(Crashed))
+	if d := time.Since(start); d > 3*time.Second {
+		t.Errorf("a hung Describe took %v with a %v call timeout", d, opts.CallTimeout)
+	}
+}
+
+func TestBackoffIsCapped(t *testing.T) {
+	o := Options{Backoff: time.Second, MaxAttempts: 100}.withDefaults()
+	for _, tt := range []struct {
+		attempt int
+		want    time.Duration
+	}{{1, time.Second}, {2, 2 * time.Second}, {5, 16 * time.Second}, {9, 256 * time.Second}, {10, maxBackoff}, {80, maxBackoff}} {
+		if got := o.backoff(tt.attempt); got != tt.want {
+			t.Errorf("attempt %d: got %v, want %v", tt.attempt, got, tt.want)
+		}
+	}
+	if o := (Options{Backoff: -time.Second, MaxAttempts: -1}).withDefaults(); o.Backoff != time.Second || o.MaxAttempts != 5 {
+		t.Errorf("negative options not defaulted: %+v", o)
+	}
+}
+
 func TestRing(t *testing.T) {
 	r := newRing(3)
 	for i := range 5 {

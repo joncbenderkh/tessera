@@ -66,26 +66,45 @@ type PanelState struct {
 // Options tunes supervision. The zero value of a field means its
 // default.
 type Options struct {
-	Backoff     time.Duration // delay after the first failure, doubled after each (1 s)
-	MaxAttempts int           // failed launches in a row before giving up (5)
-	ResetAfter  time.Duration // time live after which the count restarts (60 s)
-	CallTimeout time.Duration // deadline on each call to a plugin (5 s)
+	Backoff      time.Duration // delay after the first failure, doubled after each (1 s)
+	MaxAttempts  int           // failed launches in a row before giving up (5)
+	ResetAfter   time.Duration // time live after which the count restarts (60 s)
+	CallTimeout  time.Duration // deadline on each call to a plugin (5 s)
+	PingInterval time.Duration // how often a live plugin's health is checked (10 s)
 }
 
 func (o Options) withDefaults() Options {
-	if o.Backoff == 0 {
+	if o.Backoff <= 0 {
 		o.Backoff = time.Second
 	}
-	if o.MaxAttempts == 0 {
+	if o.MaxAttempts <= 0 {
 		o.MaxAttempts = 5
 	}
-	if o.ResetAfter == 0 {
+	if o.ResetAfter <= 0 {
 		o.ResetAfter = time.Minute
 	}
-	if o.CallTimeout == 0 {
+	if o.CallTimeout <= 0 {
 		o.CallTimeout = callTimeout
 	}
+	if o.PingInterval <= 0 {
+		o.PingInterval = 10 * time.Second
+	}
 	return o
+}
+
+// maxBackoff caps the delay before a restart, however many attempts.
+const maxBackoff = 5 * time.Minute
+
+// backoff is the delay after the attempt-th failure in a row.
+func (o Options) backoff(attempt int) time.Duration {
+	d := o.Backoff
+	for range attempt - 1 {
+		if d >= maxBackoff/2 {
+			return maxBackoff
+		}
+		d *= 2
+	}
+	return min(d, maxBackoff)
 }
 
 // Manager runs and supervises one plugin process per enabled panel.
@@ -155,11 +174,16 @@ func StartWith(cfg config.Config, dir string, logger *log.Logger, opts Options) 
 func (m *Manager) supervise(pn *panel) {
 	attempt := 0 // failed launches in a row
 	for {
+		select { // a Restart asked for before this launch is this launch
+		case <-pn.restart:
+		default:
+		}
 		m.update(pn, func(s *PanelState) {
-			s.State, s.Info, s.RestartAt = Starting, nil, time.Time{}
+			s.State, s.Info, s.Err, s.ExitStatus = Starting, nil, nil, ""
+			s.Attempt, s.RestartAt = attempt, time.Time{}
 		})
 		m.event(pn, "starting plugin %s", pn.Plugin)
-		inst, err := m.launch(pn)
+		inst, exit, err := m.launch(pn)
 		if m.ctx.Err() != nil {
 			if inst != nil {
 				inst.Close()
@@ -171,32 +195,28 @@ func (m *Manager) supervise(pn *panel) {
 		if err == nil {
 			m.event(pn, "plugin %s %s live", pn.Plugin, inst.Info.GetVersion())
 			m.update(pn, func(s *PanelState) {
-				s.State, s.Info, s.Err, s.ExitStatus = Live, inst.Info, nil, ""
+				s.State, s.Info = Live, inst.Info
 				pn.inst = inst
 			})
-			live := time.Now()
-			var exit string
-			select {
-			case <-m.ctx.Done():
-				inst.Close()
+			var lived time.Duration
+			var restart bool
+			exit, lived, restart, err = m.watchLive(pn, inst)
+			inst.Close()
+			m.update(pn, func(*PanelState) { pn.inst = nil })
+			switch {
+			case m.ctx.Err() != nil:
 				return
-			case <-pn.restart:
+			case restart:
 				m.event(pn, "restart requested")
-				inst.Close()
-				m.update(pn, func(*PanelState) { pn.inst = nil })
 				attempt = 0
 				continue
-			case <-inst.Done():
-				exit = awaitStatus(inst)
-				inst.Close()
-				m.update(pn, func(*PanelState) { pn.inst = nil })
 			}
-			if time.Since(live) >= m.opts.ResetAfter {
+			if lived >= m.opts.ResetAfter {
 				attempt = 0
 			}
-			err = fmt.Errorf("plugin %q exited unexpectedly", pn.Plugin)
-			m.event(pn, "plugin exited: %s", orUnknown(exit))
-			m.update(pn, func(s *PanelState) { s.ExitStatus = exit })
+		}
+		if exit != "" {
+			m.event(pn, "plugin exited: %s", exit)
 		}
 
 		attempt++
@@ -206,7 +226,7 @@ func (m *Manager) supervise(pn *panel) {
 			} else {
 				m.event(pn, "not restarting: %v", err)
 			}
-			m.update(pn, func(s *PanelState) { s.State, s.Err, s.Attempt = Crashed, err, attempt })
+			m.update(pn, func(s *PanelState) { s.State, s.Err, s.ExitStatus, s.Attempt = Crashed, err, exit, attempt })
 			select {
 			case <-m.ctx.Done():
 				return
@@ -216,10 +236,11 @@ func (m *Manager) supervise(pn *panel) {
 				continue
 			}
 		}
-		delay := m.opts.Backoff << (attempt - 1)
+		delay := m.opts.backoff(attempt)
 		m.event(pn, "%v; restarting in %v (attempt %d/%d failed)", err, delay, attempt, m.opts.MaxAttempts)
 		m.update(pn, func(s *PanelState) {
-			s.State, s.Err, s.Attempt, s.RestartAt = Restarting, err, attempt, time.Now().Add(delay)
+			s.State, s.Err, s.ExitStatus = Restarting, err, exit
+			s.Attempt, s.RestartAt = attempt, time.Now().Add(delay)
 		})
 		select {
 		case <-m.ctx.Done():
@@ -232,23 +253,64 @@ func (m *Manager) supervise(pn *panel) {
 	}
 }
 
+// watchLive waits while inst is live: until it exits, fails a health
+// check (a hang), Restart is asked for, or Close. It returns how the
+// process ended, if it did, how long it was live, whether a Restart
+// ended it, and the failure, if any.
+func (m *Manager) watchLive(pn *panel, inst *Instance) (exit string, lived time.Duration, restart bool, err error) {
+	start := time.Now()
+	tick := time.NewTicker(m.opts.PingInterval)
+	defer tick.Stop()
+	for {
+		select {
+		case <-m.ctx.Done():
+			return "", time.Since(start), false, nil
+		case <-pn.restart:
+			return "", time.Since(start), true, nil
+		case <-inst.Done():
+			lived = time.Since(start) // before the cleanup awaitStatus waits for
+			return orUnknown(awaitStatus(inst)), lived, false, fmt.Errorf("plugin %q exited unexpectedly", inst.Info.GetName())
+		case <-tick.C:
+			ctx, cancel := context.WithTimeout(m.ctx, m.opts.CallTimeout)
+			perr := inst.Ping(ctx)
+			cancel()
+			if perr != nil && m.ctx.Err() == nil {
+				select {
+				case <-inst.Done(): // it exited meanwhile; report that instead
+					continue
+				default:
+				}
+				return "", time.Since(start), false, fmt.Errorf("plugin %q hung: health check failed within %v: %w", inst.Info.GetName(), m.opts.CallTimeout, perr)
+			}
+		}
+	}
+}
+
 // launch starts and configures pn's plugin. A Configure that misses its
 // deadline counts as a hang: the plugin is shut down before anything
 // else is called on it.
-func (m *Manager) launch(pn *panel) (*Instance, error) {
+func (m *Manager) launch(pn *panel) (*Instance, string, error) {
 	output := func(line string) {
 		m.logger.Printf("[panel %s] %s", pn.ID, line)
 		pn.logs.add("PLUGIN", line)
 	}
-	inst, err := Launch(m.ctx, m.dir, pn.Plugin, output, m.logger)
+	inst, err := launch(m.ctx, m.dir, pn.Plugin, output, m.logger, m.opts.CallTimeout)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	if err := configure(m.ctx, inst, pn.cfg, m.opts.CallTimeout); err != nil {
+		// A plugin that died while configuring says how; one that hung
+		// was killed by Close, which is not news.
+		var exit string
+		select {
+		case <-inst.Done():
+			exit = orUnknown(awaitStatus(inst))
+		default:
+		}
 		inst.Close()
-		return nil, err
+		return nil, exit, err
 	}
-	return inst, nil
+	return inst, "", nil
 }
 
 // awaitStatus returns how inst's process ended, waiting briefly for the
@@ -283,7 +345,8 @@ func configure(ctx context.Context, inst *Instance, p config.Panel, timeout time
 	if s, ok := status.FromError(err); ok && s.Code() == codes.InvalidArgument {
 		return permanent(fmt.Errorf("plugin %q rejected the settings: %s", p.Plugin, s.Message()))
 	}
-	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+	// The plugin sees the deadline too, and may report it first.
+	if errors.Is(ctx.Err(), context.DeadlineExceeded) || status.Code(err) == codes.DeadlineExceeded {
 		return fmt.Errorf("plugin %q hung: Configure did not answer within %v", p.Plugin, timeout)
 	}
 	if err != nil {

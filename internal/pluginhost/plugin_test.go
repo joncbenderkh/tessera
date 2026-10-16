@@ -109,6 +109,10 @@ func (testPlugin) GRPCClient(context.Context, *plugin.GRPCBroker, *grpc.ClientCo
 //   - crashes: exits with status 3 shortly after each Configure.
 //   - flaky: as crashes on its first two launches, then well-behaved.
 //   - hangs-configure: Configure never answers.
+//   - dies-configuring: exits with status 4 inside Configure.
+//   - crash-then-hang: as crashes on its first launch; then Configure
+//     never answers.
+//   - freezes-live: stops itself shortly after Configure.
 //   - forks: Describe starts a long-lived child that shares the
 //     plugin's stderr, and reports its PID there.
 //   - exits: as forks, then the plugin exits on its own.
@@ -195,6 +199,20 @@ func (s *server) Configure(ctx context.Context, req *tesserav1.ConfigureRequest)
 		if launches() <= 2 {
 			crashSoon()
 		}
+	case "dies-configuring":
+		os.Exit(4)
+	case "crash-then-hang":
+		if launches() == 1 {
+			crashSoon()
+		} else {
+			<-ctx.Done()
+			return nil, ctx.Err()
+		}
+	case "freezes-live":
+		go func() {
+			time.Sleep(200 * time.Millisecond)
+			freeze()
+		}()
 	}
 	fmt.Fprintf(os.Stderr, "configured %s %v %dx%d\n", req.GetPanelId(), req.GetSettings().AsMap(),
 		req.GetSize().GetColumns(), req.GetSize().GetRows())

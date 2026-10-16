@@ -19,6 +19,7 @@ import (
 	"github.com/hashicorp/go-hclog"
 	"github.com/hashicorp/go-plugin"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/health/grpc_health_v1"
 
 	"github.com/joncbenderkh/tessera"
 	tesserav1 "github.com/joncbenderkh/tessera/proto/tessera/v1"
@@ -79,6 +80,11 @@ type Instance struct {
 // forwards over the GRPCStdio service. Canceling ctx stops the launch,
 // the handshake included. On error, no process is left running.
 func Launch(ctx context.Context, dir, name string, output func(line string), logger *log.Logger) (*Instance, error) {
+	return launch(ctx, dir, name, output, logger, callTimeout)
+}
+
+// launch is Launch with timeout as Describe's deadline.
+func launch(ctx context.Context, dir, name string, output func(line string), logger *log.Logger, timeout time.Duration) (*Instance, error) {
 	path, err := find(dir, name)
 	if err != nil {
 		return nil, err
@@ -110,14 +116,14 @@ func Launch(ctx context.Context, dir, name string, output func(line string), log
 			stderr: filepath.Base(path),
 		},
 	})
-	if err := inst.start(ctx, name); err != nil {
+	if err := inst.start(ctx, name, timeout); err != nil {
 		inst.Close()
 		return nil, err
 	}
 	return inst, nil
 }
 
-func (inst *Instance) start(ctx context.Context, name string) error {
+func (inst *Instance) start(ctx context.Context, name string, timeout time.Duration) error {
 	type started struct {
 		rpc plugin.ClientProtocol
 		err error
@@ -151,7 +157,7 @@ func (inst *Instance) start(ctx context.Context, name string) error {
 	}
 	inst.Client = raw.(tesserav1.PanelServiceClient)
 
-	ctx, cancel := context.WithTimeout(ctx, callTimeout)
+	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	info, err := inst.Client.Describe(ctx, &tesserav1.DescribeRequest{
 		HostVersion:  tessera.Version,
@@ -235,6 +241,17 @@ func (inst *Instance) Close() {
 	case <-done:
 	case <-time.After(pipeTimeout):
 	}
+}
+
+// Ping checks that the plugin still answers, through the gRPC health
+// service every plugin serves; ctx bounds the wait.
+func (inst *Instance) Ping(ctx context.Context) error {
+	rpc, ok := inst.rpc.(*plugin.GRPCClient)
+	if !ok {
+		return errors.New("plugin has no gRPC connection")
+	}
+	_, err := grpc_health_v1.NewHealthClient(rpc.Conn).Check(ctx, &grpc_health_v1.HealthCheckRequest{Service: plugin.GRPCServiceName})
+	return err
 }
 
 // Done is closed once the plugin process has exited.
