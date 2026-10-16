@@ -100,6 +100,13 @@ func launch(ctx context.Context, dir, name string, output func(line string), log
 	for range 3 {
 		inst.outputs = append(inst.outputs, &lineWriter{output: output})
 	}
+	var exclude func(hclog.Level, string, ...any) bool
+	if stopping != nil {
+		// The supervisor reports exits itself, with the status.
+		exclude = func(_ hclog.Level, msg string, _ ...any) bool {
+			return msg == "plugin process exited"
+		}
+	}
 	inst.client = plugin.NewClient(&plugin.ClientConfig{
 		HandshakeConfig:  handshake,
 		Plugins:          plugin.PluginSet{"panel": panelPlugin{}},
@@ -112,13 +119,10 @@ func launch(ctx context.Context, dir, name string, output func(line string), log
 		SyncStderr:       inst.outputs[2],
 		Logger: quietStderr{
 			Logger: hclog.New(&hclog.LoggerOptions{
-				Name:   "plugin " + name,
-				Output: logger.Writer(),
-				Level:  hclog.Warn,
-				// The supervisor reports exits itself, with the status.
-				Exclude: func(_ hclog.Level, msg string, _ ...any) bool {
-					return msg == "plugin process exited"
-				},
+				Name:    "plugin " + name,
+				Output:  logger.Writer(),
+				Level:   hclog.Warn,
+				Exclude: exclude,
 			}),
 			stderr: filepath.Base(path),
 		},
@@ -133,7 +137,7 @@ func launch(ctx context.Context, dir, name string, output func(line string), log
 		}
 		var exit string
 		var hung hangError
-		if inst.runner.started() && Retryable(err) && !errors.As(err, &hung) && ctx.Err() == nil {
+		if inst.runner.started() && Retryable(err) && !errors.As(err, &hung) && !answered(err) && ctx.Err() == nil {
 			select {
 			case <-inst.Done():
 				if s := awaitStatus(ctx, inst); inst.runner.ownExit(s) {

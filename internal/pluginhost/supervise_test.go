@@ -197,6 +197,17 @@ func TestFailuresClearOnceSettled(t *testing.T) {
 	waitFor(t, m, "p0", "cleared its failures", func(s PanelState) bool { return s.State == Live && s.Failures == 0 })
 }
 
+func TestDescribeLogsExit(t *testing.T) {
+	dir := install(t, "dies-at-start")
+	logger, logs := newLogger()
+	if _, err := Describe(context.Background(), dir, "dies-at-start", ignore, logger); err == nil {
+		t.Fatal("Describe of a plugin that dies succeeded")
+	}
+	if !strings.Contains(logs.String(), "plugin process exited") {
+		t.Errorf("no exit in the host log, with no supervisor to report it:\n%s", logs.String())
+	}
+}
+
 func TestCloseDuringBackoff(t *testing.T) {
 	dir := install(t, "crashes")
 	logger, _ := newLogger()
