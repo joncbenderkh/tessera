@@ -3,6 +3,7 @@
 package pluginhost
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -222,7 +223,9 @@ func TestDoubleRestartRelaunchesOnce(t *testing.T) {
 	waitFor(t, m, "p0", "live", is(Live))
 	m.Restart("p0")
 	waitFor(t, m, "p0", "starting", is(Starting))
-	m.Restart("p0") // while starting: the same relaunch
+	if err := m.Restart("p0"); !errors.Is(err, ErrStarting) { // while starting: the same relaunch
+		t.Errorf("Restart while starting: got %v, want ErrStarting", err)
+	}
 	waitFor(t, m, "p0", "live again", func(s PanelState) bool {
 		return s.State == Live && countLines(m.Logs("p0"), "starting plugin") >= 2
 	})
@@ -344,6 +347,57 @@ func TestPluginsOwnDeadlineIsNoHang(t *testing.T) {
 	s := waitFor(t, m, "p0", "crashed", is(Crashed))
 	if strings.Contains(s.Err.Error(), "hung") || !strings.Contains(s.Err.Error(), "weather service did not answer") {
 		t.Errorf("got %v, want the plugin's own error, not a hang", s.Err)
+	}
+}
+
+func TestNoExitStatusForHostShutdown(t *testing.T) {
+	dir := install(t, "misnamed", "slow-describe")
+	logger, _ := newLogger()
+	opts := fast
+	opts.MaxAttempts = 1
+	m := StartWith(panels("misnamed", "slow-describe"), dir, logger, opts)
+	defer m.Close()
+	for _, id := range []string{"p0", "p1"} {
+		s := waitFor(t, m, id, "crashed", is(Crashed))
+		if s.ExitStatus != "" || countLines(m.Logs(id), "plugin exited") != 0 {
+			t.Errorf("%s: exit status %q for a plugin the host shut down:\n%s", s.Plugin, s.ExitStatus, strings.Join(m.Logs(id), "\n"))
+		}
+	}
+}
+
+func TestRestartWhileStarting(t *testing.T) {
+	dir := install(t, "hangs-configure")
+	logger, _ := newLogger()
+	opts := fast
+	opts.CallTimeout = 3 * time.Second
+	m := StartWith(panels("hangs-configure"), dir, logger, opts)
+	defer m.Close()
+	waitFor(t, m, "p0", "starting", is(Starting))
+	if err := m.Restart("p0"); !errors.Is(err, ErrStarting) {
+		t.Errorf("got %v, want ErrStarting", err)
+	}
+}
+
+func TestQueuedRestartResetsFailures(t *testing.T) {
+	dir := install(t, "crashes")
+	logger, _ := newLogger()
+	opts := fast
+	opts.MaxAttempts = 2
+	launches := 0
+	beforeLaunchHook = func(pn *panel) {
+		launches++
+		if launches == 2 { // a Restart that lands as the backoff ends
+			pn.restart <- struct{}{}
+		}
+	}
+	defer func() { beforeLaunchHook = func(*panel) {} }()
+	m := StartWith(panels("crashes"), dir, logger, opts)
+	defer m.Close()
+	waitFor(t, m, "p0", "crashed", is(Crashed))
+	// Without the reset, the second launch's failure is the second in a
+	// row and the last; with it, a third launch follows.
+	if n := countLines(m.Logs("p0"), "starting plugin"); n != 3 {
+		t.Errorf("%d launches, want 3:\n%s", n, strings.Join(m.Logs("p0"), "\n"))
 	}
 }
 

@@ -119,11 +119,19 @@ func launch(ctx context.Context, dir, name string, output func(line string), log
 		},
 	})
 	if err := inst.start(ctx, name, timeout); err != nil {
-		inst.Close()
+		// Only a plugin that ended by itself has an exit to report:
+		// decide before Close ends it. One refused for good, or one
+		// that hung, is still running.
 		var exit string
-		if inst.runner.reaped != nil { // the process started
-			exit = awaitStatus(inst)
+		var hung hangError
+		if inst.runner.reaped != nil && Retryable(err) && !errors.As(err, &hung) && ctx.Err() == nil {
+			select {
+			case <-inst.Done():
+				exit = orUnknown(awaitStatus(inst))
+			case <-time.After(time.Second):
+			}
 		}
+		inst.Close()
 		return nil, exit, err
 	}
 	return inst, "", nil
@@ -169,6 +177,9 @@ func (inst *Instance) start(ctx context.Context, name string, timeout time.Durat
 		HostVersion:  tessera.Version,
 		ViewVersions: viewVersions,
 	})
+	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		return hangError{fmt.Errorf("plugin %q: Describe: %w", name, err)}
+	}
 	if err != nil {
 		return fmt.Errorf("plugin %q: Describe: %w", name, err)
 	}

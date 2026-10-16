@@ -179,12 +179,15 @@ func StartWith(cfg config.Config, dir string, logger *log.Logger, opts Options) 
 func (m *Manager) supervise(pn *panel) {
 	failures := 0 // failed launches in a row
 	for {
+		beforeLaunchHook(pn)
 		m.update(pn, func(s *PanelState) {
-			// A Restart asked for before this launch is this launch; one
-			// asked for while it is Starting, Restart ignores. Both hold
-			// mu, so none slips in between.
+			// A Restart asked for before this launch is this launch, and
+			// resets the count like any Restart; one asked for while it
+			// is Starting, Restart refuses. Both hold mu, so none slips
+			// in between.
 			select {
 			case <-pn.restart:
+				failures = 0
 			default:
 			}
 			s.State, s.Info, s.Err, s.ExitStatus = Starting, nil, nil, ""
@@ -329,6 +332,14 @@ func (m *Manager) launch(pn *panel) (*Instance, string, error) {
 	return inst, "", nil
 }
 
+// ErrStarting is Restart's answer for a panel whose plugin is already
+// being launched.
+var ErrStarting = errors.New("the plugin is already starting")
+
+// beforeLaunchHook runs at the top of each launch; tests use it to
+// place a Restart exactly there.
+var beforeLaunchHook = func(*panel) {}
+
 // awaitStatus returns how inst's process ended, waiting briefly for the
 // reap that tells.
 func awaitStatus(inst *Instance) string {
@@ -358,6 +369,9 @@ func configure(ctx context.Context, inst *Instance, p config.Panel, timeout time
 		Settings: settings,
 		Size:     &tesserav1.GridSize{Columns: uint32(p.W), Rows: uint32(p.H)},
 	})
+	if err == nil {
+		return nil // even if the deadline passes right after the answer
+	}
 	if s, ok := status.FromError(err); ok && s.Code() == codes.InvalidArgument {
 		return permanent(fmt.Errorf("plugin %q rejected the settings: %s", p.Plugin, s.Message()))
 	}
@@ -368,10 +382,7 @@ func configure(ctx context.Context, inst *Instance, p config.Panel, timeout time
 		status.Code(err) == codes.DeadlineExceeded && time.Until(deadline) < min(timeout/10, 250*time.Millisecond) {
 		return hangError{fmt.Errorf("plugin %q hung: Configure did not answer within %v", p.Plugin, timeout)}
 	}
-	if err != nil {
-		return fmt.Errorf("plugin %q: Configure: %w", p.Plugin, err)
-	}
-	return nil
+	return fmt.Errorf("plugin %q: Configure: %w", p.Plugin, err)
 }
 
 // update applies f to pn's state under the lock, stamps Since when the
@@ -421,8 +432,8 @@ func (m *Manager) Changed() <-chan struct{} { return m.changed }
 // one that is live is shut down first, and one waiting to restart or
 // crashed starts at once. It is the error tile's Restart button.
 //
-// A panel already Starting is left alone: the launch under way is the
-// restart.
+// A panel already Starting is left alone, and Restart returns
+// ErrStarting: the launch under way is the restart.
 func (m *Manager) Restart(id string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -430,11 +441,12 @@ func (m *Manager) Restart(id string) error {
 		if pn.ID != id {
 			continue
 		}
-		if pn.State != Starting {
-			select {
-			case pn.restart <- struct{}{}:
-			default: // one is already pending
-			}
+		if pn.State == Starting {
+			return ErrStarting
+		}
+		select {
+		case pn.restart <- struct{}{}:
+		default: // one is already pending
 		}
 		return nil
 	}
