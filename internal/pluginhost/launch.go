@@ -246,7 +246,9 @@ func (inst *Instance) Close() {
 	defer func() {
 		// Waited for briefly, so a last unterminated line comes before
 		// whatever follows Close, but a stalled output callback cannot
-		// hold Close up.
+		// hold Close up. A callback stalled for good, on a host log
+		// that never takes a write, leaves this goroutine behind; the
+		// host is stuck on that log anyway.
 		flushed := make(chan struct{})
 		go func() {
 			for _, w := range inst.outputs {

@@ -469,7 +469,9 @@ func orUnknown(s string) string {
 // hung reports whether err, from a failed call bounded by ctx with
 // timeout, means the plugin did not answer in time. The plugin sees the
 // deadline too, and may report it first; a DeadlineExceeded well before
-// the deadline is the plugin's own.
+// the deadline is the plugin's own. One the plugin raises itself just
+// before the deadline is taken for a hang too: still retried, but
+// without its message or an exit status.
 func hung(ctx context.Context, err error, timeout time.Duration) bool {
 	deadline, _ := ctx.Deadline()
 	return errors.Is(ctx.Err(), context.DeadlineExceeded) ||
