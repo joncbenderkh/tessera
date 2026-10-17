@@ -129,7 +129,11 @@ host                                    plugin
   answers `INVALID_ARGUMENT`, it keeps its previous settings, and the
   host shows the message in an error tile and cancels any open Watch or
   stops polling; until a Configure succeeds, it makes no Watch or Render
-  call.
+  call. Configure should not depend on anything outside the plugin: one
+  that fails for another reason fails the launch, and five in a row
+  leave the panel crashed. A plugin whose data source is down (no
+  network at login, say) answers Configure and shows the outage in its
+  view, retrying on its own.
 - **Watch** is the normal path: the plugin pushes a complete view each
   time its content changes, starting with the current one. The first
   response always carries a view: a plugin still fetching data sends
