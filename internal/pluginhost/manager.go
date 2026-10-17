@@ -81,7 +81,7 @@ type PanelState struct {
 // default.
 type Options struct {
 	Backoff      time.Duration // delay after the first failure, doubled after each (1 s), capped at 5 min
-	MaxAttempts  int           // failed launches in a row before giving up (5)
+	MaxAttempts  int           // failures in a row before giving up (5); see PanelState.Failures
 	ResetAfter   time.Duration // time live after which the count restarts (60 s)
 	CallTimeout  time.Duration // deadline on each call to a plugin (5 s)
 	PingInterval time.Duration // how often a live plugin's health is checked (10 s)
