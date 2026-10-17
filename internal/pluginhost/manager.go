@@ -444,6 +444,9 @@ func (pn *panel) fence() {
 // being launched.
 var ErrStarting = errors.New("the plugin is already starting")
 
+// ErrClosed is Restart's answer once Close has begun.
+var ErrClosed = errors.New("the plugin host is closed")
+
 // beforeLaunchHook runs at the top of each launch; tests use it to
 // place a Restart exactly there.
 var beforeLaunchHook = func(*panel) {}
@@ -557,10 +560,14 @@ func (m *Manager) Changed() <-chan struct{} { return m.changed }
 // crashed starts at once. It is the error tile's Restart button.
 //
 // A panel already Starting is left alone, and Restart returns
-// ErrStarting: the launch under way is the restart.
+// ErrStarting: the launch under way is the restart. Once Close has
+// begun, Restart returns ErrClosed.
 func (m *Manager) Restart(id string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if m.ctx.Err() != nil {
+		return ErrClosed
+	}
 	for _, pn := range m.panels {
 		if pn.ID != id {
 			continue

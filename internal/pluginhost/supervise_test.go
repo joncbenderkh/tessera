@@ -163,6 +163,10 @@ func TestManualRestart(t *testing.T) {
 	if err := m.Restart("nope"); err == nil {
 		t.Error("Restart of an unknown panel succeeded")
 	}
+	m.Close()
+	if err := m.Restart("p0"); !errors.Is(err, ErrClosed) {
+		t.Errorf("Restart after Close: got %v, want ErrClosed", err)
+	}
 	if m.Logs("nope") != nil {
 		t.Error("Logs of an unknown panel is not nil")
 	}
