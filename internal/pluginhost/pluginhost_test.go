@@ -551,6 +551,19 @@ func TestFailedStartCleansUp(t *testing.T) {
 	}
 }
 
+func TestMissingTempDirIsRetried(t *testing.T) {
+	dir := install(t, "clock")
+	missing := filepath.Join(t.TempDir(), "gone")
+	t.Setenv("TMPDIR", missing)
+	t.Setenv("TMP", missing) // Windows
+	t.Setenv("TEMP", missing)
+	logger, _ := newLogger()
+	_, err := Launch(context.Background(), dir, "clock", ignore, logger)
+	if err == nil || !Retryable(err) || strings.Contains(err.Error(), "cannot be run") {
+		t.Fatalf("got %v, want a retryable error that does not blame the plugin", err)
+	}
+}
+
 func TestStdoutFloodDoesNotBlock(t *testing.T) {
 	dir := install(t, "floods-stdout")
 	logger, _ := newLogger()

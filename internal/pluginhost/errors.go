@@ -14,6 +14,13 @@ func (e permanentError) Unwrap() error { return e.err }
 
 func permanent(err error) error { return permanentError{err} }
 
+// execError marks the error of starting the plugin's process, as
+// against one from go-plugin's setup around it, such as its socket
+// directory.
+type execError struct{ error }
+
+func (e execError) Unwrap() error { return e.error }
+
 // hangError marks a call the plugin did not answer in time; the
 // plugin is likely still running.
 type hangError struct{ error }

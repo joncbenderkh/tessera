@@ -114,7 +114,7 @@ func (r *procRunner) Start(context.Context) error {
 	r.closeChildEnds() // the plugin has its own copies, if it started
 	if err != nil {
 		r.closePipes()
-		return err
+		return execError{err}
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
