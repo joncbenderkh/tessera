@@ -140,10 +140,9 @@ host                                    plugin
   widgets marked `loading`. When nothing changes for
   `heartbeat_interval` (the host asks for 5 seconds), it sends a
   `WatchResponse` without a view, so a silent stream means a hung
-  plugin. The host reads one
-  stream per plugin and cancels it before opening another, but the
-  cancelled handler may still be returning when the next starts, so keep
-  per-stream state inside the handler.
+  plugin. The host reads one stream per plugin and cancels it before
+  opening another, but the cancelled handler may still be returning when
+  the next starts, so keep per-stream state inside the handler.
 - **Render** is the fallback for plugins that cannot push. If Watch
   returns `UNIMPLEMENTED` before its first response, the host polls
   Render, waiting `RenderResponse.poll_interval` between calls (5
@@ -207,8 +206,8 @@ and restarts a plugin that crashes, hangs, or breaks the protocol:
   cannot run (not a program for it, a script whose interpreter is
   missing, or a file on a `noexec` mount), a version the host does
   not speak, a `Describe` or `Configure` answered `UNIMPLEMENTED`
-  (not a tessera plugin), `UNIMPLEMENTED` from both Watch and Render, and settings the plugin rejects with
-  `INVALID_ARGUMENT`.
+  (not a tessera plugin), `UNIMPLEMENTED` from both Watch and Render,
+  and settings the plugin rejects with `INVALID_ARGUMENT`.
 
 For the panel's Logs view, the host keeps each panel's last 500
 lines, plugin output and lifecycle events (started, exited with
