@@ -10,6 +10,8 @@ import (
 	"testing"
 	"time"
 
+	"google.golang.org/grpc/mem"
+
 	tesserav1 "github.com/joncbenderkh/tessera/proto/tessera/v1"
 )
 
@@ -100,15 +102,20 @@ func TestFailingRenderIsStale(t *testing.T) {
 	}
 }
 
-func TestPluginsResourceExhaustedIsStale(t *testing.T) {
-	dir := install(t, "polled-quota")
-	logger, _ := newLogger()
-	m := StartWith(panels("polled-quota"), dir, logger, fast)
-	defer m.Close()
-	s := waitFor(t, m, "p0", "live after the failed Render", showing("render 2"))
-	logs := m.Logs("p0")
-	if s.ViewErr != nil || countLines(logs, "Render failed") != 1 || countLines(logs, "size limit") != 0 {
-		t.Errorf("a quota error was not a failed Render: %+v\n%s", s, strings.Join(logs, "\n"))
+func TestPluginsOwnErrorsAreStale(t *testing.T) {
+	for _, mode := range []string{"polled-quota", "polled-unavailable"} {
+		t.Run(mode, func(t *testing.T) {
+			t.Parallel()
+			dir := install(t, mode)
+			logger, _ := newLogger()
+			m := StartWith(panels(mode), dir, logger, fast)
+			defer m.Close()
+			s := waitFor(t, m, "p0", "live after the failed Render", showing("render 2"))
+			logs := m.Logs("p0")
+			if s.ViewErr != nil || countLines(logs, "Render failed") != 1 || countLines(logs, "size limit") != 0 || countLines(logs, "starting plugin") != 1 {
+				t.Errorf("the plugin's error was not a failed Render: %+v\n%s", s, strings.Join(logs, "\n"))
+			}
+		})
 	}
 }
 
@@ -149,6 +156,9 @@ func TestViewOverLimitIsRefused(t *testing.T) {
 		{"deep-view", `plugin "deep-view" sent a view nested 17 deep, over the limit of 16`},
 		{"too-deep-to-decode", `plugin "too-deep-to-decode" sent a view nested over the limit of 16`},
 		{"big-view", `plugin "big-view" sent a view over the size limit`},
+		{"huge-view", `plugin "huge-view" sent a view over the size limit`},
+		{"polled-deep", `plugin "polled-deep" sent a view nested 17 deep, over the limit of 16`},
+		{"polled-big", `plugin "polled-big" sent a view over the size limit`},
 	} {
 		t.Run(tt.mode, func(t *testing.T) {
 			t.Parallel()
@@ -221,6 +231,23 @@ func TestEventsReachPolledPluginInOrder(t *testing.T) {
 	waitFor(t, m, "p0", "rendering after each event, in order", showing("render,a,render,b,render,c,render"))
 }
 
+func TestFailedEventIsLogged(t *testing.T) {
+	dir := install(t, "unavailable-event")
+	logger, _ := newLogger()
+	m := StartWith(panels("unavailable-event"), dir, logger, fast)
+	defer m.Close()
+	waitFor(t, m, "p0", "live", is(Live))
+	if err := m.HandleEvent("p0", activate("x")); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, m, "p0", "logging the failed event", func(PanelState) bool {
+		return countLines(m.Logs("p0"), "failed an event") == 1
+	})
+	if s := m.States()[0]; s.State != Live || countLines(m.Logs("p0"), "starting plugin") != 1 {
+		t.Errorf("restarted over a failed event: %+v\n%s", s, strings.Join(m.Logs("p0"), "\n"))
+	}
+}
+
 func TestHungEventIsAHang(t *testing.T) {
 	dir := install(t, "hangs-event")
 	logger, _ := newLogger()
@@ -279,4 +306,19 @@ func TestRestartClearsStaleView(t *testing.T) {
 		t.Errorf("the last launch's view survived the restart: %+v", s)
 	}
 	waitFor(t, m, "p0", "live again", showing("render 0"))
+}
+
+func TestViewCodecTellsRefusedFromMalformed(t *testing.T) {
+	c := newViewCodec()
+	if err := c.Unmarshal(mem.BufferSlice{mem.SliceBuffer{0xff}}, &tesserav1.RenderResponse{}); err == nil {
+		t.Fatal("a malformed response decoded")
+	}
+	if c.malformed() == nil || c.refusal() != nil {
+		t.Errorf("malformed: got malformed %v, refusal %v", c.malformed(), c.refusal())
+	}
+	c = newViewCodec()
+	c.Unmarshal(mem.BufferSlice{mem.SliceBuffer(make([]byte, maxViewBytes+1))}, &tesserav1.RenderResponse{})
+	if c.malformed() != nil || c.refusal() == nil {
+		t.Errorf("over the size limit: got malformed %v, refusal %v", c.malformed(), c.refusal())
+	}
 }

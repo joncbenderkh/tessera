@@ -39,7 +39,7 @@ func nested(depth int) *tesserav1.View {
 
 func polledMode(mode string) bool {
 	switch mode {
-	case "polled", "polled-failing", "polled-quota", "polled-empty", "polled-events", "hangs-render", "no-views":
+	case "polled", "polled-failing", "polled-quota", "polled-unavailable", "polled-empty", "polled-deep", "polled-big", "polled-events", "hangs-render", "no-views":
 		return true
 	}
 	return false
@@ -76,6 +76,10 @@ func (s *server) Watch(req *tesserav1.WatchRequest, stream tesserav1.PanelServic
 		}
 	case s.mode == "big-view":
 		if err := send(textView(strings.Repeat("x", 5<<20))); err != nil {
+			return err
+		}
+	case s.mode == "huge-view":
+		if err := send(textView(strings.Repeat("x", 17<<20))); err != nil {
 			return err
 		}
 	case s.mode == "spams-views":
@@ -124,11 +128,13 @@ func (s *server) Render(ctx context.Context, _ *tesserav1.RenderRequest) (*tesse
 			return nil, status.Error(codes.Internal, "source down")
 		}
 		text = fmt.Sprint("render ", s.renders)
-	case "polled-quota", "polled-empty":
+	case "polled-quota", "polled-unavailable", "polled-empty":
 		s.renders++
 		switch {
-		case s.renders == 2 && s.mode == "polled-quota":
-			return nil, status.Error(codes.ResourceExhausted, "quota exceeded")
+		case s.renders == 2 && s.mode == "polled-quota": // passed on from a client of its own
+			return nil, status.Error(codes.ResourceExhausted, "grpc: received message larger than max (5000000 vs. 4194304)")
+		case s.renders == 2 && s.mode == "polled-unavailable":
+			return nil, status.Error(codes.Unavailable, "source down")
 		case s.renders == 2:
 			return nil, status.Error(codes.Internal, "blip")
 		case s.renders > 2 && s.mode == "polled-empty":
@@ -138,6 +144,10 @@ func (s *server) Render(ctx context.Context, _ *tesserav1.RenderRequest) (*tesse
 			Content:      &tesserav1.RenderResponse_View{View: textView(fmt.Sprint("render ", s.renders-1))},
 			PollInterval: durationpb.New(100 * time.Millisecond),
 		}, nil
+	case "polled-deep":
+		return &tesserav1.RenderResponse{Content: &tesserav1.RenderResponse_View{View: nested(17)}}, nil
+	case "polled-big":
+		return &tesserav1.RenderResponse{Content: &tesserav1.RenderResponse_View{View: textView(strings.Repeat("x", 5<<20))}}, nil
 	case "polled-events":
 		s.seen = append(s.seen, "render")
 		text = strings.Join(s.seen, ",")
@@ -158,6 +168,8 @@ func (s *server) HandleEvent(ctx context.Context, req *tesserav1.HandleEventRequ
 	case "hangs-event":
 		<-ctx.Done()
 		return nil, ctx.Err()
+	case "unavailable-event":
+		return nil, status.Error(codes.Unavailable, "source down")
 	case "polled-events":
 		s.mu.Lock()
 		s.seen = append(s.seen, id)

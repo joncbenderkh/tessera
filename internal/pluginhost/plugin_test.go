@@ -184,9 +184,14 @@ func (testPlugin) GRPCClient(context.Context, *plugin.GRPCBroker, *grpc.ClientCo
 //   - polled-failing: as polled, but Render fails after its first
 //     answer until the gate file (see gated) exists.
 //   - polled-quota: as polled, but its second Render fails with
-//     RESOURCE_EXHAUSTED, as for a quota.
+//     RESOURCE_EXHAUSTED and gRPC's text for a message over its limit,
+//     as a plugin passing on its own client's error would.
+//   - polled-unavailable: as polled, but its second Render fails with
+//     UNAVAILABLE.
 //   - polled-empty: as polled, but its second Render fails, and the
 //     rest answer with no view.
+//   - polled-deep, polled-big: as polled, but Render answers a view
+//     as deep-view and big-view send.
 //   - polled-events: as polled, naming no poll interval; Render
 //     answers the calls so far: "render" for each Render and the
 //     action id for each event.
@@ -202,9 +207,11 @@ func (testPlugin) GRPCClient(context.Context, *plugin.GRPCBroker, *grpc.ClientCo
 //   - too-deep-to-decode: sends a view nested 4000 deep, which
 //     protobuf refuses to decode.
 //   - big-view: sends a view over 4 MiB.
+//   - huge-view: sends a view over 16 MiB, which gRPC refuses unread.
 //   - spams-views: sends views "view N" as fast as it can.
 //   - events: Watch answers each event with a view "got <action id>".
 //   - hangs-event: HandleEvent never answers.
+//   - unavailable-event: HandleEvent fails with UNAVAILABLE.
 //
 // Any other name is a well-behaved plugin of that name, which reports
 // each Configure on stderr, and whose Watch sends a view naming it,

@@ -13,6 +13,9 @@ import (
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/encoding"
+	grpcproto "google.golang.org/grpc/encoding/proto"
+	"google.golang.org/grpc/mem"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/durationpb"
 
@@ -20,9 +23,13 @@ import (
 )
 
 // maxViewBytes is the largest Watch or Render response read, gRPC's
-// default receive limit; go-plugin lifts that limit, so the host sets
-// it on each call.
-const maxViewBytes = 4 << 20
+// default receive limit. viewCodec enforces it, so the host knows the
+// refusal is its own; gRPC refuses anything over recvCap unread, since
+// go-plugin lifts its limit.
+const (
+	maxViewBytes = 4 << 20
+	recvCap      = 4 * maxViewBytes
+)
 
 // maxViewDepth is how deeply a view's widgets may nest: View.body is
 // depth 1, and each StackItem.widget adds 1.
@@ -111,8 +118,8 @@ func (w *live) run() (end, error) {
 		}
 		return stop, err
 	}
-	lastTick := time.Now()
 	for {
+		waiting := time.Now()
 		select {
 		case <-m.ctx.Done():
 			return end{}, nil
@@ -157,9 +164,9 @@ func (w *live) run() (end, error) {
 				m.event(pn, "plugin does not stream its view; polling Render")
 				m.update(pn, func(s *PanelState) { s.Polled = true })
 				poll.Reset(0)
-			case refused(w.name(), err) != nil:
+			case refused(w.name(), st.codec, err) != nil:
 				unwatch()
-				w.overLimit(refused(w.name(), err))
+				w.overLimit(refused(w.name(), st.codec, err))
 			default:
 				if stop := w.settle(); stop != nil {
 					return *stop, nil
@@ -169,13 +176,14 @@ func (w *live) run() (end, error) {
 				}
 				return end{}, fmt.Errorf("plugin %q ended its Watch stream: %w", w.name(), err)
 			}
-		case now := <-silence:
-			if now.Sub(lastTick) > 2*m.opts.Heartbeat {
-				// The clock jumped, as across a sleep on some systems:
-				// give the plugin a fresh wait for its next heartbeat.
+		case <-silence:
+			// An idle wait of more than a tick or two means the clock
+			// jumped, as across a sleep on some systems, rather than a
+			// call kept the loop busy: give the plugin a fresh wait
+			// for its next heartbeat.
+			if now := time.Now(); now.Sub(waiting) > 2*m.opts.Heartbeat {
 				st.resume(now)
 			}
-			lastTick = now
 			if quiet := time.Since(st.lastResponse()); quiet > 2*m.opts.Heartbeat {
 				return end{}, hangError{fmt.Errorf("plugin %q hung: its Watch stream was silent for %v", w.name(), quiet.Round(time.Millisecond))}
 			}
@@ -250,8 +258,9 @@ func (w *live) settle() *end {
 func (w *live) render() (next time.Duration, stop *end, err error) {
 	m, pn := w.m, w.pn
 	var resp *tesserav1.RenderResponse
+	codec := newViewCodec()
 	stop, hang, err := w.call(func(ctx context.Context) error {
-		r, err := w.inst.Client.Render(ctx, &tesserav1.RenderRequest{}, grpc.MaxCallRecvMsgSize(maxViewBytes))
+		r, err := w.inst.Client.Render(ctx, &tesserav1.RenderRequest{}, grpc.ForceCodecV2(codec), grpc.MaxCallRecvMsgSize(recvCap))
 		resp = r
 		return err
 	})
@@ -282,22 +291,26 @@ func (w *live) render() (next time.Duration, stop *end, err error) {
 		}
 	case hang:
 		return 0, nil, hangError{fmt.Errorf("plugin %q hung: Render did not answer within %v", w.name(), m.opts.CallTimeout)}
-	case refused(w.name(), err) != nil:
-		w.overLimit(refused(w.name(), err))
+	case refused(w.name(), codec, err) != nil:
+		w.overLimit(refused(w.name(), codec, err))
 	case status.Code(err) == codes.Unimplemented:
 		return 0, nil, permanent(fmt.Errorf("plugin %q implements neither Watch nor Render", w.name()))
-	case answered(err):
+	case codec.malformed() != nil: // a broken protocol, as on Watch
+		return 0, nil, fmt.Errorf("plugin %q sent a Render response that does not decode: %w", w.name(), codec.malformed())
+	default:
+		stop, own := w.own(err)
+		if stop != nil {
+			return 0, stop, nil
+		}
+		if !own {
+			return 0, nil, fmt.Errorf("plugin %q: Render: %w", w.name(), err)
+		}
 		w.alive()
 		if !w.stale {
 			w.stale = true
 			m.event(pn, "Render failed; showing the last view: %v", err)
 		}
 		m.update(pn, func(s *PanelState) { s.State, s.ViewErr = Stale, err })
-	default:
-		if stop := w.settle(); stop != nil {
-			return 0, stop, nil
-		}
-		return 0, nil, fmt.Errorf("plugin %q: Render: %w", w.name(), err)
 	}
 	return next, nil, nil
 }
@@ -316,16 +329,34 @@ func (w *live) handle(req *tesserav1.HandleEventRequest) (*end, error) {
 		w.alive()
 	case hang:
 		return nil, hangError{fmt.Errorf("plugin %q hung: HandleEvent did not answer within %v", w.name(), w.m.opts.CallTimeout)}
-	case answered(err):
-		w.alive()
-		w.m.event(w.pn, "plugin %q failed an event: %v", w.name(), err)
 	default:
-		if stop := w.settle(); stop != nil {
+		stop, own := w.own(err)
+		if stop != nil {
 			return stop, nil
 		}
-		return nil, fmt.Errorf("plugin %q: HandleEvent: %w", w.name(), err)
+		if !own {
+			return nil, fmt.Errorf("plugin %q: HandleEvent: %w", w.name(), err)
+		}
+		w.alive()
+		w.m.event(w.pn, "plugin %q failed an event: %v", w.name(), err)
 	}
 	return nil, nil
+}
+
+// own reports whether the plugin sent err itself, rather than its
+// connection failing: a status other than UNAVAILABLE or CANCELED, or
+// one of those while the plugin still answers a health check. One that
+// died fails calls before its exit is seen, so it gets a moment for
+// that first. It returns stop instead if something ends the wait.
+func (w *live) own(err error) (stop *end, own bool) {
+	if answered(err) {
+		return nil, true
+	}
+	if stop := w.settle(); stop != nil {
+		return stop, false
+	}
+	stop, _, err = w.call(w.inst.Ping)
+	return stop, stop == nil && err == nil
 }
 
 // overLimit stops views after one over a limit: the panel stays Live,
@@ -336,22 +367,76 @@ func (w *live) overLimit(err error) {
 	w.m.update(w.pn, func(s *PanelState) { s.State, s.View, s.ViewErr = Live, nil, err })
 }
 
-// refused reports a view the host would not read, from err, a Watch or
-// Render error: one over maxViewBytes, or nested so deep that protobuf
-// would not decode it, far over maxViewDepth. It is nil for any other
-// error, including a RESOURCE_EXHAUSTED the plugin sent itself.
-func refused(name string, err error) error {
-	s, ok := status.FromError(err)
-	if !ok || !strings.HasPrefix(s.Message(), "grpc: ") { // gRPC's own errors in the host
-		return nil
+// refused reports a view the host would not read, given the codec of
+// the Watch or Render call that failed with err: one over maxViewBytes,
+// or nested so deep that protobuf would not decode it, far over
+// maxViewDepth. It is nil for any other error, including a
+// RESOURCE_EXHAUSTED the plugin sent itself.
+func refused(name string, c *viewCodec, err error) error {
+	if e := c.refusal(); e != nil {
+		return fmt.Errorf("plugin %q sent a %w", name, e)
 	}
-	switch {
-	case s.Code() == codes.ResourceExhausted && strings.Contains(s.Message(), "larger than max"):
+	// gRPC's own refusal of a response over recvCap, which no plugin
+	// passes on from a client of its own with gRPC's default limits.
+	if s, _ := status.FromError(err); s.Code() == codes.ResourceExhausted &&
+		strings.HasPrefix(s.Message(), "grpc: ") && strings.HasSuffix(s.Message(), fmt.Sprintf(" vs. %d)", recvCap)) {
 		return fmt.Errorf("plugin %q sent a view over the size limit: %w", name, err)
-	case s.Code() == codes.Internal && strings.Contains(s.Message(), "recursion depth"):
-		return fmt.Errorf("plugin %q sent a view nested over the limit of %d: %w", name, maxViewDepth, err)
 	}
 	return nil
+}
+
+// viewCodec is gRPC's proto codec for one Watch or Render call, which
+// refuses a view over maxViewBytes or too deep for protobuf to decode
+// and records that it did: gRPC's errors for these read like ones a
+// plugin could send.
+type viewCodec struct {
+	encoding.CodecV2
+
+	mu      sync.Mutex
+	refused error // a response over a limit
+	broken  error // a response that did not decode for another reason
+}
+
+func newViewCodec() *viewCodec {
+	return &viewCodec{CodecV2: encoding.GetCodecV2(grpcproto.Name)}
+}
+
+func (c *viewCodec) Unmarshal(data mem.BufferSlice, v any) error {
+	if n := data.Len(); n > maxViewBytes {
+		return c.fail(true, fmt.Errorf("view over the size limit: %d bytes, over %d", n, maxViewBytes))
+	}
+	err := c.CodecV2.Unmarshal(data, v)
+	if err != nil && strings.Contains(err.Error(), "recursion depth") { // protobuf exports no error for it
+		return c.fail(true, fmt.Errorf("view nested over the limit of %d: %w", maxViewDepth, err))
+	}
+	if err != nil {
+		return c.fail(false, err)
+	}
+	return nil
+}
+
+func (c *viewCodec) fail(refused bool, err error) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if refused {
+		c.refused = err
+	} else {
+		c.broken = err
+	}
+	return err
+}
+
+// malformed returns why a response did not decode, if one did not.
+func (c *viewCodec) malformed() error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.broken
+}
+
+func (c *viewCodec) refusal() error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.refused
 }
 
 // checkView reports a view nested deeper than maxViewDepth.
@@ -378,6 +463,7 @@ func widgetDepth(w *tesserav1.Widget) int {
 // a plugin that pushes views fast costs one decode each.
 type stream struct {
 	ready chan struct{} // a response or the end; coalesced
+	codec *viewCodec
 
 	mu   sync.Mutex
 	view *tesserav1.View // the latest view not yet taken
@@ -389,11 +475,11 @@ type stream struct {
 
 // watch opens the plugin's Watch stream; ending ctx closes it.
 func (w *live) watch(ctx context.Context) *stream {
-	st := &stream{ready: make(chan struct{}, 1), last: time.Now()}
+	st := &stream{ready: make(chan struct{}, 1), codec: newViewCodec(), last: time.Now()}
 	go func() {
 		err := func() error {
 			c, err := w.inst.Client.Watch(ctx, &tesserav1.WatchRequest{HeartbeatInterval: durationpb.New(w.m.opts.Heartbeat)},
-				grpc.MaxCallRecvMsgSize(maxViewBytes))
+				grpc.ForceCodecV2(st.codec), grpc.MaxCallRecvMsgSize(recvCap))
 			if err != nil {
 				return err
 			}

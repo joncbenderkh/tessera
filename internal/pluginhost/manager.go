@@ -79,8 +79,10 @@ type PanelState struct {
 	// health check past its deadline, or a silent Watch stream), a
 	// failed health check, or a broken protocol.
 	// Failures is kept while Starting (the launch under way is attempt
-	// Failures+1 of MaxAttempts) and while Live, until a health check
-	// passes once the panel has been live for ResetAfter. RestartAt is
+	// Failures+1 of MaxAttempts) and while Live, until the plugin
+	// shows a sign of life (a passing health check, a Watch response,
+	// or an answered call) once the panel has been live for
+	// ResetAfter. RestartAt is
 	// the Backoff for that count: 1 s after the first failure, 2 s
 	// after the second, and so on. A permanent failure (see Retryable)
 	// is Crashed at once, whatever MaxAttempts says.
