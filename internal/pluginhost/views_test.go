@@ -53,6 +53,7 @@ func TestWatchFailures(t *testing.T) {
 		{"silent-watch", "hung: its Watch stream was silent for"},
 		{"ends-watch", `plugin "ends-watch" ended its Watch stream`},
 		{"late-unimplemented", `plugin "late-unimplemented" ended its Watch stream: rpc error: code = Unimplemented`},
+		{"quota-watch", `plugin "quota-watch" ended its Watch stream: rpc error: code = ResourceExhausted`},
 	} {
 		t.Run(tt.mode, func(t *testing.T) {
 			t.Parallel()
@@ -99,6 +100,39 @@ func TestFailingRenderIsStale(t *testing.T) {
 	}
 }
 
+func TestPluginsResourceExhaustedIsStale(t *testing.T) {
+	dir := install(t, "polled-quota")
+	logger, _ := newLogger()
+	m := StartWith(panels("polled-quota"), dir, logger, fast)
+	defer m.Close()
+	s := waitFor(t, m, "p0", "live after the failed Render", showing("render 2"))
+	logs := m.Logs("p0")
+	if s.ViewErr != nil || countLines(logs, "Render failed") != 1 || countLines(logs, "size limit") != 0 {
+		t.Errorf("a quota error was not a failed Render: %+v\n%s", s, strings.Join(logs, "\n"))
+	}
+}
+
+func TestRenderWithNoViewClearsStale(t *testing.T) {
+	dir := install(t, "polled-empty")
+	logger, _ := newLogger()
+	m := StartWith(panels("polled-empty"), dir, logger, fast)
+	defer m.Close()
+	waitFor(t, m, "p0", "live again with the last view", func(s PanelState) bool {
+		return showing("render 0")(s) && s.ViewErr == nil && countLines(m.Logs("p0"), "Render answers again") == 1
+	})
+}
+
+func TestNoWatchNorRenderIsPermanent(t *testing.T) {
+	dir := install(t, "no-views")
+	logger, _ := newLogger()
+	m := StartWith(panels("no-views"), dir, logger, fast)
+	defer m.Close()
+	s := waitFor(t, m, "p0", "crashed", is(Crashed))
+	if !strings.Contains(s.Err.Error(), `plugin "no-views" implements neither Watch nor Render`) || countLines(m.Logs("p0"), "starting plugin") != 1 {
+		t.Errorf("got %+v\n%s", s, strings.Join(m.Logs("p0"), "\n"))
+	}
+}
+
 func TestHungRenderIsAHang(t *testing.T) {
 	dir := install(t, "hangs-render")
 	logger, _ := newLogger()
@@ -113,6 +147,7 @@ func TestHungRenderIsAHang(t *testing.T) {
 func TestViewOverLimitIsRefused(t *testing.T) {
 	for _, tt := range []struct{ mode, want string }{
 		{"deep-view", `plugin "deep-view" sent a view nested 17 deep, over the limit of 16`},
+		{"too-deep-to-decode", `plugin "too-deep-to-decode" sent a view nested over the limit of 16`},
 		{"big-view", `plugin "big-view" sent a view over the size limit`},
 	} {
 		t.Run(tt.mode, func(t *testing.T) {
@@ -177,13 +212,13 @@ func TestEventsReachPolledPluginInOrder(t *testing.T) {
 	opts.PollInterval = time.Hour // only an event makes it render
 	m := StartWith(panels("polled-events"), dir, logger, opts)
 	defer m.Close()
-	waitFor(t, m, "p0", "live", is(Live))
+	waitFor(t, m, "p0", "rendered", showing("render"))
 	for _, id := range []string{"a", "b", "c"} {
 		if err := m.HandleEvent("p0", activate(id)); err != nil {
 			t.Fatal(err)
 		}
 	}
-	waitFor(t, m, "p0", "showing the events in order", showing("a,b,c"))
+	waitFor(t, m, "p0", "rendering after each event, in order", showing("render,a,render,b,render,c,render"))
 }
 
 func TestHungEventIsAHang(t *testing.T) {

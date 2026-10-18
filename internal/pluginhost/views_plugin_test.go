@@ -39,7 +39,7 @@ func nested(depth int) *tesserav1.View {
 
 func polledMode(mode string) bool {
 	switch mode {
-	case "polled", "polled-failing", "polled-events", "hangs-render":
+	case "polled", "polled-failing", "polled-quota", "polled-empty", "polled-events", "hangs-render", "no-views":
 		return true
 	}
 	return false
@@ -63,8 +63,15 @@ func (s *server) Watch(req *tesserav1.WatchRequest, stream tesserav1.PanelServic
 	case s.mode == "late-unimplemented":
 		send(textView("once"))
 		return status.Error(codes.Unimplemented, "changed its mind")
+	case s.mode == "quota-watch":
+		send(textView("once"))
+		return status.Error(codes.ResourceExhausted, "quota exceeded")
 	case s.mode == "deep-view":
 		if err := send(nested(17)); err != nil {
+			return err
+		}
+	case s.mode == "too-deep-to-decode":
+		if err := send(nested(4000)); err != nil {
 			return err
 		}
 	case s.mode == "big-view":
@@ -105,6 +112,8 @@ func (s *server) Render(ctx context.Context, _ *tesserav1.RenderRequest) (*tesse
 	defer s.mu.Unlock()
 	var text string
 	switch s.mode {
+	case "no-views":
+		return s.UnimplementedPanelServiceServer.Render(ctx, nil)
 	case "hangs-render":
 		s.mu.Unlock()
 		<-ctx.Done()
@@ -115,7 +124,22 @@ func (s *server) Render(ctx context.Context, _ *tesserav1.RenderRequest) (*tesse
 			return nil, status.Error(codes.Internal, "source down")
 		}
 		text = fmt.Sprint("render ", s.renders)
+	case "polled-quota", "polled-empty":
+		s.renders++
+		switch {
+		case s.renders == 2 && s.mode == "polled-quota":
+			return nil, status.Error(codes.ResourceExhausted, "quota exceeded")
+		case s.renders == 2:
+			return nil, status.Error(codes.Internal, "blip")
+		case s.renders > 2 && s.mode == "polled-empty":
+			return &tesserav1.RenderResponse{PollInterval: durationpb.New(100 * time.Millisecond)}, nil
+		}
+		return &tesserav1.RenderResponse{
+			Content:      &tesserav1.RenderResponse_View{View: textView(fmt.Sprint("render ", s.renders-1))},
+			PollInterval: durationpb.New(100 * time.Millisecond),
+		}, nil
 	case "polled-events":
+		s.seen = append(s.seen, "render")
 		text = strings.Join(s.seen, ",")
 	default:
 		text = fmt.Sprint("render ", s.renders)

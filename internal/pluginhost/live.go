@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strings"
 	"sync"
 	"time"
 
@@ -49,7 +50,7 @@ type live struct {
 	start  time.Time
 	lastOK time.Time // the last sign of life; see alive
 	polled bool      // on the Render fallback
-	off    bool      // a view over a limit stopped views until Configure
+	off    bool      // a view over a limit stopped views until a relaunch
 	stale  bool      // polled, and Render failing
 }
 
@@ -103,6 +104,14 @@ func (w *live) run() (end, error) {
 		stopWatch()
 		ready, silence = nil, nil
 	}
+	render := func() (*end, error) {
+		next, stop, err := w.render()
+		if stop == nil && err == nil && !w.off {
+			poll.Reset(next)
+		}
+		return stop, err
+	}
+	lastTick := time.Now()
 	for {
 		select {
 		case <-m.ctx.Done():
@@ -148,9 +157,9 @@ func (w *live) run() (end, error) {
 				m.event(pn, "plugin does not stream its view; polling Render")
 				m.update(pn, func(s *PanelState) { s.Polled = true })
 				poll.Reset(0)
-			case status.Code(err) == codes.ResourceExhausted:
+			case refused(w.name(), err) != nil:
 				unwatch()
-				w.overLimit(fmt.Errorf("plugin %q sent a view over the size limit: %w", w.name(), err))
+				w.overLimit(refused(w.name(), err))
 			default:
 				if stop := w.settle(); stop != nil {
 					return *stop, nil
@@ -160,20 +169,19 @@ func (w *live) run() (end, error) {
 				}
 				return end{}, fmt.Errorf("plugin %q ended its Watch stream: %w", w.name(), err)
 			}
-		case <-silence:
+		case now := <-silence:
+			if now.Sub(lastTick) > 2*m.opts.Heartbeat {
+				// The clock jumped, as across a sleep on some systems:
+				// give the plugin a fresh wait for its next heartbeat.
+				st.resume(now)
+			}
+			lastTick = now
 			if quiet := time.Since(st.lastResponse()); quiet > 2*m.opts.Heartbeat {
 				return end{}, hangError{fmt.Errorf("plugin %q hung: its Watch stream was silent for %v", w.name(), quiet.Round(time.Millisecond))}
 			}
 		case <-poll.C:
-			next, stop, err := w.render()
-			if stop != nil {
-				return *stop, nil
-			}
-			if err != nil {
-				return end{}, err
-			}
-			if !w.off {
-				poll.Reset(next)
+			if stop, err := render(); stop != nil || err != nil {
+				return orClose(stop), err
 			}
 		case req := <-pn.events:
 			stop, err := w.handle(req)
@@ -183,11 +191,21 @@ func (w *live) run() (end, error) {
 			if err != nil {
 				return end{}, err
 			}
-			if w.polled && !w.off {
-				poll.Reset(0) // shows the event's effect
+			if w.polled && !w.off { // shows the event's effect before the next event
+				if stop, err := render(); stop != nil || err != nil {
+					return orClose(stop), err
+				}
 			}
 		}
 	}
+}
+
+// orClose is stop, or Close's end if there is none.
+func orClose(stop *end) end {
+	if stop == nil {
+		return end{}
+	}
+	return *stop
 }
 
 // call runs f with the call deadline and waits for its error, and
@@ -248,23 +266,26 @@ func (w *live) render() (next time.Duration, stop *end, err error) {
 			next = min(max(d, minPoll), maxPoll)
 		}
 		view := resp.GetView()
-		if view == nil {
-			break // a later view schema version's field: nothing to show
-		}
-		if err := checkView(w.name(), view); err != nil {
-			w.overLimit(err)
-			return 0, nil, nil
+		if view != nil {
+			if err := checkView(w.name(), view); err != nil {
+				w.overLimit(err)
+				return 0, nil, nil
+			}
 		}
 		if w.stale {
 			w.stale = false
 			m.event(pn, "Render answers again")
 			m.update(pn, func(s *PanelState) { s.State, s.ViewErr = Live, nil })
 		}
-		m.setView(pn, view)
+		if view != nil { // else a later view schema version's field: nothing new to show
+			m.setView(pn, view)
+		}
 	case hang:
 		return 0, nil, hangError{fmt.Errorf("plugin %q hung: Render did not answer within %v", w.name(), m.opts.CallTimeout)}
-	case status.Code(err) == codes.ResourceExhausted:
-		w.overLimit(fmt.Errorf("plugin %q sent a view over the size limit: %w", w.name(), err))
+	case refused(w.name(), err) != nil:
+		w.overLimit(refused(w.name(), err))
+	case status.Code(err) == codes.Unimplemented:
+		return 0, nil, permanent(fmt.Errorf("plugin %q implements neither Watch nor Render", w.name()))
 	case answered(err):
 		w.alive()
 		if !w.stale {
@@ -311,8 +332,26 @@ func (w *live) handle(req *tesserav1.HandleEventRequest) (*end, error) {
 // showing err in place of a view, and the plugin keeps running.
 func (w *live) overLimit(err error) {
 	w.off, w.stale = true, false
-	w.m.event(w.pn, "%v; no more views until the panel is configured again", err)
+	w.m.event(w.pn, "%v; no more views until the plugin is restarted", err)
 	w.m.update(w.pn, func(s *PanelState) { s.State, s.View, s.ViewErr = Live, nil, err })
+}
+
+// refused reports a view the host would not read, from err, a Watch or
+// Render error: one over maxViewBytes, or nested so deep that protobuf
+// would not decode it, far over maxViewDepth. It is nil for any other
+// error, including a RESOURCE_EXHAUSTED the plugin sent itself.
+func refused(name string, err error) error {
+	s, ok := status.FromError(err)
+	if !ok || !strings.HasPrefix(s.Message(), "grpc: ") { // gRPC's own errors in the host
+		return nil
+	}
+	switch {
+	case s.Code() == codes.ResourceExhausted && strings.Contains(s.Message(), "larger than max"):
+		return fmt.Errorf("plugin %q sent a view over the size limit: %w", name, err)
+	case s.Code() == codes.Internal && strings.Contains(s.Message(), "recursion depth"):
+		return fmt.Errorf("plugin %q sent a view nested over the limit of %d: %w", name, maxViewDepth, err)
+	}
+	return nil
 }
 
 // checkView reports a view nested deeper than maxViewDepth.
@@ -402,6 +441,13 @@ func (st *stream) answered() bool {
 	st.mu.Lock()
 	defer st.mu.Unlock()
 	return st.ever
+}
+
+// resume restarts the wait for the next response at now.
+func (st *stream) resume(now time.Time) {
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	st.last = now
 }
 
 func (st *stream) lastResponse() time.Time {

@@ -65,7 +65,7 @@ type PanelState struct {
 	// set for a plugin that does not stream its view, which the host
 	// polls with Render. ViewErr says why the view is old (Stale: the
 	// Render error) or missing (Live: the plugin sent one over a limit,
-	// and no more are read until the panel is configured again).
+	// and no more are read until the plugin is restarted).
 	View    *tesserav1.View
 	Updated time.Time
 	Polled  bool
