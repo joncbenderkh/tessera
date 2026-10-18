@@ -633,7 +633,8 @@ func (m *Manager) find(id string) *panel {
 // Close stops supervision and shuts every plugin down in parallel. It
 // returns once every plugin has exited or been killed, or Instance.Close
 // has given up on it, and every launch still starting has stopped, which
-// takes an Instance.Close; also when called again while a first call is still shutting them down.
+// takes an Instance.Close; also when called again while a first call is
+// still shutting them down.
 func (m *Manager) Close() {
 	m.closeOnce.Do(func() {
 		m.cancel() // each supervisor closes its own instance
