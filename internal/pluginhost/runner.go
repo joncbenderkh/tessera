@@ -265,8 +265,9 @@ func (r *procRunner) ownExit(status string) bool {
 }
 
 // Wait reaps the plugin. When watch saw it exit (Linux, macOS, the
-// BSDs, and Windows), its group has been killed, so it is marked exited
-// before the reap and kill never reaches a released group ID. Otherwise
+// BSDs, and Windows), its group has been killed (on Windows, which has
+// no groups, the plugin alone), so it is marked exited before the reap
+// and kill never reaches a released group ID. Otherwise
 // (other Unix systems, where children it left in its group are killed
 // only by a forced Close; or watch could not watch) Wait cannot know the
 // plugin has exited before reaping it, so from the start of the reap

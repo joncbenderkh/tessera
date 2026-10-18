@@ -250,8 +250,8 @@ func Describe(ctx context.Context, dir, name string, output func(line string), l
 // running 2 seconds later. If go-plugin is still waiting after
 // killTimeout, on a plugin that never answers Shutdown or a child
 // holding its stderr open, Close kills the plugin's process group (on
-// Windows, the plugin alone). Where watch runs, the group of a plugin
-// that exits is killed as it exits, so its children go with it.
+// Windows, the plugin alone). Where watch runs on Unix, the group of a
+// plugin that exits is killed as it exits, so its children go with it.
 // It returns within killTimeout, reapTimeout, pipeTimeout, and
 // flushTimeout together, even if the plugin is still running then, as
 // one stuck in the kernel can be after SIGKILL.

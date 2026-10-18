@@ -590,6 +590,7 @@ func (m *Manager) event(pn *panel, format string, args ...any) {
 }
 
 // States returns a snapshot of every enabled panel, in config order.
+// Once Close begins, the snapshot no longer changes.
 func (m *Manager) States() []PanelState {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -656,7 +657,9 @@ func (m *Manager) find(id string) *panel {
 // returns once every plugin has exited or been killed, or Instance.Close
 // has given up on it, and every launch still starting has stopped, which
 // takes an Instance.Close; also when called again while a first call is
-// still shutting them down.
+// still shutting them down. Panel states are not updated once Close
+// begins: States keeps showing each panel as it was, and Changed stays
+// open.
 func (m *Manager) Close() {
 	m.closeOnce.Do(func() {
 		m.cancel() // each supervisor closes its own instance
