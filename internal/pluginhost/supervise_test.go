@@ -195,6 +195,7 @@ func TestFailuresClearOnceSettled(t *testing.T) {
 	logger, _ := newLogger()
 	opts := fast
 	opts.ResetAfter = 500 * time.Millisecond // longer than a crash takes
+	opts.PingInterval = 100 * time.Millisecond
 	m := StartWith(panels("flaky"), dir, logger, opts)
 	defer m.Close()
 	waitFor(t, m, "p0", "live after two failures", func(s PanelState) bool { return s.State == Live && s.Failures == 2 })
@@ -652,5 +653,23 @@ func TestRing(t *testing.T) {
 	last := r.lines()[2]
 	if line := last[strings.Index(last, "PLUGIN  ")+len("PLUGIN  "):]; line != strings.Repeat("x", logLine-4)+"…" {
 		t.Errorf("a long line became %d bytes: …%q", len(line), line[max(0, len(line)-8):])
+	}
+}
+
+func TestFrozenBeforeResetAfterIsCounted(t *testing.T) {
+	if !canFreeze {
+		t.Skip("cannot stop a process on this OS")
+	}
+	dir := install(t, "freezes-live") // freezes 200ms in, found out after ResetAfter
+	logger, _ := newLogger()
+	opts := fast
+	opts.MaxAttempts = 2
+	opts.PingInterval = 150 * time.Millisecond
+	opts.ResetAfter = 300 * time.Millisecond
+	m := StartWith(panels("freezes-live"), dir, logger, opts)
+	defer m.Close()
+	s := waitFor(t, m, "p0", "crashed", is(Crashed))
+	if s.Failures != 2 {
+		t.Errorf("crashed after %d failures, want 2", s.Failures)
 	}
 }

@@ -65,11 +65,11 @@ type PanelState struct {
 	// Failures there still counts the earlier ones. A failure is a
 	// launch that failed, or an exit or failed health check once live.
 	// Failures is kept while Starting (the launch under way is attempt
-	// Failures+1 of MaxAttempts) and while Live, until the panel has
-	// been live for ResetAfter. RestartAt is the Backoff for that
-	// count: 1 s after the first failure, 2 s after the second, and so
-	// on. A permanent failure (see Retryable) is Crashed at once,
-	// whatever MaxAttempts says.
+	// Failures+1 of MaxAttempts) and while Live, until a health check
+	// passes once the panel has been live for ResetAfter. RestartAt is
+	// the Backoff for that count: 1 s after the first failure, 2 s
+	// after the second, and so on. A permanent failure (see Retryable)
+	// is Crashed at once, whatever MaxAttempts says.
 	Err         error
 	ExitStatus  string
 	Failures    int
@@ -82,7 +82,7 @@ type PanelState struct {
 type Options struct {
 	Backoff      time.Duration // delay after the first failure, doubled after each (1 s), capped at 5 min
 	MaxAttempts  int           // failures in a row before giving up (5); see PanelState.Failures
-	ResetAfter   time.Duration // time live after which the count restarts (60 s)
+	ResetAfter   time.Duration // time live after which the count restarts (60 s); see PanelState.Failures
 	CallTimeout  time.Duration // deadline on each call to a plugin (5 s)
 	PingInterval time.Duration // how often a live plugin's health is checked (10 s)
 }
@@ -317,13 +317,13 @@ func (m *Manager) shutDown(pn *panel, inst *Instance) {
 // check, Restart is asked for, or Close; a Restart or Close also ends a
 // health check under way. It returns whether the process exited, how
 // long it was live, whether a Restart ended it, and the failure, if
-// any.
+// any. A plugin that hung or failed its health check was live only
+// until the last check it passed, since it may have frozen right after.
 func (m *Manager) watchLive(pn *panel, inst *Instance) (exited bool, lived time.Duration, restart bool, err error) {
 	start := time.Now()
+	lastOK := start
 	tick := time.NewTicker(m.opts.PingInterval)
 	defer tick.Stop()
-	settled := time.NewTimer(m.opts.ResetAfter)
-	defer settled.Stop()
 	exit := func() (bool, time.Duration, bool, error) {
 		return true, time.Since(start), false, fmt.Errorf("plugin %q exited unexpectedly", inst.Info.GetName())
 	}
@@ -335,9 +335,6 @@ func (m *Manager) watchLive(pn *panel, inst *Instance) (exited bool, lived time.
 			return false, time.Since(start), true, nil
 		case <-inst.Done():
 			return exit()
-		case <-settled.C:
-			m.update(pn, func(s *PanelState) { s.Failures = 0 })
-			continue
 		case <-tick.C:
 		}
 		ctx, cancel := context.WithTimeout(m.ctx, m.opts.CallTimeout)
@@ -359,6 +356,11 @@ func (m *Manager) watchLive(pn *panel, inst *Instance) (exited bool, lived time.
 		hang := perr != nil && hung(ctx, perr, m.opts.CallTimeout)
 		cancel()
 		if perr == nil {
+			settled := lastOK.Sub(start) >= m.opts.ResetAfter
+			lastOK = time.Now()
+			if !settled && lastOK.Sub(start) >= m.opts.ResetAfter {
+				m.update(pn, func(s *PanelState) { s.Failures = 0 })
+			}
 			continue
 		}
 		// A plugin that died makes the check fail before its exit is
@@ -373,9 +375,9 @@ func (m *Manager) watchLive(pn *panel, inst *Instance) (exited bool, lived time.
 		case <-time.After(500 * time.Millisecond):
 		}
 		if !hang {
-			return false, time.Since(start), false, fmt.Errorf("plugin %q failed its health check: %w", inst.Info.GetName(), perr)
+			return false, lastOK.Sub(start), false, fmt.Errorf("plugin %q failed its health check: %w", inst.Info.GetName(), perr)
 		}
-		return false, time.Since(start), false, hangError{fmt.Errorf("plugin %q hung: health check did not answer within %v", inst.Info.GetName(), m.opts.CallTimeout)}
+		return false, lastOK.Sub(start), false, hangError{fmt.Errorf("plugin %q hung: health check did not answer within %v", inst.Info.GetName(), m.opts.CallTimeout)}
 	}
 }
 
