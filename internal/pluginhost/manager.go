@@ -572,13 +572,18 @@ func (m *Manager) update(pn *panel, f func(*PanelState)) {
 }
 
 // event records a lifecycle event in pn's Logs and the host log, unless
-// Close is under way.
+// Close is under way. Logs holds lines: those after an event's first
+// start with "| ", so text a plugin put in an error cannot pass for an
+// event of its own.
 func (m *Manager) event(pn *panel, format string, args ...any) {
 	if m.ctx.Err() != nil {
 		return
 	}
 	msg := fmt.Sprintf(format, args...)
-	for _, line := range strings.Split(msg, "\n") { // Logs holds lines
+	for i, line := range strings.Split(msg, "\n") {
+		if i > 0 {
+			line = "| " + line
+		}
 		pn.logs.add("HOST", line)
 	}
 	m.logger.Printf("panel %q: %s", pn.ID, msg)

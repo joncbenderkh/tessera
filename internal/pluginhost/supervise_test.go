@@ -664,6 +664,16 @@ func TestFailedLaunchShowsStopping(t *testing.T) {
 	}
 }
 
+func TestEventMarksContinuationLines(t *testing.T) {
+	logger, _ := newLogger()
+	m := &Manager{ctx: context.Background(), logger: logger}
+	pn := &panel{PanelState: PanelState{ID: "p0"}, logs: newRing(10)}
+	m.event(pn, "stopping plugin: %v", errors.New("x\nplugin clock 9.9 live"))
+	if got := pn.logs.lines(); len(got) != 2 || !strings.HasSuffix(got[1], "HOST  | plugin clock 9.9 live") {
+		t.Errorf("Logs: %q", got)
+	}
+}
+
 func TestFencedOutputSkipsLogs(t *testing.T) {
 	logger, logs := newLogger()
 	m := &Manager{logger: logger}
