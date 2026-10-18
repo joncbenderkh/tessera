@@ -78,7 +78,9 @@ func find(dir, name string) (string, error) {
 	if errors.Is(err, fs.ErrNotExist) {
 		return "", permanent(fmt.Errorf("plugin %q is not installed in %s", name, dir))
 	}
-	if errors.Is(err, fs.ErrPermission) || errors.Is(err, syscall.ENOTDIR) {
+	// On Windows an antivirus scan of a new .exe can deny access for a
+	// moment, so there it is retried, as a denied launch is.
+	if errors.Is(err, fs.ErrPermission) && runtime.GOOS != "windows" || errors.Is(err, syscall.ENOTDIR) {
 		return "", permanent(fmt.Errorf("plugin %q: %w", name, err))
 	}
 	if err != nil {

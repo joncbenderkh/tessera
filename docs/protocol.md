@@ -213,7 +213,7 @@ Install or update a plugin by renaming it into place (write it as
 `clock.new` in the plugins directory, then rename it to `clock`): a
 panel that restarts while its plugin is missing or half-written fails
 for good, as above, until the user restarts it. On Windows a launch
-denied access is retried, since an antivirus scan of a new `.exe`
+denied access, to the file or to running it, is retried, since an antivirus scan of a new `.exe`
 can deny it for a moment.
 
 The host refuses a plugin, shutting it down and recording the reason,
