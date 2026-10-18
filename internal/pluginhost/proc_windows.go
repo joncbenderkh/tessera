@@ -29,10 +29,11 @@ const (
 )
 
 // badExecutable reports whether err, from starting the plugin, says its
-// file is not a program this system runs. Access denied is retried: an
-// antivirus scan of a new .exe can deny it for a moment.
+// file is missing or not a program this system runs. Access denied is
+// retried: an antivirus scan of a new .exe can deny it for a moment.
 func badExecutable(err error) bool {
-	return errors.Is(err, windows.ERROR_BAD_EXE_FORMAT) || errors.Is(err, windows.ERROR_EXE_MACHINE_TYPE_MISMATCH)
+	return errors.Is(err, windows.ERROR_FILE_NOT_FOUND) || errors.Is(err, windows.ERROR_PATH_NOT_FOUND) ||
+		errors.Is(err, windows.ERROR_BAD_EXE_FORMAT) || errors.Is(err, windows.ERROR_EXE_MACHINE_TYPE_MISMATCH)
 }
 
 // killGroup kills the plugin and returns the status that gives it, or
