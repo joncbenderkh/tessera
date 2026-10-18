@@ -140,7 +140,7 @@ func TestStartReportsFailures(t *testing.T) {
 }
 
 func TestLaunchRejects(t *testing.T) {
-	dir := install(t, "misnamed", "proto-two", "plaintext", "view-nine", "slow-describe")
+	dir := install(t, "misnamed", "proto-two", "core-two", "plaintext", "view-nine", "slow-describe")
 	if err := os.WriteFile(filepath.Join(dir, "noexec"+exeSuffix()), nil, 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -148,6 +148,7 @@ func TestLaunchRejects(t *testing.T) {
 	for _, tt := range []struct{ name, want string }{
 		{"misnamed", `plugin "misnamed" calls itself "other"`},
 		{"proto-two", `plugin "proto-two" does not speak protocol 1: incompatible API version`},
+		{"core-two", `plugin "core-two" does not speak go-plugin's core protocol 1: incompatible core API version`},
 		{"plaintext", `plugin "plaintext": Describe: rpc error: code = Unavailable`},
 		{"view-nine", `plugin "view-nine" chose view schema 9; this host renders [1]`},
 		{"slow-describe", `plugin "slow-describe" hung: Describe did not answer within 5s`},

@@ -177,6 +177,9 @@ func (inst *Instance) start(ctx context.Context, name string, timeout time.Durat
 	if err != nil && strings.Contains(err.Error(), "incompatible API version") {
 		return permanent(fmt.Errorf("plugin %q does not speak protocol %d: %w", name, tesserav1.ProtocolVersion, err))
 	}
+	if err != nil && strings.Contains(err.Error(), "incompatible core API version") {
+		return permanent(fmt.Errorf("plugin %q does not speak go-plugin's core protocol %d: %w", name, plugin.CoreProtocolVersion, err))
+	}
 	var ex execError
 	if errors.As(err, &ex) && badExecutable(ex.error) {
 		return permanent(fmt.Errorf("plugin %q cannot be run: %w", name, err))
