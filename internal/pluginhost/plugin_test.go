@@ -13,6 +13,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -117,7 +118,7 @@ type testPlugin struct {
 }
 
 func (p testPlugin) GRPCServer(_ *plugin.GRPCBroker, s *grpc.Server) error {
-	tesserav1.RegisterPanelServiceServer(s, &server{mode: p.mode})
+	tesserav1.RegisterPanelServiceServer(s, &server{mode: p.mode, events: make(chan string, 64)})
 	return nil
 }
 
@@ -176,11 +177,36 @@ func (testPlugin) GRPCClient(context.Context, *plugin.GRPCBroker, *grpc.ClientCo
 //   - floods-stdout: after Describe, writes 1 MiB to stdout with no
 //     newline, then reports "flooded" on stderr.
 //
+// For views (see views_plugin_test.go):
+//
+//   - polled: Watch answers UNIMPLEMENTED; Render answers "render N"
+//     and asks to be polled every 100ms.
+//   - polled-failing: as polled, but Render fails after its first
+//     answer until the gate file (see gated) exists.
+//   - polled-events: as polled, naming no poll interval; Render
+//     answers the action ids so far.
+//   - hangs-render: as polled, but Render never answers.
+//   - silent-watch: sends one view, then nothing.
+//   - ends-watch: sends one view, then ends its stream.
+//   - late-unimplemented: sends one view, then ends its stream with
+//     UNIMPLEMENTED.
+//   - deep-view: sends a view nested 17 deep.
+//   - big-view: sends a view over 4 MiB.
+//   - spams-views: sends views "view N" as fast as it can.
+//   - events: Watch answers each event with a view "got <action id>".
+//   - hangs-event: HandleEvent never answers.
+//
 // Any other name is a well-behaved plugin of that name, which reports
-// each Configure on stderr.
+// each Configure on stderr, and whose Watch sends a view naming it,
+// then heartbeats at the interval asked for.
 type server struct {
 	tesserav1.UnimplementedPanelServiceServer
-	mode string
+	mode   string
+	events chan string // events mode: action ids for the Watch stream
+
+	mu      sync.Mutex
+	renders int      // Renders answered
+	seen    []string // polled-events: action ids so far
 }
 
 func (s *server) Describe(ctx context.Context, _ *tesserav1.DescribeRequest) (*tesserav1.DescribeResponse, error) {

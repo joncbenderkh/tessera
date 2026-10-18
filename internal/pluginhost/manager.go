@@ -28,7 +28,7 @@ type State int
 const (
 	Starting   State = iota // launching, describing, or configuring
 	Live                    // configured and running
-	Stale                   // running, but its view is old; set by view updates (#14)
+	Stale                   // polled, and Render failing: its view is old
 	Stopping                // failed or restarted; being shut down
 	Restarting              // failed; a restart is scheduled for RestartAt
 	Crashed                 // failed for good, or too often; waits for Restart
@@ -59,11 +59,25 @@ type PanelState struct {
 	Since      time.Time // when State last changed
 	Info       *tesserav1.DescribeResponse
 
+	// The panel's latest view and when it came: nil until the first of
+	// each launch, kept after the plugin fails, and never modified once
+	// received, so a snapshot may share it. Polled is
+	// set for a plugin that does not stream its view, which the host
+	// polls with Render. ViewErr says why the view is old (Stale: the
+	// Render error) or missing (Live: the plugin sent one over a limit,
+	// and no more are read until the panel is configured again).
+	View    *tesserav1.View
+	Updated time.Time
+	Polled  bool
+	ViewErr error
+
 	// For Restarting and Crashed: why the plugin failed, how its
 	// process ended if it exited by itself, and how many failures in a
 	// row there have been. Stopping carries only the new failure's Err;
 	// Failures there still counts the earlier ones. A failure is a
-	// launch that failed, or an exit or failed health check once live.
+	// launch that failed, or once live an exit, a hang (a call or the
+	// health check past its deadline, or a silent Watch stream), a
+	// failed health check, or a broken protocol.
 	// Failures is kept while Starting (the launch under way is attempt
 	// Failures+1 of MaxAttempts) and while Live, until a health check
 	// passes once the panel has been live for ResetAfter. RestartAt is
@@ -85,6 +99,8 @@ type Options struct {
 	ResetAfter   time.Duration // time live after which the count restarts (60 s); see PanelState.Failures
 	CallTimeout  time.Duration // deadline on each call to a plugin (5 s)
 	PingInterval time.Duration // how often a live plugin's health is checked (10 s)
+	Heartbeat    time.Duration // the Watch heartbeat interval asked for, at least 1 s (5 s); silence for twice it is a hang
+	PollInterval time.Duration // time between Renders of a polled plugin that names none (5 s)
 }
 
 func (o Options) withDefaults() Options {
@@ -102,6 +118,13 @@ func (o Options) withDefaults() Options {
 	}
 	if o.PingInterval <= 0 {
 		o.PingInterval = 10 * time.Second
+	}
+	if o.Heartbeat <= 0 {
+		o.Heartbeat = 5 * time.Second
+	}
+	o.Heartbeat = max(o.Heartbeat, time.Second) // the protocol's floor
+	if o.PollInterval <= 0 {
+		o.PollInterval = 5 * time.Second
 	}
 	return o
 }
@@ -132,8 +155,10 @@ type Manager struct {
 	dir       string
 	logger    *log.Logger
 
-	mu     sync.Mutex
-	panels []*panel
+	mu          sync.Mutex
+	panels      []*panel
+	viewSignal  time.Time // the last Changed signal for a view
+	viewPending bool      // one is scheduled
 }
 
 type panel struct {
@@ -141,8 +166,9 @@ type panel struct {
 	cfg     config.Panel
 	inst    *Instance // the live one, if any; under mu; read by tests
 	logs    *ring
-	restart chan struct{} // a manual Restart; buffered, coalesced
-	told    bool          // Logs already name this failure; supervisor only
+	restart chan struct{}                      // a manual Restart; buffered, coalesced
+	events  chan *tesserav1.HandleEventRequest // queued by HandleEvent while Live or Stale
+	told    bool                               // Logs already name this failure; supervisor only
 
 	outMu  sync.Mutex
 	outGen int // bumped by fence as each launch ends
@@ -173,6 +199,7 @@ func StartWith(cfg config.Config, dir string, logger *log.Logger, opts Options) 
 			cfg:        p,
 			logs:       newRing(logLines),
 			restart:    make(chan struct{}, 1),
+			events:     make(chan *tesserav1.HandleEventRequest, maxEvents),
 		}
 		m.panels = append(m.panels, pn)
 		m.wg.Add(1)
@@ -203,8 +230,12 @@ func (m *Manager) supervise(pn *panel) {
 				failures = 0
 			default:
 			}
+			for len(pn.events) > 0 { // meant for the last launch's view
+				<-pn.events
+			}
 			s.State, s.Info, s.Err, s.ExitStatus = Starting, nil, nil, ""
 			s.Failures, s.RestartAt = failures, time.Time{}
+			s.View, s.Updated, s.Polled, s.ViewErr = nil, time.Time{}, false, nil
 		})
 		m.event(pn, "starting plugin %s", pn.Plugin)
 		pn.told = false
@@ -349,75 +380,6 @@ func (m *Manager) note(pn *panel, format string, args ...any) {
 	m.event(pn, format, args...)
 }
 
-// watchLive waits while inst is live: until it exits, fails a health
-// check, Restart is asked for, or Close; a Restart or Close also ends a
-// health check under way. It returns whether the process exited, how
-// long it was live, whether a Restart ended it, and the failure, if
-// any. It counts as live only until the last health check it passed,
-// since it may have frozen right after, so the count of failures it
-// resets agrees with PanelState.Failures.
-func (m *Manager) watchLive(pn *panel, inst *Instance) (exited bool, lived time.Duration, restart bool, err error) {
-	start := time.Now()
-	lastOK := start
-	tick := time.NewTicker(m.opts.PingInterval)
-	defer tick.Stop()
-	exit := func() (bool, time.Duration, bool, error) {
-		return true, lastOK.Sub(start), false, fmt.Errorf("plugin %q exited unexpectedly", inst.Info.GetName())
-	}
-	for {
-		select {
-		case <-m.ctx.Done():
-			return false, lastOK.Sub(start), false, nil
-		case <-pn.restart:
-			return false, lastOK.Sub(start), true, nil
-		case <-inst.Done():
-			return exit()
-		case <-tick.C:
-		}
-		ctx, cancel := context.WithTimeout(m.ctx, m.opts.CallTimeout)
-		answer := make(chan error, 1)
-		go func() { answer <- inst.Ping(ctx) }()
-		var perr error
-		select {
-		case perr = <-answer:
-		case <-m.ctx.Done():
-			cancel()
-			return false, lastOK.Sub(start), false, nil
-		case <-pn.restart:
-			cancel()
-			return false, lastOK.Sub(start), true, nil
-		case <-inst.Done():
-			cancel()
-			return exit()
-		}
-		hang := perr != nil && hung(ctx, perr, m.opts.CallTimeout)
-		cancel()
-		if perr == nil {
-			settled := lastOK.Sub(start) >= m.opts.ResetAfter
-			lastOK = time.Now()
-			if !settled && lastOK.Sub(start) >= m.opts.ResetAfter {
-				m.update(pn, func(s *PanelState) { s.Failures = 0 })
-			}
-			continue
-		}
-		// A plugin that died makes the check fail before its exit is
-		// seen; give the exit a moment to show.
-		select {
-		case <-m.ctx.Done():
-			return false, lastOK.Sub(start), false, nil
-		case <-pn.restart:
-			return false, lastOK.Sub(start), true, nil
-		case <-inst.Done():
-			return exit()
-		case <-time.After(500 * time.Millisecond):
-		}
-		if !hang {
-			return false, lastOK.Sub(start), false, fmt.Errorf("plugin %q failed its health check: %w", inst.Info.GetName(), perr)
-		}
-		return false, lastOK.Sub(start), false, hangError{fmt.Errorf("plugin %q hung: health check did not answer within %v", inst.Info.GetName(), m.opts.CallTimeout)}
-	}
-}
-
 // launch starts and configures pn's plugin. A Configure that misses its
 // deadline counts as a hang: the plugin is shut down before anything
 // else is called on it.
@@ -484,8 +446,20 @@ func (pn *panel) fence() {
 // being launched.
 var ErrStarting = errors.New("the plugin is already starting")
 
-// ErrClosed is Restart's answer once Close has begun.
+// ErrClosed is Restart's and HandleEvent's answer once Close has
+// begun.
 var ErrClosed = errors.New("the plugin host is closed")
+
+// ErrNotLive is HandleEvent's answer for a panel that is not Live or
+// Stale.
+var ErrNotLive = errors.New("the panel is not live")
+
+// ErrBusy is HandleEvent's answer when maxEvents events are already
+// waiting for the panel's plugin.
+var ErrBusy = errors.New("too many events are waiting for the plugin")
+
+// maxEvents is how many events may wait for a panel's plugin.
+const maxEvents = 32
 
 // beforeLaunchHook runs at the top of each launch; tests use it to
 // place a Restart exactly there.
@@ -565,10 +539,38 @@ func (m *Manager) update(pn *panel, f func(*PanelState)) {
 		pn.Since = time.Now()
 	}
 	m.mu.Unlock()
+	m.signal()
+}
+
+func (m *Manager) signal() {
 	select {
 	case m.changed <- struct{}{}:
 	default:
 	}
+}
+
+// setView makes v pn's view. Changed is signalled at most every
+// viewEvery for views, however fast plugins send them; States then has
+// each panel's latest.
+func (m *Manager) setView(pn *panel, v *tesserav1.View) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	pn.View, pn.Updated = v, time.Now()
+	if m.viewPending {
+		return
+	}
+	if wait := viewEvery - time.Since(m.viewSignal); wait > 0 {
+		m.viewPending = true
+		time.AfterFunc(wait, func() {
+			m.mu.Lock()
+			m.viewPending, m.viewSignal = false, time.Now()
+			m.mu.Unlock()
+			m.signal()
+		})
+		return
+	}
+	m.viewSignal = time.Now()
+	m.signal()
 }
 
 // event records a lifecycle event in pn's Logs and the host log, unless
@@ -629,6 +631,33 @@ func (m *Manager) Restart(id string) error {
 		default: // one is already pending
 		}
 		return nil
+	}
+	return fmt.Errorf("no enabled panel %q", id)
+}
+
+// HandleEvent queues req, a user input event, for panel id's plugin,
+// which gets the panel's events one at a time and in order. Events
+// still waiting when the plugin fails or restarts are dropped: they
+// were meant for its last view.
+func (m *Manager) HandleEvent(id string, req *tesserav1.HandleEventRequest) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.ctx.Err() != nil {
+		return ErrClosed
+	}
+	for _, pn := range m.panels {
+		if pn.ID != id {
+			continue
+		}
+		if pn.State != Live && pn.State != Stale {
+			return ErrNotLive
+		}
+		select {
+		case pn.events <- req:
+			return nil
+		default:
+			return ErrBusy
+		}
 	}
 	return fmt.Errorf("no enabled panel %q", id)
 }
