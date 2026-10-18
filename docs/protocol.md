@@ -197,10 +197,10 @@ and restarts a plugin that crashes, hangs, or breaks the protocol:
   missing, or a file on a `noexec` mount), a version the host does
   not speak, and settings the plugin rejects with `INVALID_ARGUMENT`.
 
-The host keeps each panel's last 500 lines of plugin output, each cut
-to 4 KiB, and its lifecycle events (started, exited with status,
-stopping with the reason, restart scheduled, gave up) for the panel's
-Logs view.
+For the panel's Logs view, the host keeps each panel's last 500
+lines, plugin output and lifecycle events (started, exited with
+status, stopping with the reason, restart scheduled, gave up) in one
+list, each line cut to 4 KiB.
 
 Plugins are installed in `tessera/plugins` under the user data
 directory: `$XDG_DATA_HOME` (or `~/.local/share`) on Linux,
