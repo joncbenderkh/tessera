@@ -305,11 +305,17 @@ func (pn *panel) untold(err error) string {
 }
 
 // shutDown closes inst, and says so in pn's Logs if the process
-// outlived Close, so the next launch can run beside it.
+// outlived Close, so the next launch can run beside it, or if it failed
+// while shutting down; an exit before shutDown is the caller's to log.
 func (m *Manager) shutDown(pn *panel, inst *Instance) {
+	before := inst.Exited()
 	inst.Close()
 	if !inst.Exited() {
 		m.event(pn, "plugin %s did not exit when shut down", pn.Plugin)
+		return
+	}
+	if s := inst.ExitStatus(); !before && s != "" && s != "exit status 0" && inst.runner.ownExit(s) {
+		m.event(pn, "plugin exited during shutdown: %s", s)
 	}
 }
 

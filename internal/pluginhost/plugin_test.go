@@ -92,6 +92,9 @@ func servePlugin(mode string) {
 		GRPCServer:      newServer,
 		Logger:          hclog.New(&hclog.LoggerOptions{Output: io.Discard}),
 	})
+	if mode == "fails-shutdown" {
+		os.Exit(2)
+	}
 }
 
 // notServing answers every health check NOT_SERVING.
@@ -148,6 +151,7 @@ func (testPlugin) GRPCClient(context.Context, *plugin.GRPCBroker, *grpc.ClientCo
 //   - crash-then-hang: as crashes on its first launch; then Configure
 //     never answers.
 //   - freezes-live: stops itself shortly after Configure.
+//   - fails-shutdown: exits with status 2 when shut down.
 //   - forks: Describe starts a long-lived child that shares the
 //     plugin's stderr, and reports its PID there.
 //   - exits: as forks, then the plugin exits on its own.

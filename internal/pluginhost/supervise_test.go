@@ -673,3 +673,17 @@ func TestFrozenBeforeResetAfterIsCounted(t *testing.T) {
 		t.Errorf("crashed after %d failures, want 2", s.Failures)
 	}
 }
+
+func TestExitDuringShutdownIsLogged(t *testing.T) {
+	dir := install(t, "fails-shutdown")
+	logger, _ := newLogger()
+	m := StartWith(panels("fails-shutdown"), dir, logger, fast)
+	defer m.Close()
+	waitFor(t, m, "p0", "live", is(Live))
+	if err := m.Restart("p0"); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, m, "p0", "logged the exit", func(PanelState) bool {
+		return countLines(m.Logs("p0"), "plugin exited during shutdown: exit status 2") == 1
+	})
+}
