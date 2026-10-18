@@ -63,11 +63,10 @@ on its own, though the host still sees the plugin exit; if it holds
 the plugin's stdout or stderr open, the host reads them for up to 3
 more seconds and then closes them. On other Unix systems the group is
 killed only when a plugin has to be killed. On Windows only the plugin
-itself is killed, and a plugin that crashes while a child holds its
-stderr is seen to exit only once that child exits. All of this holds
-while the host runs: on Linux the kernel also kills a plugin whose host
-dies without shutting it down, but not the plugin's children;
-elsewhere such a plugin outlives its host.
+itself is killed. All of this holds while the host runs: on Linux the
+kernel also kills a plugin whose host dies without shutting it down,
+but not the plugin's children; elsewhere such a plugin outlives its
+host.
 
 Mutual TLS is what go-plugin calls AutoMTLS, and the host always enables
 it: without it, any local process could connect to a plugin, read its
@@ -130,7 +129,11 @@ host                                    plugin
   answers `INVALID_ARGUMENT`, it keeps its previous settings, and the
   host shows the message in an error tile and cancels any open Watch or
   stops polling; until a Configure succeeds, it makes no Watch or Render
-  call.
+  call. Configure should not depend on anything outside the plugin: one
+  that fails for another reason fails the launch, and five in a row
+  leave the panel crashed. A plugin whose data source is down (no
+  network at login, say) answers Configure and shows the outage in its
+  view, retrying on its own.
 - **Watch** is the normal path: the plugin pushes a complete view each
   time its content changes, starting with the current one. The first
   response always carries a view: a plugin still fetching data sends
@@ -164,10 +167,43 @@ each `StackItem.widget` adds 1). A view over either limit fails
 its stream or Render call; the host shows an error tile naming the limit,
 does not restart the plugin, and tries again after the next Configure.
 
-The host puts a deadline on every unary call, treats a Watch stream that
-stays silent for twice the heartbeat interval as hung, and restarts a
-plugin that crashes, hangs, or breaks the protocol, with backoff, showing
-an error tile meanwhile (#13).
+The host puts a deadline on every unary call (5 seconds), treats a
+Watch stream that stays silent for twice the heartbeat interval as hung,
+and restarts a plugin that crashes, hangs, or breaks the protocol:
+
+- A plugin whose process exits, that misses a call's deadline, or that
+  fails the health check the host makes every 10 seconds while it is
+  live (the health service above, for the service name `plugin`, also
+  with a 5-second deadline; any status but `SERVING` fails it), is shut
+  down and launched again after 1 second, then 2, 4, and 8 after each
+  further failure in a row. A launch that fails, short of the
+  permanent failures below, counts the same way. The next launch, after
+  a failure or a restart, waits until the old process is gone, or until
+  shutting it down gives up (about 6 seconds; a process stuck in the
+  kernel can outlive SIGKILL), which the panel's Logs then say. On
+  Windows, children the plugin started are not shut down with it.
+- The health check catches a plugin frozen as a whole. go-plugin
+  answers it outside the plugin's own code, so a plugin hung inside
+  that code still passes; the Watch heartbeat (#14) catches those.
+- At the fifth failure in a row the host gives up and shows the panel
+  as crashed, with the last error and, for a plugin that exited by
+  itself, its exit status, until the user restarts it.
+- A plugin that stays up for a minute starts its count again. It
+  counts as up only until the last health check it passed, so one
+  that freezes is not counted as up while frozen.
+- Failures a restart cannot fix are not retried: a missing,
+  unreadable, non-executable, or misnamed plugin, one the system
+  cannot run (not a program for it, a script whose interpreter is
+  missing, or a file on a `noexec` mount), a version the host does
+  not speak, a `Describe` or `Configure` answered `UNIMPLEMENTED`
+  (not a tessera plugin), and settings the plugin rejects with
+  `INVALID_ARGUMENT`.
+
+For the panel's Logs view, the host keeps each panel's last 500
+lines, plugin output and lifecycle events (started, exited with
+status, stopping with the reason, restart scheduled, gave up) in one
+list, each line cut to 4 KiB. An event that spans lines, such as an
+error a plugin returned, continues on lines that start with `| `.
 
 Plugins are installed in `tessera/plugins` under the user data
 directory: `$XDG_DATA_HOME` (or `~/.local/share`) on Linux,
@@ -176,14 +212,25 @@ Windows. A plugin's `DescribeResponse.name` must equal its executable's
 file name, which is how the config's `plugin:` field finds it: the name
 itself on Unix, the name plus `.exe` on Windows. Other files in the
 plugins directory, such as `clock.py` next to `clock`, are ignored.
+Install or update a plugin by renaming it into place (write it as
+`clock.new` in the plugins directory, then rename it to `clock`): a
+panel that restarts while its plugin is missing or half-written fails
+for good, as above, until the user restarts it. On Windows a launch
+denied access, to the file or to running it, is retried, since an
+antivirus scan of a new `.exe` can deny it for a moment.
 
 The host refuses a plugin, shutting it down and recording the reason,
 when its file is missing or not executable, the handshake or the
-mutual TLS connection fails, it does not answer `Describe` within 5
-seconds, its `Describe` gives a different name or protocol version, or
-it picks a view schema version the host did not offer. A rejected
-`Configure` is recorded the same way. The reason is logged now and will
-be shown in the panel's place once the host draws the grid (#10, #13).
+mutual TLS connection fails, it does not answer `Describe` within the
+call deadline, its `Describe` gives a different name or protocol
+version, or it picks a view schema version the host did not offer; a
+rejected `Configure` is recorded the same way. Of these, a failed
+handshake (other than one on a protocol version the host does not
+speak) or connection and a `Describe` that does not answer, or
+answers with an error other than `UNIMPLEMENTED`, are retried as
+above; the rest are the permanent failures. The reason is logged now
+and will be shown in the panel's place once the host draws the grid
+(#10, #13).
 Names are 1 to 64 lowercase letters, digits, and hyphens, starting with a
 letter or digit, so they can never name a path outside the plugins
 directory. Names Windows reserves for devices (`con`, `prn`, `aux`,

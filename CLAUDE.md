@@ -77,9 +77,10 @@ dialogs). Edit mode must be able to re-enable any disabled panel.
 - `internal/config`: loading, validating, saving, and watching the user
   config.
 - `internal/pluginhost`: finding, launching, describing, configuring,
-  and shutting down plugins, one process per enabled panel. Its tests
-  run the test binary itself as a plugin whose behaviour follows its
-  file name (`plugin_test.go`).
+  supervising, and shutting down plugins, one process per enabled
+  panel: restarts with backoff, panel states, and each panel's logs.
+  Its tests run the test binary itself as a plugin whose behaviour
+  follows its file name (`plugin_test.go`).
 - `proto/`: the plugin protocol. The `.proto` files and the Go code
   generated from them live in `proto/tessera/v1` (Go package
   `tesserav1`); `buf.yaml` and `buf.gen.yaml` sit in `proto/`. The
@@ -149,8 +150,10 @@ as GitHub issues. CI (#5), the release workflow (#6), the config file
 (#7), and plugin protocol v1 (#8) are in place. The host loads the config
 at startup but does not yet apply reloads; that comes with the grid (#10).
 The host launches, describes, and configures each enabled panel's plugin
-and shuts them all down on exit (#12), but draws nothing yet; viewing
-and events are #14, restarts #13, and the SDK #18.
+and shuts them all down on exit (#12), and supervises them: crashes and
+hangs restart with backoff, and each panel keeps its state and logs
+(part of #13; the stale state and heartbeats come with #14). It draws
+nothing yet; viewing and events are #14, and the SDK #18.
 
 ## Git workflow
 

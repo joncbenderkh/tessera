@@ -37,6 +37,8 @@ type procRunner struct {
 	proc     *os.Process
 	pid      int // proc.Pid, kept since Release clears it
 	canceled bool
+	killed   bool          // kill signalled it before watch saw it exit
+	killedAs string        // the status that kill gives it
 	exited   bool          // reaped: its PID, and so its group ID, may be reused
 	reaping  bool          // Wait is reaping it without watch
 	exitSeen bool          // watch saw it exit, unreaped
@@ -46,6 +48,10 @@ type procRunner struct {
 
 	reapOnce sync.Once
 	waitErr  error
+	reapedOK bool // waitErr describes the plugin's exit; under mu
+
+	exitCh   chan struct{} // closed once the plugin has exited
+	exitOnce sync.Once
 }
 
 // After the plugin exits, a child that left its process group can hold
@@ -64,6 +70,7 @@ var _ runner.Runner = (*procRunner)(nil)
 // the environment go-plugin prepared (cookie, certificate, socket dir).
 func (r *procRunner) runnerFunc(_ hclog.Logger, spec *exec.Cmd, tmpDir string) (runner.Runner, error) {
 	r.tmpDir = tmpDir
+	r.exitCh = make(chan struct{})
 	r.cmd = exec.Command(r.path)
 	r.cmd.Env = spec.Env
 	// No stdin: go-plugin would pass the host's, and a plugin in its own
@@ -107,14 +114,16 @@ func (r *procRunner) Start(context.Context) error {
 	r.closeChildEnds() // the plugin has its own copies, if it started
 	if err != nil {
 		r.closePipes()
-		return err
+		return execError{err}
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.proc = r.cmd.Process
 	r.pid = r.proc.Pid
 	if r.canceled {
-		killGroup(r.proc)
+		if as := killGroup(r.proc); as != "" {
+			r.killed, r.killedAs = true, as
+		}
 	}
 	if canAwaitExit {
 		r.watched = make(chan struct{})
@@ -135,6 +144,7 @@ func (r *procRunner) watch() {
 		killGroup(r.proc)
 		r.exitSeen = true
 		r.mu.Unlock()
+		r.markExit()
 	}
 	close(r.watched)
 	if !seen {
@@ -154,8 +164,10 @@ func (r *procRunner) watch() {
 		// Cmd.Wait, which no longer runs, would release the handle.
 		r.mu.Lock()
 		r.proc.Release()
+		r.reapedOK = true
 		r.mu.Unlock()
 		close(r.reaped)
+		r.markExit()
 	})
 	select {
 	case <-r.drained:
@@ -184,9 +196,29 @@ func (r *procRunner) reap() error {
 	r.reapOnce.Do(func() {
 		r.waitErr = r.cmd.Wait()
 		r.closePipes() // go-plugin has read them to the end (see Wait)
+		r.mu.Lock()
+		r.reapedOK = true
+		r.mu.Unlock()
 		close(r.reaped)
+		r.markExit()
 	})
 	return r.waitErr
+}
+
+// markExit closes exitCh, once.
+func (r *procRunner) markExit() { r.exitOnce.Do(func() { close(r.exitCh) }) }
+
+// status describes the plugin's exit once it is reaped, or is "".
+func (r *procRunner) status() string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	switch {
+	case !r.reapedOK:
+		return ""
+	case r.waitErr == nil:
+		return "exit status 0"
+	}
+	return r.waitErr.Error()
 }
 
 // sawExit reports whether watch has seen the plugin exit.
@@ -207,16 +239,36 @@ func (r *procRunner) kill() {
 	switch {
 	case r.proc == nil || r.exited:
 	case r.reaping:
-		_ = r.proc.Kill()
+		if r.proc.Kill() == nil {
+			r.killed, r.killedAs = true, procKillStatus
+		}
 	default:
-		killGroup(r.proc)
+		if as := killGroup(r.proc); as != "" && !r.exitSeen {
+			r.killed, r.killedAs = true, as
+		}
 	}
 }
 
+// started reports whether the plugin's process started.
+func (r *procRunner) started() bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.proc != nil
+}
+
+// ownExit reports whether status, from status(), is an exit the plugin
+// made itself rather than the host's kill.
+func (r *procRunner) ownExit(status string) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return !r.killed || status != "" && status != r.killedAs
+}
+
 // Wait reaps the plugin. When watch saw it exit (Linux, macOS, the
-// BSDs), its group has been killed, so it is marked exited before the
-// reap and kill never reaches a released group ID. Otherwise (Windows;
-// other Unix systems, where children it left in its group are killed
+// BSDs, and Windows), its group has been killed (on Windows, which has
+// no groups, the plugin alone), so it is marked exited before the reap
+// and kill never reaches a released group ID. Otherwise
+// (other Unix systems, where children it left in its group are killed
 // only by a forced Close; or watch could not watch) Wait cannot know the
 // plugin has exited before reaping it, so from the start of the reap
 // kill signals only the plugin.

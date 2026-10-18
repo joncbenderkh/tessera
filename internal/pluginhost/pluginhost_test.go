@@ -55,7 +55,7 @@ func settle(t *testing.T, m *Manager) []PanelState {
 		states := m.States()
 		done := true
 		for _, s := range states {
-			done = done && s.State != Starting
+			done = done && s.State != Starting && s.State != Stopping
 		}
 		if done {
 			return states
@@ -63,7 +63,7 @@ func settle(t *testing.T, m *Manager) []PanelState {
 		select {
 		case <-m.Changed():
 		case <-deadline:
-			t.Fatalf("panels still starting: %+v", states)
+			t.Fatalf("panels still starting or stopping: %+v", states)
 		}
 	}
 }
@@ -85,8 +85,8 @@ func TestStartBringsPanelsUp(t *testing.T) {
 		t.Fatalf("want the 2 enabled panels, got %+v", states)
 	}
 	for _, s := range states {
-		if s.State != Ready || s.Info.GetName() != "clock" {
-			t.Errorf("panel %s: got %v %v, want ready clock", s.ID, s.State, s.Err)
+		if s.State != Live || s.Info.GetName() != "clock" {
+			t.Errorf("panel %s: got %v %v, want live clock", s.ID, s.State, s.Err)
 		}
 	}
 	// The plugins report Configure over GRPCStdio, which delivers it
@@ -130,8 +130,8 @@ func TestStartReportsFailures(t *testing.T) {
 		`plugin "rejects" rejected the settings: timezone: unknown`,
 		`plugin "missing" is not installed in ` + dir,
 	} {
-		if s := states[i]; s.State != Failed || s.Err == nil || s.Err.Error() != want {
-			t.Errorf("panel %s: got %v %v, want failed: %s", s.ID, s.State, s.Err, want)
+		if s := states[i]; s.State != Crashed || s.Failures != 1 || s.Err == nil || s.Err.Error() != want {
+			t.Errorf("panel %s: got %v after %d attempts: %v, want crashed after 1: %s", s.ID, s.State, s.Failures, s.Err, want)
 		}
 		if !strings.Contains(logs.String(), want) {
 			t.Errorf("log lacks %q", want)
@@ -140,7 +140,7 @@ func TestStartReportsFailures(t *testing.T) {
 }
 
 func TestLaunchRejects(t *testing.T) {
-	dir := install(t, "misnamed", "proto-two", "plaintext", "view-nine", "slow-describe")
+	dir := install(t, "misnamed", "unimplemented", "proto-two", "core-two", "plaintext", "view-nine", "slow-describe")
 	if err := os.WriteFile(filepath.Join(dir, "noexec"+exeSuffix()), nil, 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -148,9 +148,11 @@ func TestLaunchRejects(t *testing.T) {
 	for _, tt := range []struct{ name, want string }{
 		{"misnamed", `plugin "misnamed" calls itself "other"`},
 		{"proto-two", `plugin "proto-two" does not speak protocol 1: incompatible API version`},
+		{"unimplemented", `plugin "unimplemented" does not implement Describe`},
+		{"core-two", `plugin "core-two" does not speak go-plugin's core protocol 1: incompatible core API version`},
 		{"plaintext", `plugin "plaintext": Describe: rpc error: code = Unavailable`},
 		{"view-nine", `plugin "view-nine" chose view schema 9; this host renders [1]`},
-		{"slow-describe", `plugin "slow-describe": Describe: rpc error: code = DeadlineExceeded`},
+		{"slow-describe", `plugin "slow-describe" hung: Describe did not answer within 5s`},
 		{"noexec", `plugin "noexec": ` + filepath.Join(dir, "noexec") + ` is not executable`},
 		{"Bad", `plugin "Bad" must be lowercase`},
 	} {
@@ -263,7 +265,7 @@ func gone(pid int) bool {
 }
 
 func TestExitKillsChildren(t *testing.T) {
-	if !canAwaitExit {
+	if !canFreeze || !canAwaitExit {
 		t.Skip("children of an exited plugin are killed only by a forced Close on this OS")
 	}
 	dir := install(t, "exits")
@@ -282,6 +284,37 @@ func TestExitKillsChildren(t *testing.T) {
 	}
 	if pid := child.get(); pid == 0 || !gone(pid) {
 		t.Errorf("child %d of an exited plugin still running before Close", pid)
+	}
+}
+
+// TestExitSeenWhileChildHoldsStderr runs wherever an exit watcher
+// does, Windows included: there a child is never killed with its
+// plugin, so a plain child holds the plugin's stderr after it exits.
+func TestExitSeenWhileChildHoldsStderr(t *testing.T) {
+	if !canAwaitExit {
+		t.Skip("no exit watcher on this OS")
+	}
+	dir := install(t, "exits")
+	logger, _ := newLogger()
+	var child childPID
+	inst, err := Launch(context.Background(), dir, "exits", child.output, logger)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer inst.Close()
+	defer func() {
+		if p, err := os.FindProcess(child.get()); err == nil && child.get() != 0 {
+			p.Kill()
+		}
+	}()
+	select {
+	case <-inst.Done():
+	case <-time.After(10 * time.Second):
+		t.Fatal("exit not seen while a child holds the plugin's stderr")
+	}
+	time.Sleep(pipeGrace + drainTimeout + 500*time.Millisecond) // watch reaps and drains
+	if s := inst.ExitStatus(); s != "exit status 0" {
+		t.Errorf("got exit status %q, want exit status 0", s)
 	}
 }
 
@@ -512,11 +545,24 @@ func TestFailedStartCleansUp(t *testing.T) {
 	}
 	logger, _ := newLogger()
 	_, err := Launch(context.Background(), dir, "junk", ignore, logger)
-	if err == nil || !strings.Contains(err.Error(), "plugin \"junk\" failed to start: ") || strings.Contains(err.Error(), "protocol") {
-		t.Fatalf("got %v, want a start error without a protocol hint", err)
+	if err == nil || Retryable(err) || !strings.Contains(err.Error(), "plugin \"junk\" cannot be run: ") || strings.Contains(err.Error(), "protocol") {
+		t.Fatalf("got %v, want a permanent start error without a protocol hint", err)
 	}
 	if entries, _ := os.ReadDir(tmp); len(entries) != 0 {
 		t.Errorf("left in TMPDIR: %v", entries)
+	}
+}
+
+func TestMissingTempDirIsRetried(t *testing.T) {
+	dir := install(t, "clock")
+	missing := filepath.Join(t.TempDir(), "gone")
+	t.Setenv("TMPDIR", missing)
+	t.Setenv("TMP", missing) // Windows
+	t.Setenv("TEMP", missing)
+	logger, _ := newLogger()
+	_, err := Launch(context.Background(), dir, "clock", ignore, logger)
+	if err == nil || !Retryable(err) || strings.Contains(err.Error(), "cannot be run") {
+		t.Fatalf("got %v, want a retryable error that does not blame the plugin", err)
 	}
 }
 
@@ -589,44 +635,67 @@ func TestLineLimiter(t *testing.T) {
 
 func TestLineWriter(t *testing.T) {
 	var got []string
-	w := &lineWriter{output: func(line string) { got = append(got, line) }}
+	writer := func() *lineWriter {
+		got = nil
+		return &lineWriter{output: func(line string) { got = append(got, line) }}
+	}
+
+	w := writer()
 	w.Write([]byte("one\ntw"))
 	w.Write([]byte("o\nthree"))
-	w.Flush()
-	w.Flush()
+	w.finish()
+	w.finish()
 	if want := []string{"one", "two", "three"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("got %q, want %q", got, want)
 	}
 
-	got = nil
+	w = writer()
 	w.Write([]byte("crlf\r\nbare\r"))
-	w.Flush()
+	w.finish()
 	if want := []string{"crlf", "bare\r"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("got %q, want %q", got, want)
 	}
 
-	got = nil
-	w.mu.Lock() // as Write holds it while a stalled callback runs
-	flushed := make(chan struct{})
-	go func() { w.Flush(); close(flushed) }()
-	select {
-	case <-flushed:
-	case <-time.After(time.Second):
-		t.Fatal("Flush waited for a busy Write")
-	}
-	w.mu.Unlock()
-
-	got = nil
+	w = writer()
 	w.Write(append(bytes.Repeat([]byte("x"), maxLine-1), "é\n"...))
 	if len(got) != 2 || len(got[0]) != maxLine-1 || got[1] != "é" {
 		t.Fatalf("a character across the cap: got pieces %d long", len(got))
 	}
 
-	got = nil
+	w = writer()
 	w.Write(bytes.Repeat([]byte("x"), 2*maxLine+1))
-	w.Flush()
+	w.finish()
 	if len(got) != 3 || len(got[0]) != maxLine || len(got[1]) != maxLine || got[2] != "x" {
 		t.Fatalf("a line of 2*maxLine+1 bytes: got pieces of %d bytes", len(got))
+	}
+
+	w = writer()
+	w.Write([]byte("last"))
+	w.finish()
+	w.Write([]byte("late\n"))
+	w.finish()
+	if want := []string{"last"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("after finish: got %q, want %q", got, want)
+	}
+
+	// A Write whose callback stalls stops passing lines on once dropped.
+	got = nil
+	proceed := make(chan struct{})
+	var mu sync.Mutex
+	slow := &lineWriter{output: func(line string) {
+		<-proceed
+		mu.Lock()
+		got = append(got, line)
+		mu.Unlock()
+	}}
+	wrote := make(chan struct{})
+	go func() { slow.Write([]byte("a\nb\nc\n")); close(wrote) }()
+	time.Sleep(10 * time.Millisecond) // stalled on "a"
+	slow.drop()
+	close(proceed)
+	<-wrote
+	if want := []string{"a"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("after drop: got %q, want %q", got, want)
 	}
 }
 

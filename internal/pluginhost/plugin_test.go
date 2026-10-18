@@ -20,6 +20,7 @@ import (
 	"github.com/hashicorp/go-plugin"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/health/grpc_health_v1"
 	"google.golang.org/grpc/status"
 
 	tesserav1 "github.com/joncbenderkh/tessera/proto/tessera/v1"
@@ -50,6 +51,13 @@ var rawStdout, rawStderr *os.File
 
 func servePlugin(mode string) {
 	rawStdout, rawStderr = os.Stdout, os.Stderr
+	if mode == "dies-at-start" || mode == "fails-at-start" {
+		fmt.Fprintln(os.Stderr, "boom")
+		if mode == "fails-at-start" {
+			os.Exit(1) // as log.Fatal does
+		}
+		os.Exit(7)
+	}
 	if mode == "escapes-early" {
 		child := exec.Command(os.Args[0])
 		child.Env = []string{sleeperKey + "=1"}
@@ -59,7 +67,16 @@ func servePlugin(mode string) {
 			fmt.Fprintf(rawStderr, "child %d\n", child.Process.Pid)
 		}
 	}
-	if mode == "slow-start" || mode == "escapes-early" {
+	if mode == "junk-stdout" {
+		fmt.Fprintln(rawStdout, "hello") // not a handshake line
+	}
+	if mode == "junk-mismatch" {
+		fmt.Fprintln(rawStdout, "incompatible API version, says a log line")
+	}
+	if mode == "core-two" {
+		fmt.Fprintln(rawStdout, "2|1|unix|/nonexistent|grpc|")
+	}
+	if mode == "slow-start" || mode == "escapes-early" || mode == "junk-stdout" || mode == "junk-mismatch" || mode == "core-two" {
 		time.Sleep(time.Minute) // never reaches the handshake in a test
 	}
 	hs := handshake
@@ -69,12 +86,29 @@ func servePlugin(mode string) {
 	case "plaintext":
 		os.Unsetenv("PLUGIN_CLIENT_CERT") // go-plugin then serves without TLS
 	}
+	newServer := plugin.DefaultGRPCServer
+	if mode == "not-serving" {
+		newServer = func(opts []grpc.ServerOption) *grpc.Server {
+			return grpc.NewServer(append(opts, grpc.ChainUnaryInterceptor(notServing))...)
+		}
+	}
 	plugin.Serve(&plugin.ServeConfig{
 		HandshakeConfig: hs,
 		Plugins:         plugin.PluginSet{"panel": testPlugin{mode: mode}},
-		GRPCServer:      plugin.DefaultGRPCServer,
+		GRPCServer:      newServer,
 		Logger:          hclog.New(&hclog.LoggerOptions{Output: io.Discard}),
 	})
+	if mode == "fails-shutdown" || mode == "misnamed-fails-shutdown" {
+		os.Exit(2)
+	}
+}
+
+// notServing answers every health check NOT_SERVING.
+func notServing(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
+	if info.FullMethod == grpc_health_v1.Health_Check_FullMethodName {
+		return &grpc_health_v1.HealthCheckResponse{Status: grpc_health_v1.HealthCheckResponse_NOT_SERVING}, nil
+	}
+	return handler(ctx, req)
 }
 
 type testPlugin struct {
@@ -98,14 +132,40 @@ func (testPlugin) GRPCClient(context.Context, *plugin.GRPCBroker, *grpc.ClientCo
 //   - slow-start: no handshake for a minute.
 //   - escapes-early: as slow-start, after starting a child that leaves
 //     its process group and holds its stdout.
+//   - junk-stdout: writes a line that is not a handshake to stdout,
+//     then as slow-start.
+//   - junk-mismatch: as junk-stdout, with a line that names a
+//     protocol mismatch.
+//   - not-serving: answers every health check NOT_SERVING.
 //   - proto-two: the handshake offers protocol 2.
+//   - core-two: the handshake offers go-plugin's core protocol 2.
 //   - plaintext: serves without mutual TLS.
 //   - view-nine: Describe picks view schema 9.
 //   - slow-describe: Describe never answers.
 //   - rejects: Configure answers INVALID_ARGUMENT.
+//   - unimplemented: Describe answers UNIMPLEMENTED.
+//   - no-configure: Configure answers UNIMPLEMENTED.
 //   - frozen: the process stops itself after Describe, so it never
 //     answers Shutdown.
 //   - mute-frozen: as frozen, after closing its stdout and stderr.
+//   - crashes: exits with status 3 shortly after each Configure.
+//   - flaky: as crashes on its first two launches, then well-behaved.
+//   - hangs-configure: Configure never answers.
+//   - freezes-configuring: the process stops itself inside Configure,
+//     so neither Configure nor Shutdown is answered.
+//   - dies-configuring: exits with status 4 inside Configure.
+//   - dies-at-start: prints "boom" and exits with status 7 before the
+//     handshake.
+//   - fails-at-start: as dies-at-start, with status 1.
+//   - upstream-timeout: Configure answers DeadlineExceeded at once, as
+//     a plugin whose own upstream call timed out would.
+//   - crash-then-hang: as crashes on its first launch; then Configure
+//     never answers.
+//   - freezes-live: stops itself shortly after Configure.
+//   - gated: from its second launch on, Configure answers only once a
+//     file named after the plugin plus ".open" exists next to it.
+//   - fails-shutdown: exits with status 2 when shut down.
+//   - misnamed-fails-shutdown: as misnamed and fails-shutdown.
 //   - forks: Describe starts a long-lived child that shares the
 //     plugin's stderr, and reports its PID there.
 //   - exits: as forks, then the plugin exits on its own.
@@ -131,7 +191,9 @@ func (s *server) Describe(ctx context.Context, _ *tesserav1.DescribeRequest) (*t
 		ViewVersion:     tesserav1.ViewVersion,
 	}
 	switch s.mode {
-	case "misnamed":
+	case "unimplemented":
+		return s.UnimplementedPanelServiceServer.Describe(ctx, nil)
+	case "misnamed", "misnamed-fails-shutdown":
 		resp.Name = "other"
 	case "view-nine":
 		resp.ViewVersion = 9
@@ -179,13 +241,77 @@ func (s *server) Describe(ctx context.Context, _ *tesserav1.DescribeRequest) (*t
 	return resp, nil
 }
 
-func (s *server) Configure(_ context.Context, req *tesserav1.ConfigureRequest) (*tesserav1.ConfigureResponse, error) {
-	if s.mode == "rejects" {
+func (s *server) Configure(ctx context.Context, req *tesserav1.ConfigureRequest) (*tesserav1.ConfigureResponse, error) {
+	switch s.mode {
+	case "rejects":
 		return nil, status.Error(codes.InvalidArgument, "timezone: unknown")
+	case "no-configure":
+		return s.UnimplementedPanelServiceServer.Configure(ctx, req)
+	case "hangs-configure":
+		<-ctx.Done()
+		return nil, ctx.Err()
+	case "freezes-configuring":
+		freeze() // the stop can land after kill returns
+		<-ctx.Done()
+		return nil, ctx.Err()
+	case "crashes":
+		crashSoon()
+	case "flaky":
+		if launches() <= 2 {
+			crashSoon()
+		}
+	case "dies-configuring":
+		os.Exit(4)
+	case "upstream-timeout":
+		return nil, status.Error(codes.DeadlineExceeded, "weather service did not answer")
+	case "crash-then-hang":
+		if launches() == 1 {
+			crashSoon()
+		} else {
+			<-ctx.Done()
+			return nil, ctx.Err()
+		}
+	case "gated":
+		if launches() == 1 {
+			break
+		}
+		for {
+			if _, err := os.Stat(os.Args[0] + ".open"); err == nil {
+				break
+			}
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-time.After(10 * time.Millisecond):
+			}
+		}
+	case "freezes-live":
+		go func() {
+			time.Sleep(200 * time.Millisecond)
+			freeze()
+		}()
 	}
 	fmt.Fprintf(os.Stderr, "configured %s %v %dx%d\n", req.GetPanelId(), req.GetSettings().AsMap(),
 		req.GetSize().GetColumns(), req.GetSize().GetRows())
 	return &tesserav1.ConfigureResponse{}, nil
+}
+
+// crashSoon exits with status 3 once Configure has answered.
+func crashSoon() {
+	go func() {
+		time.Sleep(100 * time.Millisecond)
+		os.Exit(3)
+	}()
+}
+
+// launches counts this plugin's launches in a file next to it and
+// returns the count, this one included.
+func launches() int {
+	path := os.Args[0] + ".launches"
+	b, _ := os.ReadFile(path)
+	n := len(b) + 1
+	os.WriteFile(path, bytes.Repeat([]byte("x"), n), 0o644)
+	return n
 }
 
 // sleeperKey makes the test binary sleep instead of running tests.
