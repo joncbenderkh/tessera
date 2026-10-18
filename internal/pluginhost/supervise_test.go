@@ -687,3 +687,14 @@ func TestExitDuringShutdownIsLogged(t *testing.T) {
 		return countLines(m.Logs("p0"), "plugin exited during shutdown: exit status 2") == 1
 	})
 }
+
+func TestExitDuringCloseIsLogged(t *testing.T) {
+	dir := install(t, "fails-shutdown")
+	logger, logs := newLogger()
+	m := StartWith(panels("fails-shutdown"), dir, logger, fast)
+	waitFor(t, m, "p0", "live", is(Live))
+	m.Close()
+	if !strings.Contains(logs.String(), "plugin exited during shutdown: exit status 2") {
+		t.Errorf("no exit in the host log:\n%s", logs.String())
+	}
+}
