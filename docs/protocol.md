@@ -137,18 +137,24 @@ host                                    plugin
 - **Watch** is the normal path: the plugin pushes a complete view each
   time its content changes, starting with the current one. The first
   response always carries a view: a plugin still fetching data sends
-  widgets marked `loading`. When nothing
-  changes for `heartbeat_interval`, it sends a `WatchResponse` without a
-  view, so a silent stream means a hung plugin. The host reads one
-  stream per plugin and cancels it before opening another, but the
-  cancelled handler may still be returning when the next starts, so keep
-  per-stream state inside the handler.
+  widgets marked `loading`. When nothing changes for
+  `heartbeat_interval` (the host asks for 5 seconds), it sends a
+  `WatchResponse` without a view, so a silent stream means a hung
+  plugin. The host reads one stream per plugin and cancels it before
+  opening another, but the cancelled handler may still be returning when
+  the next starts, so keep per-stream state inside the handler.
 - **Render** is the fallback for plugins that cannot push. If Watch
   returns `UNIMPLEMENTED` before its first response, the host polls
-  Render, waiting `RenderResponse.poll_interval` (or its default)
-  between calls.
+  Render, waiting `RenderResponse.poll_interval` between calls (5
+  seconds if unset, and kept between 250 milliseconds and an hour). A
+  Render the plugin answers with an error leaves its last view in
+  place: the panel is shown as stale, with the view's age and the
+  error, and polling goes on until a Render succeeds. A plugin must
+  implement one of the two; one that answers both with `UNIMPLEMENTED`
+  is not restarted.
 - **HandleEvent** delivers clicks and scrolls. A polled plugin is rendered
-  again right after the event.
+  again right after the event. An event the plugin answers with an
+  error is logged, and the plugin keeps running.
 
 Configure and HandleEvent run concurrently with the open Watch, so a
 plugin guards the state they share. The host makes these unary calls one
@@ -159,13 +165,19 @@ next one. A Watch stream that ends without the host cancelling it, other
 than with `UNIMPLEMENTED` before its first response or a view over a
 limit, is a protocol failure.
 
-Every view is complete: it replaces the previous one rather than patching
-it. Views are small, and this keeps plugins stateless about what the host
-has drawn. A response is at most 4 MiB encoded, gRPC's default receive
-limit, and widgets nest at most 16 deep (`View.body` is depth 1, and
-each `StackItem.widget` adds 1). A view over either limit fails
-its stream or Render call; the host shows an error tile naming the limit,
-does not restart the plugin, and tries again after the next Configure.
+Every view is complete: it replaces the previous one rather than
+patching it. Views are small, and this keeps plugins stateless about
+what the host has drawn. A response is at most 4 MiB encoded, gRPC's
+default receive limit, and widgets nest at most 16 deep (`View.body` is
+depth 1, and each `StackItem.widget` adds 1). A view over either limit
+fails its stream or Render call; the host shows an error tile naming the
+limit, does not restart the plugin, and reads no more views from it
+until it is restarted. Until then only the health check and the deadline
+on each event show that it still answers, so a hang inside its own code
+goes unseen. A response over 16 MiB is not read at all, and counts as an
+error the plugin returned. The host keeps only each panel's latest view
+and redraws at most 30 times a second, so sending views faster gains a
+plugin nothing.
 
 The host puts a deadline on every unary call (5 seconds), treats a
 Watch stream that stays silent for twice the heartbeat interval as hung,
@@ -184,7 +196,8 @@ and restarts a plugin that crashes, hangs, or breaks the protocol:
   Windows, children the plugin started are not shut down with it.
 - The health check catches a plugin frozen as a whole. go-plugin
   answers it outside the plugin's own code, so a plugin hung inside
-  that code still passes; the Watch heartbeat (#14) catches those.
+  that code still passes; the Watch heartbeat catches those, as does
+  the deadline on a Render or an event.
 - At the fifth failure in a row the host gives up and shows the panel
   as crashed, with the last error and, for a plugin that exited by
   itself, its exit status, until the user restarts it.
@@ -196,8 +209,8 @@ and restarts a plugin that crashes, hangs, or breaks the protocol:
   cannot run (not a program for it, a script whose interpreter is
   missing, or a file on a `noexec` mount), a version the host does
   not speak, a `Describe` or `Configure` answered `UNIMPLEMENTED`
-  (not a tessera plugin), and settings the plugin rejects with
-  `INVALID_ARGUMENT`.
+  (not a tessera plugin), `UNIMPLEMENTED` from both Watch and Render,
+  and settings the plugin rejects with `INVALID_ARGUMENT`.
 
 For the panel's Logs view, the host keeps each panel's last 500
 lines, plugin output and lifecycle events (started, exited with

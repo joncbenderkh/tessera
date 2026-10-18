@@ -13,6 +13,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -117,7 +118,7 @@ type testPlugin struct {
 }
 
 func (p testPlugin) GRPCServer(_ *plugin.GRPCBroker, s *grpc.Server) error {
-	tesserav1.RegisterPanelServiceServer(s, &server{mode: p.mode})
+	tesserav1.RegisterPanelServiceServer(s, &server{mode: p.mode, events: make(chan string, 64)})
 	return nil
 }
 
@@ -176,11 +177,59 @@ func (testPlugin) GRPCClient(context.Context, *plugin.GRPCBroker, *grpc.ClientCo
 //   - floods-stdout: after Describe, writes 1 MiB to stdout with no
 //     newline, then reports "flooded" on stderr.
 //
+// For views (see views_plugin_test.go):
+//
+//   - polled: Watch answers UNIMPLEMENTED; Render answers "render N"
+//     and asks to be polled every 100ms.
+//   - polled-failing: as polled, but Render fails after its first
+//     answer until the gate file (see gated) exists.
+//   - polled-quota: as polled, but its second Render fails with
+//     RESOURCE_EXHAUSTED and gRPC's text for a message over its limit,
+//     as a plugin passing on its own client's error would.
+//   - polled-unavailable: as polled, but its second Render fails with
+//     UNAVAILABLE.
+//   - polled-empty: as polled, but its second Render fails, and the
+//     rest answer with no view.
+//   - polled-deep, polled-big: as polled, but Render answers a view
+//     as deep-view and big-view send.
+//   - polled-event-deep: as polled, but the Render after an event
+//     answers a view as deep-view sends.
+//   - polled-events: as polled, naming no poll interval; Render
+//     answers the calls so far: "render" for each Render and the
+//     action id for each event.
+//   - no-views: Watch and Render both answer UNIMPLEMENTED.
+//   - hangs-render: as polled, but Render never answers.
+//   - silent-watch: sends one view, then nothing.
+//   - ends-watch: sends one view, then ends its stream.
+//   - late-unimplemented: sends one view, then ends its stream with
+//     UNIMPLEMENTED.
+//   - quota-watch: sends one view, then ends its stream with
+//     RESOURCE_EXHAUSTED.
+//   - deep-view: sends a view nested 17 deep.
+//   - deep-then-good: sends a view as deep-view does, and one within
+//     the limits right after.
+//   - too-deep-to-decode: sends a view nested 4000 deep, which
+//     protobuf refuses to decode.
+//   - big-view: sends a view over 4 MiB.
+//   - huge-view: sends a view over 16 MiB, which gRPC refuses unread,
+//     like an error the plugin sent.
+//   - spams-views: sends views "view N" as fast as it can.
+//   - events: Watch answers each event with a view "got <action id>".
+//   - hangs-event: HandleEvent never answers.
+//   - unavailable-event: HandleEvent fails with UNAVAILABLE.
+//
 // Any other name is a well-behaved plugin of that name, which reports
-// each Configure on stderr.
+// each Configure on stderr, and whose Watch sends a view naming it,
+// then heartbeats at the interval asked for.
 type server struct {
 	tesserav1.UnimplementedPanelServiceServer
-	mode string
+	mode   string
+	events chan string // events mode: action ids for the Watch stream
+
+	mu      sync.Mutex
+	renders int      // Renders answered
+	seen    []string // polled-events: the calls so far
+	deep    bool     // polled-event-deep: an event came since the last Render
 }
 
 func (s *server) Describe(ctx context.Context, _ *tesserav1.DescribeRequest) (*tesserav1.DescribeResponse, error) {
