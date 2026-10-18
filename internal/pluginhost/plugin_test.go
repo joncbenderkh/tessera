@@ -162,6 +162,8 @@ func (testPlugin) GRPCClient(context.Context, *plugin.GRPCBroker, *grpc.ClientCo
 //   - crash-then-hang: as crashes on its first launch; then Configure
 //     never answers.
 //   - freezes-live: stops itself shortly after Configure.
+//   - gated: from its second launch on, Configure answers only once a
+//     file named after the plugin plus ".open" exists next to it.
 //   - fails-shutdown: exits with status 2 when shut down.
 //   - misnamed-fails-shutdown: as misnamed and fails-shutdown.
 //   - forks: Describe starts a long-lived child that shares the
@@ -268,6 +270,20 @@ func (s *server) Configure(ctx context.Context, req *tesserav1.ConfigureRequest)
 		} else {
 			<-ctx.Done()
 			return nil, ctx.Err()
+		}
+	case "gated":
+		if launches() == 1 {
+			break
+		}
+		for {
+			if _, err := os.Stat(os.Args[0] + ".open"); err == nil {
+				break
+			}
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-time.After(10 * time.Millisecond):
+			}
 		}
 	case "freezes-live":
 		go func() {

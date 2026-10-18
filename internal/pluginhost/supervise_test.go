@@ -248,9 +248,11 @@ func TestHangReportedWhicheverSideTimesOut(t *testing.T) {
 }
 
 func TestDoubleRestartRelaunchesOnce(t *testing.T) {
-	dir := install(t, "clock")
+	dir := install(t, "gated") // holds the relaunch Starting until the gate opens
 	logger, _ := newLogger()
-	m := StartWith(panels("clock"), dir, logger, fast)
+	opts := fast
+	opts.CallTimeout = 10 * time.Second // the gate, not a hang
+	m := StartWith(panels("gated"), dir, logger, opts)
 	defer m.Close()
 	waitFor(t, m, "p0", "live", is(Live))
 	m.Restart("p0")
@@ -258,11 +260,14 @@ func TestDoubleRestartRelaunchesOnce(t *testing.T) {
 	if err := m.Restart("p0"); !errors.Is(err, ErrStarting) { // while starting: the same relaunch
 		t.Errorf("Restart while starting: got %v, want ErrStarting", err)
 	}
+	if err := os.WriteFile(filepath.Join(dir, "gated"+exeSuffix()+".open"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
 	waitFor(t, m, "p0", "live again", func(s PanelState) bool {
 		return s.State == Live && countLines(m.Logs("p0"), "starting plugin") >= 2
 	})
 	// A Restart left queued would be taken at once by the live plugin's
-	// watch and shut it down, which a clock plugin finishes well within
+	// watch and shut it down, which this plugin finishes well within
 	// this.
 	time.Sleep(3 * time.Second)
 	logs := m.Logs("p0")
