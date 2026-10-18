@@ -349,7 +349,7 @@ func TestFailedHandshakeHasNoExitStatus(t *testing.T) {
 	t.Parallel()
 	dir := install(t, "junk-stdout")
 	logger, _ := newLogger()
-	_, exit, err := launch(context.Background(), dir, "junk-stdout", ignore, logger, callTimeout, nil)
+	_, exit, err := launch(context.Background(), dir, "junk-stdout", ignore, logger, callTimeout, nil, nil)
 	if err == nil || !strings.Contains(err.Error(), "Unrecognized remote plugin message") {
 		t.Fatalf("got %v, want a handshake error", err)
 	}
@@ -362,7 +362,7 @@ func TestNoHandshakeIsAHang(t *testing.T) {
 	t.Parallel() // waits startTimeout
 	dir := install(t, "slow-start")
 	logger, _ := newLogger()
-	_, exit, err := launch(context.Background(), dir, "slow-start", ignore, logger, callTimeout, nil)
+	_, exit, err := launch(context.Background(), dir, "slow-start", ignore, logger, callTimeout, nil, nil)
 	var hung hangError
 	if !errors.As(err, &hung) || !strings.Contains(err.Error(), "hung: no handshake within") {
 		t.Fatalf("got %v, want a hang", err)
@@ -585,6 +585,23 @@ func TestMissingInterpreterIsPermanent(t *testing.T) {
 	}
 }
 
+func TestUnstartedLaunchIsNoStuckPlugin(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("no #! scripts on Windows")
+	}
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "clock"), []byte("#!/nonexistent/interpreter\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	logger, _ := newLogger()
+	m := StartWith(panels("clock"), dir, logger, fast)
+	defer m.Close()
+	waitFor(t, m, "p0", "crashed", is(Crashed))
+	if logs := m.Logs("p0"); countLines(logs, "did not exit") != 0 {
+		t.Errorf("a process that never started said to outlive Close:\n%s", strings.Join(logs, "\n"))
+	}
+}
+
 func TestUnreadableDirIsPermanent(t *testing.T) {
 	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
 		t.Skip("needs Unix permissions that bind")
@@ -701,5 +718,16 @@ func TestExitDuringCloseIsLogged(t *testing.T) {
 	m.Close()
 	if !strings.Contains(logs.String(), "plugin exited during shutdown: exit status 2") {
 		t.Errorf("no exit in the host log:\n%s", logs.String())
+	}
+}
+
+func TestExitDuringFailedLaunchShutdownIsLogged(t *testing.T) {
+	dir := install(t, "misnamed-fails-shutdown")
+	logger, _ := newLogger()
+	m := StartWith(panels("misnamed-fails-shutdown"), dir, logger, fast)
+	defer m.Close()
+	waitFor(t, m, "p0", "crashed", is(Crashed))
+	if countLines(m.Logs("p0"), "plugin exited during shutdown: exit status 2") != 1 {
+		t.Errorf("no exit in the Logs:\n%s", strings.Join(m.Logs("p0"), "\n"))
 	}
 }

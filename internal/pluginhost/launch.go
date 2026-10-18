@@ -83,15 +83,16 @@ type Instance struct {
 // forwards over the GRPCStdio service. Canceling ctx stops the launch,
 // the handshake included. On error, no process is left running.
 func Launch(ctx context.Context, dir, name string, output func(line string), logger *log.Logger) (*Instance, error) {
-	inst, _, err := launch(ctx, dir, name, output, logger, callTimeout, nil)
+	inst, _, err := launch(ctx, dir, name, output, logger, callTimeout, nil, nil)
 	return inst, err
 }
 
 // launch is Launch with timeout as Describe's deadline. On failure it
 // also says how the plugin's process ended, if it started at all, and
 // calls stopping, if not nil, before it waits for or shuts down a
-// process that started.
-func launch(ctx context.Context, dir, name string, output func(line string), logger *log.Logger, timeout time.Duration, stopping func(error)) (*Instance, string, error) {
+// process that started; shutDown, if not nil, shuts it down in place of
+// Instance.Close, told whether the exit returned reports how it ended.
+func launch(ctx context.Context, dir, name string, output func(line string), logger *log.Logger, timeout time.Duration, stopping func(error), shutDown func(inst *Instance, reported bool)) (*Instance, string, error) {
 	path, err := find(dir, name)
 	if err != nil {
 		return nil, "", err
@@ -147,7 +148,11 @@ func launch(ctx context.Context, dir, name string, output func(line string), log
 			case <-time.After(time.Second):
 			}
 		}
-		inst.Close()
+		if shutDown != nil {
+			shutDown(inst, exit != "")
+		} else {
+			inst.Close()
+		}
 		return nil, exit, err
 	}
 	return inst, "", nil

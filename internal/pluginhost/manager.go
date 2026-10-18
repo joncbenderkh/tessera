@@ -211,8 +211,11 @@ func (m *Manager) supervise(pn *panel) {
 		inst, exit, err := m.launch(pn)
 		if m.ctx.Err() != nil {
 			if inst != nil {
-				m.shutDown(pn, inst)
+				m.shutDown(pn, inst, false)
 				pn.fence()
+			}
+			if exit != "" {
+				m.note(pn, "plugin exited: %s", exit)
 			}
 			return
 		}
@@ -237,10 +240,13 @@ func (m *Manager) supervise(pn *panel) {
 			if exited {
 				exit = orUnknown(awaitStatus(m.ctx, inst))
 			}
-			m.shutDown(pn, inst)
+			m.shutDown(pn, inst, exited)
 			pn.fence()
 			switch {
 			case m.ctx.Err() != nil:
+				if exited { // its status, cut short by Close, is in by now
+					m.note(pn, "plugin exited: %s", orUnknown(inst.ExitStatus()))
+				}
 				return
 			case restart:
 				failures = 0
@@ -314,27 +320,33 @@ func (pn *panel) untold(err error) string {
 }
 
 // shutDown closes inst, and says so in pn's Logs if the process
-// outlived Close, so the next launch can run beside it, or if it failed
-// while shutting down; an exit before shutDown is the caller's to log.
-// During Close, which event skips, both go to the host log alone:
-// go-plugin's own exit line is hidden for supervised launches.
-func (m *Manager) shutDown(pn *panel, inst *Instance) {
-	note := func(format string, args ...any) {
-		if m.ctx.Err() != nil {
-			m.logger.Printf("panel %q: %s", pn.ID, fmt.Sprintf(format, args...))
-			return
-		}
-		m.event(pn, format, args...)
-	}
-	before := inst.Exited()
+// outlived Close, so the next launch can run beside it, or if it ended
+// by itself with an error, unless reported: the caller logs that exit.
+// One that exits just before shutDown, as a Restart or Close comes in,
+// is the caller's only if it saw the exit.
+func (m *Manager) shutDown(pn *panel, inst *Instance, reported bool) {
 	inst.Close()
+	if !inst.runner.started() {
+		return // no process: nothing to outlive Close or exit
+	}
 	if !inst.Exited() {
-		note("plugin %s did not exit when shut down", pn.Plugin)
+		m.note(pn, "plugin %s did not exit when shut down", pn.Plugin)
 		return
 	}
-	if s := inst.ExitStatus(); !before && s != "" && s != "exit status 0" && inst.runner.ownExit(s) {
-		note("plugin exited during shutdown: %s", s)
+	if s := inst.ExitStatus(); !reported && s != "" && s != "exit status 0" && inst.runner.ownExit(s) {
+		m.note(pn, "plugin exited during shutdown: %s", s)
 	}
+}
+
+// note is event, but during Close, which event skips, it still logs to
+// the host log: go-plugin's own exit line is hidden for supervised
+// launches, so a plugin's exit has no other record.
+func (m *Manager) note(pn *panel, format string, args ...any) {
+	if m.ctx.Err() != nil {
+		m.logger.Printf("panel %q: %s", pn.ID, fmt.Sprintf(format, args...))
+		return
+	}
+	m.event(pn, format, args...)
 }
 
 // watchLive waits while inst is live: until it exits, fails a health
@@ -409,7 +421,8 @@ func (m *Manager) watchLive(pn *panel, inst *Instance) (exited bool, lived time.
 // deadline counts as a hang: the plugin is shut down before anything
 // else is called on it.
 func (m *Manager) launch(pn *panel) (*Instance, string, error) {
-	inst, exit, err := launch(m.ctx, m.dir, pn.Plugin, m.output(pn), m.logger, m.opts.CallTimeout, func(err error) { m.stopping(pn, err) })
+	inst, exit, err := launch(m.ctx, m.dir, pn.Plugin, m.output(pn), m.logger, m.opts.CallTimeout,
+		func(err error) { m.stopping(pn, err) }, func(inst *Instance, reported bool) { m.shutDown(pn, inst, reported) })
 	if err != nil {
 		pn.fence()
 		return nil, exit, err
@@ -433,7 +446,7 @@ func (m *Manager) launch(pn *panel) (*Instance, string, error) {
 			case <-time.After(time.Second):
 			}
 		}
-		m.shutDown(pn, inst)
+		m.shutDown(pn, inst, exit != "")
 		pn.fence()
 		return nil, exit, err
 	}

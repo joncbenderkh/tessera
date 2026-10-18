@@ -95,7 +95,7 @@ func servePlugin(mode string) {
 		GRPCServer:      newServer,
 		Logger:          hclog.New(&hclog.LoggerOptions{Output: io.Discard}),
 	})
-	if mode == "fails-shutdown" {
+	if mode == "fails-shutdown" || mode == "misnamed-fails-shutdown" {
 		os.Exit(2)
 	}
 }
@@ -156,6 +156,7 @@ func (testPlugin) GRPCClient(context.Context, *plugin.GRPCBroker, *grpc.ClientCo
 //     never answers.
 //   - freezes-live: stops itself shortly after Configure.
 //   - fails-shutdown: exits with status 2 when shut down.
+//   - misnamed-fails-shutdown: as misnamed and fails-shutdown.
 //   - forks: Describe starts a long-lived child that shares the
 //     plugin's stderr, and reports its PID there.
 //   - exits: as forks, then the plugin exits on its own.
@@ -181,7 +182,7 @@ func (s *server) Describe(ctx context.Context, _ *tesserav1.DescribeRequest) (*t
 		ViewVersion:     tesserav1.ViewVersion,
 	}
 	switch s.mode {
-	case "misnamed":
+	case "misnamed", "misnamed-fails-shutdown":
 		resp.Name = "other"
 	case "view-nine":
 		resp.ViewVersion = 9
