@@ -177,7 +177,8 @@ func TestAttemptsResetAfterStayingLive(t *testing.T) {
 	logger, _ := newLogger()
 	opts := fast
 	opts.MaxAttempts = 2
-	opts.ResetAfter = 50 * time.Millisecond // shorter than its 100ms of life
+	opts.ResetAfter = 30 * time.Millisecond // shorter than its 100ms of life
+	opts.PingInterval = 10 * time.Millisecond
 	m := StartWith(panels("crashes"), dir, logger, opts)
 	defer m.Close()
 	waitFor(t, m, "p0", "restarted three times", func(PanelState) bool {

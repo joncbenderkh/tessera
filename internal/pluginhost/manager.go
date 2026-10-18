@@ -353,22 +353,23 @@ func (m *Manager) note(pn *panel, format string, args ...any) {
 // check, Restart is asked for, or Close; a Restart or Close also ends a
 // health check under way. It returns whether the process exited, how
 // long it was live, whether a Restart ended it, and the failure, if
-// any. A plugin that hung or failed its health check was live only
-// until the last check it passed, since it may have frozen right after.
+// any. It counts as live only until the last health check it passed,
+// since it may have frozen right after, so the count of failures it
+// resets agrees with PanelState.Failures.
 func (m *Manager) watchLive(pn *panel, inst *Instance) (exited bool, lived time.Duration, restart bool, err error) {
 	start := time.Now()
 	lastOK := start
 	tick := time.NewTicker(m.opts.PingInterval)
 	defer tick.Stop()
 	exit := func() (bool, time.Duration, bool, error) {
-		return true, time.Since(start), false, fmt.Errorf("plugin %q exited unexpectedly", inst.Info.GetName())
+		return true, lastOK.Sub(start), false, fmt.Errorf("plugin %q exited unexpectedly", inst.Info.GetName())
 	}
 	for {
 		select {
 		case <-m.ctx.Done():
-			return false, time.Since(start), false, nil
+			return false, lastOK.Sub(start), false, nil
 		case <-pn.restart:
-			return false, time.Since(start), true, nil
+			return false, lastOK.Sub(start), true, nil
 		case <-inst.Done():
 			return exit()
 		case <-tick.C:
@@ -381,10 +382,10 @@ func (m *Manager) watchLive(pn *panel, inst *Instance) (exited bool, lived time.
 		case perr = <-answer:
 		case <-m.ctx.Done():
 			cancel()
-			return false, time.Since(start), false, nil
+			return false, lastOK.Sub(start), false, nil
 		case <-pn.restart:
 			cancel()
-			return false, time.Since(start), true, nil
+			return false, lastOK.Sub(start), true, nil
 		case <-inst.Done():
 			cancel()
 			return exit()
@@ -403,9 +404,9 @@ func (m *Manager) watchLive(pn *panel, inst *Instance) (exited bool, lived time.
 		// seen; give the exit a moment to show.
 		select {
 		case <-m.ctx.Done():
-			return false, time.Since(start), false, nil
+			return false, lastOK.Sub(start), false, nil
 		case <-pn.restart:
-			return false, time.Since(start), true, nil
+			return false, lastOK.Sub(start), true, nil
 		case <-inst.Done():
 			return exit()
 		case <-time.After(500 * time.Millisecond):

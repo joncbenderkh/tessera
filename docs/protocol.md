@@ -188,9 +188,9 @@ and restarts a plugin that crashes, hangs, or breaks the protocol:
 - At the fifth failure in a row the host gives up and shows the panel
   as crashed, with the last error and, for a plugin that exited by
   itself, its exit status, until the user restarts it.
-- A plugin that stays up for a minute starts its count again. One
-  that freezes counts as up only until the last health check it
-  passed.
+- A plugin that stays up for a minute starts its count again. It
+  counts as up only until the last health check it passed, so one
+  that freezes is not counted as up while frozen.
 - Failures a restart cannot fix are not retried: a missing,
   unreadable, non-executable, or misnamed plugin, one the system
   cannot run (not a program for it, a script whose interpreter is
