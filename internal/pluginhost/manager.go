@@ -253,7 +253,6 @@ func (m *Manager) supervise(pn *panel) {
 		if exit != "" {
 			m.event(pn, "plugin exited: %s", exit)
 		}
-
 		failures++
 		if !Retryable(err) || failures >= m.opts.MaxAttempts {
 			if Retryable(err) {
@@ -307,21 +306,24 @@ func (pn *panel) untold(err error) string {
 // shutDown closes inst, and says so in pn's Logs if the process
 // outlived Close, so the next launch can run beside it, or if it failed
 // while shutting down; an exit before shutDown is the caller's to log.
-// The last goes to the host log during Close too, which event skips:
+// During Close, which event skips, both go to the host log alone:
 // go-plugin's own exit line is hidden for supervised launches.
 func (m *Manager) shutDown(pn *panel, inst *Instance) {
+	note := func(format string, args ...any) {
+		if m.ctx.Err() != nil {
+			m.logger.Printf("panel %q: %s", pn.ID, fmt.Sprintf(format, args...))
+			return
+		}
+		m.event(pn, format, args...)
+	}
 	before := inst.Exited()
 	inst.Close()
 	if !inst.Exited() {
-		m.event(pn, "plugin %s did not exit when shut down", pn.Plugin)
+		note("plugin %s did not exit when shut down", pn.Plugin)
 		return
 	}
 	if s := inst.ExitStatus(); !before && s != "" && s != "exit status 0" && inst.runner.ownExit(s) {
-		if m.ctx.Err() != nil {
-			m.logger.Printf("panel %q: plugin exited during shutdown: %s", pn.ID, s)
-			return
-		}
-		m.event(pn, "plugin exited during shutdown: %s", s)
+		note("plugin exited during shutdown: %s", s)
 	}
 }
 
