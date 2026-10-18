@@ -192,6 +192,8 @@ func (testPlugin) GRPCClient(context.Context, *plugin.GRPCBroker, *grpc.ClientCo
 //     rest answer with no view.
 //   - polled-deep, polled-big: as polled, but Render answers a view
 //     as deep-view and big-view send.
+//   - polled-event-deep: as polled, but the Render after an event
+//     answers a view as deep-view sends.
 //   - polled-events: as polled, naming no poll interval; Render
 //     answers the calls so far: "render" for each Render and the
 //     action id for each event.
@@ -204,10 +206,13 @@ func (testPlugin) GRPCClient(context.Context, *plugin.GRPCBroker, *grpc.ClientCo
 //   - quota-watch: sends one view, then ends its stream with
 //     RESOURCE_EXHAUSTED.
 //   - deep-view: sends a view nested 17 deep.
+//   - deep-then-good: sends a view as deep-view does, and one within
+//     the limits right after.
 //   - too-deep-to-decode: sends a view nested 4000 deep, which
 //     protobuf refuses to decode.
 //   - big-view: sends a view over 4 MiB.
-//   - huge-view: sends a view over 16 MiB, which gRPC refuses unread.
+//   - huge-view: sends a view over 16 MiB, which gRPC refuses unread,
+//     like an error the plugin sent.
 //   - spams-views: sends views "view N" as fast as it can.
 //   - events: Watch answers each event with a view "got <action id>".
 //   - hangs-event: HandleEvent never answers.
@@ -224,6 +229,7 @@ type server struct {
 	mu      sync.Mutex
 	renders int      // Renders answered
 	seen    []string // polled-events: the calls so far
+	deep    bool     // polled-event-deep: an event came since the last Render
 }
 
 func (s *server) Describe(ctx context.Context, _ *tesserav1.DescribeRequest) (*tesserav1.DescribeResponse, error) {

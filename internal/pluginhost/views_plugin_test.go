@@ -39,7 +39,7 @@ func nested(depth int) *tesserav1.View {
 
 func polledMode(mode string) bool {
 	switch mode {
-	case "polled", "polled-failing", "polled-quota", "polled-unavailable", "polled-empty", "polled-deep", "polled-big", "polled-events", "hangs-render", "no-views":
+	case "polled", "polled-failing", "polled-quota", "polled-unavailable", "polled-empty", "polled-deep", "polled-big", "polled-event-deep", "polled-events", "hangs-render", "no-views":
 		return true
 	}
 	return false
@@ -68,6 +68,11 @@ func (s *server) Watch(req *tesserav1.WatchRequest, stream tesserav1.PanelServic
 		return status.Error(codes.ResourceExhausted, "quota exceeded")
 	case s.mode == "deep-view":
 		if err := send(nested(17)); err != nil {
+			return err
+		}
+	case s.mode == "deep-then-good":
+		send(nested(17))
+		if err := send(textView("good")); err != nil {
 			return err
 		}
 	case s.mode == "too-deep-to-decode":
@@ -146,6 +151,17 @@ func (s *server) Render(ctx context.Context, _ *tesserav1.RenderRequest) (*tesse
 		}, nil
 	case "polled-deep":
 		return &tesserav1.RenderResponse{Content: &tesserav1.RenderResponse_View{View: nested(17)}}, nil
+	case "polled-event-deep":
+		s.renders++
+		resp := &tesserav1.RenderResponse{
+			Content:      &tesserav1.RenderResponse_View{View: textView(fmt.Sprint("render ", s.renders-1))},
+			PollInterval: durationpb.New(250 * time.Millisecond),
+		}
+		if s.deep {
+			s.deep = false
+			resp.Content = &tesserav1.RenderResponse_View{View: nested(17)}
+		}
+		return resp, nil
 	case "polled-big":
 		return &tesserav1.RenderResponse{Content: &tesserav1.RenderResponse_View{View: textView(strings.Repeat("x", 5<<20))}}, nil
 	case "polled-events":
@@ -173,6 +189,10 @@ func (s *server) HandleEvent(ctx context.Context, req *tesserav1.HandleEventRequ
 	case "polled-events":
 		s.mu.Lock()
 		s.seen = append(s.seen, id)
+		s.mu.Unlock()
+	case "polled-event-deep":
+		s.mu.Lock()
+		s.deep = true
 		s.mu.Unlock()
 	default:
 		s.events <- id

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"google.golang.org/grpc/mem"
+	"google.golang.org/protobuf/proto"
 
 	tesserav1 "github.com/joncbenderkh/tessera/proto/tessera/v1"
 )
@@ -56,6 +57,7 @@ func TestWatchFailures(t *testing.T) {
 		{"ends-watch", `plugin "ends-watch" ended its Watch stream`},
 		{"late-unimplemented", `plugin "late-unimplemented" ended its Watch stream: rpc error: code = Unimplemented`},
 		{"quota-watch", `plugin "quota-watch" ended its Watch stream: rpc error: code = ResourceExhausted`},
+		{"huge-view", `plugin "huge-view" ended its Watch stream: rpc error: code = ResourceExhausted`},
 	} {
 		t.Run(tt.mode, func(t *testing.T) {
 			t.Parallel()
@@ -156,7 +158,7 @@ func TestViewOverLimitIsRefused(t *testing.T) {
 		{"deep-view", `plugin "deep-view" sent a view nested 17 deep, over the limit of 16`},
 		{"too-deep-to-decode", `plugin "too-deep-to-decode" sent a view nested over the limit of 16`},
 		{"big-view", `plugin "big-view" sent a view over the size limit`},
-		{"huge-view", `plugin "huge-view" sent a view over the size limit`},
+		{"deep-then-good", `plugin "deep-then-good" sent a view nested 17 deep, over the limit of 16`},
 		{"polled-deep", `plugin "polled-deep" sent a view nested 17 deep, over the limit of 16`},
 		{"polled-big", `plugin "polled-big" sent a view over the size limit`},
 	} {
@@ -175,6 +177,22 @@ func TestViewOverLimitIsRefused(t *testing.T) {
 				t.Errorf("restarted over a view limit: %+v", s)
 			}
 		})
+	}
+}
+
+func TestRefusalOnEventStopsPolling(t *testing.T) {
+	dir := install(t, "polled-event-deep")
+	logger, _ := newLogger()
+	m := StartWith(panels("polled-event-deep"), dir, logger, fast)
+	defer m.Close()
+	waitFor(t, m, "p0", "polled twice", showing("render 1"))
+	if err := m.HandleEvent("p0", activate("x")); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, m, "p0", "refusing the view", func(s PanelState) bool { return s.ViewErr != nil })
+	time.Sleep(time.Second) // four of the plugin's poll intervals
+	if s := m.States()[0]; s.View != nil {
+		t.Errorf("polled on after a refused view: %+v", s)
 	}
 }
 
@@ -320,5 +338,14 @@ func TestViewCodecTellsRefusedFromMalformed(t *testing.T) {
 	c.Unmarshal(mem.BufferSlice{mem.SliceBuffer(make([]byte, maxViewBytes+1))}, &tesserav1.RenderResponse{})
 	if c.malformed() != nil || c.refusal() == nil {
 		t.Errorf("over the size limit: got malformed %v, refusal %v", c.malformed(), c.refusal())
+	}
+	deep, err := proto.Marshal(&tesserav1.WatchResponse{Content: &tesserav1.WatchResponse_View{View: nested(17)}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	c = newViewCodec()
+	c.Unmarshal(mem.BufferSlice{mem.SliceBuffer(deep)}, &tesserav1.WatchResponse{})
+	if c.malformed() != nil || c.refusal() == nil {
+		t.Errorf("over the depth limit: got malformed %v, refusal %v", c.malformed(), c.refusal())
 	}
 }

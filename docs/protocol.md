@@ -172,7 +172,10 @@ limit, and widgets nest at most 16 deep (`View.body` is depth 1, and
 each `StackItem.widget` adds 1). A view over either limit fails
 its stream or Render call; the host shows an error tile naming the limit,
 does not restart the plugin, and reads no more views from it until it
-is restarted.
+is restarted. Until then only the health check and the deadline on
+each event show that it still answers, so a hang inside its own code
+goes unseen. A response over 16 MiB is not read at all, and counts as
+an error the plugin returned.
 The host keeps only each panel's latest view and redraws at most 30
 times a second, so sending views faster gains a plugin nothing.
 
