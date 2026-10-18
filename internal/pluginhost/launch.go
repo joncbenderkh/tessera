@@ -178,11 +178,14 @@ func (inst *Instance) start(ctx context.Context, name string, timeout time.Durat
 	}
 	rpc, err := s.rpc, s.err
 	// go-plugin (v1.8.0) reports a protocol mismatch and a start timeout
-	// only in its error text; TestLaunchRejects pins the wording.
-	if err != nil && strings.Contains(err.Error(), "incompatible API version") {
+	// only in its error text; TestLaunchRejects pins the wording. A
+	// mismatch or timeout is matched at the start only, as go-plugin
+	// quotes a stray stdout line, which could hold the words, in its own
+	// error.
+	if err != nil && strings.HasPrefix(err.Error(), "incompatible API version") {
 		return permanent(fmt.Errorf("plugin %q does not speak protocol %d: %w", name, tesserav1.ProtocolVersion, err))
 	}
-	if err != nil && strings.Contains(err.Error(), "incompatible core API version") {
+	if err != nil && strings.HasPrefix(err.Error(), "incompatible core API version") {
 		return permanent(fmt.Errorf("plugin %q does not speak go-plugin's core protocol %d: %w", name, plugin.CoreProtocolVersion, err))
 	}
 	var ex execError
@@ -190,7 +193,7 @@ func (inst *Instance) start(ctx context.Context, name string, timeout time.Durat
 		return permanent(fmt.Errorf("plugin %q cannot be run: %w", name, err))
 	}
 	// As is a handshake that never comes.
-	if err != nil && strings.Contains(err.Error(), "timeout while waiting for plugin to start") {
+	if err != nil && strings.HasPrefix(err.Error(), "timeout while waiting for plugin to start") {
 		return hangError{fmt.Errorf("plugin %q hung: no handshake within %v", name, startTimeout)}
 	}
 	if err != nil {

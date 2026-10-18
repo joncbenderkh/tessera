@@ -359,6 +359,16 @@ func TestFailedHandshakeHasNoExitStatus(t *testing.T) {
 	}
 }
 
+func TestStrayLineIsNoMismatch(t *testing.T) {
+	t.Parallel()
+	dir := install(t, "junk-mismatch")
+	logger, _ := newLogger()
+	_, _, err := launch(context.Background(), dir, "junk-mismatch", ignore, logger, callTimeout, nil, nil)
+	if err == nil || !Retryable(err) {
+		t.Fatalf("got %v, want a handshake error worth retrying", err)
+	}
+}
+
 func TestNoHandshakeIsAHang(t *testing.T) {
 	t.Parallel() // waits startTimeout
 	dir := install(t, "slow-start")

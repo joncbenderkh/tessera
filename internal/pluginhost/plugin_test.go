@@ -70,10 +70,13 @@ func servePlugin(mode string) {
 	if mode == "junk-stdout" {
 		fmt.Fprintln(rawStdout, "hello") // not a handshake line
 	}
+	if mode == "junk-mismatch" {
+		fmt.Fprintln(rawStdout, "incompatible API version, says a log line")
+	}
 	if mode == "core-two" {
 		fmt.Fprintln(rawStdout, "2|1|unix|/nonexistent|grpc|")
 	}
-	if mode == "slow-start" || mode == "escapes-early" || mode == "junk-stdout" || mode == "core-two" {
+	if mode == "slow-start" || mode == "escapes-early" || mode == "junk-stdout" || mode == "junk-mismatch" || mode == "core-two" {
 		time.Sleep(time.Minute) // never reaches the handshake in a test
 	}
 	hs := handshake
@@ -131,6 +134,8 @@ func (testPlugin) GRPCClient(context.Context, *plugin.GRPCBroker, *grpc.ClientCo
 //     its process group and holds its stdout.
 //   - junk-stdout: writes a line that is not a handshake to stdout,
 //     then as slow-start.
+//   - junk-mismatch: as junk-stdout, with a line that names a
+//     protocol mismatch.
 //   - not-serving: answers every health check NOT_SERVING.
 //   - proto-two: the handshake offers protocol 2.
 //   - core-two: the handshake offers go-plugin's core protocol 2.
