@@ -143,6 +143,8 @@ func (testPlugin) GRPCClient(context.Context, *plugin.GRPCBroker, *grpc.ClientCo
 //   - view-nine: Describe picks view schema 9.
 //   - slow-describe: Describe never answers.
 //   - rejects: Configure answers INVALID_ARGUMENT.
+//   - unimplemented: Describe answers UNIMPLEMENTED.
+//   - no-configure: Configure answers UNIMPLEMENTED.
 //   - frozen: the process stops itself after Describe, so it never
 //     answers Shutdown.
 //   - mute-frozen: as frozen, after closing its stdout and stderr.
@@ -187,6 +189,8 @@ func (s *server) Describe(ctx context.Context, _ *tesserav1.DescribeRequest) (*t
 		ViewVersion:     tesserav1.ViewVersion,
 	}
 	switch s.mode {
+	case "unimplemented":
+		return s.UnimplementedPanelServiceServer.Describe(ctx, nil)
 	case "misnamed", "misnamed-fails-shutdown":
 		resp.Name = "other"
 	case "view-nine":
@@ -239,6 +243,8 @@ func (s *server) Configure(ctx context.Context, req *tesserav1.ConfigureRequest)
 	switch s.mode {
 	case "rejects":
 		return nil, status.Error(codes.InvalidArgument, "timezone: unknown")
+	case "no-configure":
+		return s.UnimplementedPanelServiceServer.Configure(ctx, req)
 	case "hangs-configure":
 		<-ctx.Done()
 		return nil, ctx.Err()

@@ -195,7 +195,9 @@ and restarts a plugin that crashes, hangs, or breaks the protocol:
   unreadable, non-executable, or misnamed plugin, one the system
   cannot run (not a program for it, a script whose interpreter is
   missing, or a file on a `noexec` mount), a version the host does
-  not speak, and settings the plugin rejects with `INVALID_ARGUMENT`.
+  not speak, a `Describe` or `Configure` answered `UNIMPLEMENTED`
+  (not a tessera plugin), and settings the plugin rejects with
+  `INVALID_ARGUMENT`.
 
 For the panel's Logs view, the host keeps each panel's last 500
 lines, plugin output and lifecycle events (started, exited with
@@ -224,9 +226,10 @@ version, or it picks a view schema version the host did not offer; a
 rejected `Configure` is recorded the same way. Of these, a failed
 handshake (other than one on a protocol version the host does not
 speak) or connection and a `Describe` that does not answer, or
-answers with an error, are retried as above; the rest are the
-permanent failures. The reason is logged now and will be shown in the
-panel's place once the host draws the grid (#10, #13).
+answers with an error other than `UNIMPLEMENTED`, are retried as
+above; the rest are the permanent failures. The reason is logged now
+and will be shown in the panel's place once the host draws the grid
+(#10, #13).
 Names are 1 to 64 lowercase letters, digits, and hyphens, starting with a
 letter or digit, so they can never name a path outside the plugins
 directory. Names Windows reserves for devices (`con`, `prn`, `aux`,

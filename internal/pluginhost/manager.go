@@ -546,6 +546,9 @@ func configure(ctx context.Context, inst *Instance, p config.Panel, timeout time
 	if s, ok := status.FromError(err); ok && s.Code() == codes.InvalidArgument {
 		return permanent(fmt.Errorf("plugin %q rejected the settings: %s", p.Plugin, s.Message()))
 	}
+	if s, ok := status.FromError(err); ok && s.Code() == codes.Unimplemented {
+		return permanent(fmt.Errorf("plugin %q does not implement Configure: %w", p.Plugin, err))
+	}
 	if hung(ctx, err, timeout) {
 		return hangError{fmt.Errorf("plugin %q hung: Configure did not answer within %v", p.Plugin, timeout)}
 	}

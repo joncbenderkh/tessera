@@ -596,6 +596,17 @@ func TestMissingInterpreterIsPermanent(t *testing.T) {
 	}
 }
 
+func TestUnimplementedConfigureIsPermanent(t *testing.T) {
+	dir := install(t, "no-configure")
+	logger, _ := newLogger()
+	m := StartWith(panels("no-configure"), dir, logger, fast)
+	defer m.Close()
+	s := waitFor(t, m, "p0", "crashed", is(Crashed))
+	if Retryable(s.Err) || !strings.Contains(s.Err.Error(), "does not implement Configure") || s.Failures != 1 {
+		t.Errorf("got %v after %d failures, want a permanent error at once", s.Err, s.Failures)
+	}
+}
+
 func TestUnstartedLaunchIsNoStuckPlugin(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("no #! scripts on Windows")

@@ -20,7 +20,9 @@ import (
 	"github.com/hashicorp/go-hclog"
 	"github.com/hashicorp/go-plugin"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/health/grpc_health_v1"
+	"google.golang.org/grpc/status"
 
 	"github.com/joncbenderkh/tessera"
 	tesserav1 "github.com/joncbenderkh/tessera/proto/tessera/v1"
@@ -214,6 +216,9 @@ func (inst *Instance) start(ctx context.Context, name string, timeout time.Durat
 	})
 	if err != nil && hung(ctx, err, timeout) {
 		return hangError{fmt.Errorf("plugin %q hung: Describe did not answer within %v", name, timeout)}
+	}
+	if s, ok := status.FromError(err); ok && s.Code() == codes.Unimplemented {
+		return permanent(fmt.Errorf("plugin %q does not implement Describe: %w", name, err))
 	}
 	if err != nil {
 		return fmt.Errorf("plugin %q: Describe: %w", name, err)
