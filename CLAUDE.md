@@ -78,7 +78,8 @@ dialogs). Edit mode must be able to re-enable any disabled panel.
   config.
 - `internal/pluginhost`: finding, launching, describing, configuring,
   supervising, and shutting down plugins, one process per enabled
-  panel: restarts with backoff, panel states, and each panel's logs.
+  panel: restarts with backoff, panel states, each panel's logs, its
+  latest view (from Watch, or by polling Render), and input events.
   Its tests run the test binary itself as a plugin whose behaviour
   follows its file name (`plugin_test.go`).
 - `proto/`: the plugin protocol. The `.proto` files and the Go code
@@ -152,8 +153,10 @@ at startup but does not yet apply reloads; that comes with the grid (#10).
 The host launches, describes, and configures each enabled panel's plugin
 and shuts them all down on exit (#12), and supervises them: crashes and
 hangs restart with backoff, and each panel keeps its state and logs
-(part of #13; the stale state and heartbeats come with #14). It draws
-nothing yet; viewing and events are #14, and the SDK #18.
+(#13). It reads each panel's view, from the Watch stream with its
+heartbeat or by polling Render, shows a polled panel whose Render
+fails as stale, and passes input events on (#14). It draws nothing
+yet: the grid is #10, rendering views #11, and the SDK #18.
 
 ## Git workflow
 
