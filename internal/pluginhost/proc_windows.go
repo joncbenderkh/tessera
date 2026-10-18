@@ -79,7 +79,10 @@ func reapPID(pid int) error {
 	if err := windows.GetExitCodeProcess(h, &code); err != nil {
 		return err
 	}
-	if code != 0 {
+	switch {
+	case code >= 1<<16: // an NTSTATUS such as 0xc0000005, as ProcessState.String
+		return fmt.Errorf("exit status 0x%x", code)
+	case code != 0:
 		return fmt.Errorf("exit status %d", code)
 	}
 	return nil

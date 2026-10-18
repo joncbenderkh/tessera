@@ -52,6 +52,8 @@ func reapPID(pid int) error {
 		break
 	}
 	switch {
+	case ws.Signaled() && ws.CoreDump(): // as ProcessState.String
+		return fmt.Errorf("signal: %v (core dumped)", ws.Signal())
 	case ws.Signaled():
 		return fmt.Errorf("signal: %v", ws.Signal())
 	case ws.ExitStatus() != 0:
