@@ -616,7 +616,12 @@ func TestFailedLaunchShowsStopping(t *testing.T) {
 		t.Errorf("Stopping shown before Logs say why:\n%s", strings.Join(m.Logs("p0"), "\n"))
 	}
 	if err := m.Restart("p0"); err != nil {
-		t.Errorf("Restart while stopping: %v", err)
+		t.Fatalf("Restart while stopping: %v", err)
+	}
+	waitFor(t, m, "p0", "restarted", func(PanelState) bool { return countLines(m.Logs("p0"), "restart requested") > 0 })
+	logs := strings.Join(m.Logs("p0"), "\n")
+	if before, _, _ := strings.Cut(logs, "restart requested"); strings.Contains(before, "restarting in") || strings.Contains(before, "giving up") {
+		t.Errorf("a backoff shown before the Restart:\n%s", logs)
 	}
 }
 

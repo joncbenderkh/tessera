@@ -253,6 +253,16 @@ func (m *Manager) supervise(pn *panel) {
 		if exit != "" {
 			m.event(pn, "plugin exited: %s", exit)
 		}
+		// A Restart asked for while the failed plugin was Stopping
+		// relaunches now, without a backoff or give-up shown first.
+		select {
+		case <-pn.restart:
+			m.event(pn, "restart requested")
+			failures = 0
+			continue
+		default:
+		}
+
 		failures++
 		if !Retryable(err) || failures >= m.opts.MaxAttempts {
 			if Retryable(err) {
