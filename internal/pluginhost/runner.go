@@ -121,7 +121,9 @@ func (r *procRunner) Start(context.Context) error {
 	r.proc = r.cmd.Process
 	r.pid = r.proc.Pid
 	if r.canceled {
-		killGroup(r.proc)
+		if as := killGroup(r.proc); as != "" {
+			r.killed, r.killedAs = true, as
+		}
 	}
 	if canAwaitExit {
 		r.watched = make(chan struct{})
