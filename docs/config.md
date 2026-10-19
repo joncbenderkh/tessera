@@ -8,13 +8,16 @@ readable only by you (mode 0600). Later saves keep the file's existing
 permissions.
 
 tessera reads the file at startup; restart it after editing. Reloading
-on change and Edit layout, which will rewrite the file and drop any
-comments, arrive with the grid layout engine (#10).
+on change and Edit layout arrive with the grid layout engine (#10).
+tessera rewrites the file when you switch the theme from the window
+header, which drops any comments; it rereads the file first, so other
+edits are kept, and leaves a file it cannot read alone.
 
 ## Example
 
 ```yaml
 version: 1
+theme: dark
 grid:
   columns: 4
   row_height: 180
@@ -41,6 +44,7 @@ panels:
 | Field | Meaning |
 |---|---|
 | `version` | Schema version. Must be `1`. |
+| `theme` | `dark` or `light`. Defaults to `dark`. The header's theme toggle sets it. |
 | `grid.columns` | Number of grid columns, at least 1. |
 | `grid.row_height` | Height of one grid row, at least 1. |
 | `panels[].id` | Unique name for this panel, read as written (`017` stays `017`). One plugin can back several panels. |

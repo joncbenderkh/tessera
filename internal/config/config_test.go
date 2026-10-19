@@ -343,6 +343,47 @@ func TestValidateGrid(t *testing.T) {
 	}
 }
 
+func TestParseTheme(t *testing.T) {
+	for _, tt := range []struct {
+		value string
+		want  Theme
+		err   string
+	}{
+		{"light", ThemeLight, ""},
+		{"dark", ThemeDark, ""},
+		{`""`, "", ""},
+		{"blue", "", `theme must be "dark" or "light"`},
+		{"Light", "", `theme must be "dark" or "light"`},
+	} {
+		t.Run(tt.value, func(t *testing.T) {
+			c, err := Parse([]byte("version: 1\ntheme: " + tt.value + "\ngrid:\n  columns: 1\n  row_height: 1\npanels: []\n"))
+			if tt.err != "" {
+				if err == nil || !strings.Contains(err.Error(), tt.err) {
+					t.Fatalf("error %v does not contain %q", err, tt.err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if c.Theme != tt.want {
+				t.Fatalf("theme %q, want %q", c.Theme, tt.want)
+			}
+			data, err := Marshal(c)
+			if err != nil {
+				t.Fatal(err)
+			}
+			again, err := Parse(data)
+			if err != nil {
+				t.Fatalf("reparsing %q: %v", data, err)
+			}
+			if again.Theme != tt.want {
+				t.Fatalf("round trip gave theme %q, want %q", again.Theme, tt.want)
+			}
+		})
+	}
+}
+
 func TestLoadWritesDefaultOnFirstRun(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "tessera", FileName)
 	c, err := Load(path)

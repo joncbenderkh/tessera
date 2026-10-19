@@ -27,9 +27,20 @@ const FileName = "config.yaml"
 // Config is the whole user config file.
 type Config struct {
 	Version int     `yaml:"version"`
+	Theme   Theme   `yaml:"theme,omitempty"`
 	Grid    Grid    `yaml:"grid"`
 	Panels  []Panel `yaml:"panels"`
 }
+
+// Theme is the window's colour theme. The zero value means the default,
+// ThemeDark.
+type Theme string
+
+// The themes a config may name.
+const (
+	ThemeDark  Theme = "dark"
+	ThemeLight Theme = "light"
+)
 
 // Grid sets the shape of the panel grid.
 type Grid struct {
@@ -153,7 +164,11 @@ func decodeInt(dst *int, data []byte) error {
 // string is quoted unless the core schema reads it back unchanged.
 func Marshal(c Config) ([]byte, error) {
 	var b strings.Builder
-	fmt.Fprintf(&b, "version: %d\ngrid:\n  columns: %d\n  row_height: %d\n", c.Version, c.Grid.Columns, c.Grid.RowHeight)
+	fmt.Fprintf(&b, "version: %d\n", c.Version)
+	if c.Theme != "" {
+		fmt.Fprintf(&b, "theme: %s\n", c.Theme)
+	}
+	fmt.Fprintf(&b, "grid:\n  columns: %d\n  row_height: %d\n", c.Grid.Columns, c.Grid.RowHeight)
 	if len(c.Panels) == 0 {
 		b.WriteString("panels: []\n")
 		return []byte(b.String()), nil
