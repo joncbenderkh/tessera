@@ -13,7 +13,6 @@ import (
 	"syscall"
 
 	"gioui.org/app"
-	"gioui.org/op"
 	"gioui.org/unit"
 
 	"github.com/joncbenderkh/tessera"
@@ -65,7 +64,7 @@ func main() {
 		}()
 		window := new(app.Window)
 		window.Option(app.Title("tessera"), app.Size(unit.Dp(1440), unit.Dp(900)))
-		err := run(window)
+		err := run(window, plugins, cfg.Theme, *configPath)
 		plugins.Close()
 		if err != nil {
 			log.Fatal(err)
@@ -73,17 +72,4 @@ func main() {
 		os.Exit(0)
 	}()
 	app.Main()
-}
-
-func run(window *app.Window) error {
-	var ops op.Ops
-	for {
-		switch e := window.Event().(type) {
-		case app.DestroyEvent:
-			return e.Err
-		case app.FrameEvent:
-			gtx := app.NewContext(&ops, e)
-			e.Frame(gtx.Ops)
-		}
-	}
 }

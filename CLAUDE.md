@@ -56,7 +56,8 @@ dialogs). Edit mode must be able to re-enable any disabled panel.
     launches them with `github.com/hashicorp/go-plugin` itself.
 - **Config:** one YAML file, `tessera/config.yaml` in the user config
   directory (`$XDG_CONFIG_HOME`, or `~/.config`, on Linux), holds the
-  grid, panel placement and enabled state, and per-panel settings. YAML
+  theme, the grid, panel placement and enabled state, and per-panel
+  settings. YAML
   was the owner's choice over TOML and JSON: compact for a list of panels
   with nested settings, and it allows comments. It is parsed with
   `github.com/goccy/go-yaml` and decoded strictly so unknown fields are
@@ -76,6 +77,10 @@ dialogs). Edit mode must be able to re-enable any disabled panel.
 - `cmd/tessera`: the host (Gio window, layout, plugin manager).
 - `internal/config`: loading, validating, saving, and watching the user
   config.
+- `internal/ui`: the host-owned UI drawn with Gio: the window header,
+  the button, and the toast and dialog primitives. `internal/ui/theme`
+  holds the design tokens (dark and light palettes, spacing, radius, and
+  type scales) taken from `docs/design`.
 - `internal/pluginhost`: finding, launching, describing, configuring,
   supervising, and shutting down plugins, one process per enabled
   panel: restarts with backoff, panel states, each panel's logs, its
@@ -115,8 +120,8 @@ Use the local toolchain: `export PATH=/usr/local/go/bin:$PATH`.
   `buf format`, `buf breaking` against the previous `main` (with the
   rules pinned in the workflow), a `go generate` drift check, and an
   SPDX header check. Pull requests must target `main`; CI fails on any
-  other base. A separate job runs the `internal/pluginhost` and
-  `internal/config` tests on macOS and Windows, on both Go versions;
+  other base. A separate job runs the `internal/pluginhost`,
+  `internal/config`, and `internal/ui` tests on macOS and Windows, on both Go versions;
   the BSD variants of the plugin host's process code are only
   vetted (`GOOS=freebsd go vet` and so on, in the stable Linux job),
   never run. It does not run the
@@ -155,8 +160,11 @@ and shuts them all down on exit (#12), and supervises them: crashes and
 hangs restart with backoff, and each panel keeps its state and logs
 (#13). It reads each panel's view, from the Watch stream with its
 heartbeat or by polling Render, shows a polled panel whose Render
-fails as stale, and passes input events on (#14). It draws nothing
-yet: the grid is #10, rendering views #11, and the SDK #18.
+fails as stale, and passes input events on (#14). The window
+has its header (app name, a single "Default" layout, plugin status,
+Edit layout and theme toggles), dark and light themes saved in the
+config, and toast and dialog primitives (#9). The content area is still
+empty: the grid is #10, rendering views #11, and the SDK #18.
 
 ## Git workflow
 

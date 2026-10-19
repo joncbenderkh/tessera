@@ -1,0 +1,117 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
+package main
+
+import (
+	"sync"
+
+	"gioui.org/app"
+	"gioui.org/op"
+	"gioui.org/op/paint"
+
+	"github.com/joncbenderkh/tessera/internal/config"
+	"github.com/joncbenderkh/tessera/internal/pluginhost"
+	"github.com/joncbenderkh/tessera/internal/ui"
+	"github.com/joncbenderkh/tessera/internal/ui/theme"
+)
+
+// run draws the window until it is closed: the header over an empty
+// content area, which the grid (#10) will fill, and the toast and
+// dialog over both.
+func run(window *app.Window, plugins *pluginhost.Manager, initial config.Theme, configPath string) error {
+	go func() {
+		for range plugins.Changed() {
+			window.Invalidate()
+		}
+	}()
+	shaper := theme.NewShaper(true)
+	dark := initial != config.ThemeLight
+	th := theme.New(dark, shaper)
+	saver := themeSaver{path: configPath, done: make(chan error, 1), invalidate: window.Invalidate}
+
+	var (
+		ops    op.Ops
+		header ui.Header
+		toast  ui.Toaster
+		dialog ui.Dialog
+	)
+	for {
+		switch e := window.Event().(type) {
+		case app.DestroyEvent:
+			return e.Err
+		case app.FrameEvent:
+			gtx := app.NewContext(&ops, e)
+			select {
+			case err := <-saver.done:
+				toast.Show("Could not save the theme: " + err.Error())
+			default:
+			}
+			behind := gtx
+			if dialog.IsOpen() {
+				behind = gtx.Disabled()
+			}
+			if header.Theme.Clicked(behind) {
+				dark = !dark
+				th = theme.New(dark, shaper)
+				saver.save(dark)
+			}
+			if header.Edit.Clicked(behind) {
+				header.Edit.Pressed = !header.Edit.Pressed
+				if header.Edit.Pressed {
+					toast.Show("Layout editing is not available yet")
+				}
+			}
+			paint.Fill(gtx.Ops, th.Bg)
+			header.Layout(behind, th, ui.StatusOf(plugins.States()))
+			toast.Layout(gtx, th)
+			dialog.Layout(gtx, th)
+			e.Frame(gtx.Ops)
+		}
+	}
+}
+
+// themeSaver writes the theme to the config file in the background. It
+// rereads the file first, so edits made since tessera started are kept,
+// and it never writes over a file it cannot parse. Saves run one at a
+// time, each writing the latest theme asked for.
+type themeSaver struct {
+	path       string
+	done       chan error // a failed save's error
+	invalidate func()
+
+	mu   sync.Mutex // held while saving
+	want sync.Mutex // guards dark
+	dark bool
+}
+
+func (s *themeSaver) save(dark bool) {
+	s.want.Lock()
+	s.dark = dark
+	s.want.Unlock()
+	go func() {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		s.want.Lock()
+		dark := s.dark
+		s.want.Unlock()
+		if err := saveTheme(s.path, dark); err != nil {
+			select {
+			case s.done <- err:
+			default: // one error is enough to show
+			}
+			s.invalidate()
+		}
+	}()
+}
+
+func saveTheme(path string, dark bool) error {
+	c, err := config.Load(path)
+	if err != nil {
+		return err
+	}
+	c.Theme = config.ThemeLight
+	if dark {
+		c.Theme = config.ThemeDark
+	}
+	return config.Save(path, c)
+}
