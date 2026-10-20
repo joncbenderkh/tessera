@@ -57,17 +57,16 @@ dialogs). Edit mode must be able to re-enable any disabled panel.
 - **Config:** one YAML file, `tessera/config.yaml` in the user config
   directory (`$XDG_CONFIG_HOME`, or `~/.config`, on Linux), holds the
   theme, the grid, panel placement and enabled state, and per-panel
-  settings. YAML
-  was the owner's choice over TOML and JSON: compact for a list of panels
-  with nested settings, and it allows comments. It is parsed with
-  `github.com/goccy/go-yaml` and decoded strictly so unknown fields are
-  errors. goccy resolves some plain scalars by YAML 1.1 rules (`017` as
-  octal, `<<` as a merge), so panel settings are taken out of its syntax
-  tree and resolved by YAML 1.2's core schema in
-  `internal/config/settings.go`, and the host writes the file with its own
-  emitter. It is saved atomically (temp file and rename) and watched for
-  changes through `fsnotify`. Rewrites by the host drop comments. The
-  schema is versioned (`version: 1`); see `docs/config.md`.
+  settings. YAML was the owner's choice over TOML and JSON: compact for
+  a list of panels with nested settings, and it allows comments. It is
+  parsed with `github.com/goccy/go-yaml` and decoded strictly so unknown
+  fields are errors. goccy resolves some plain scalars by YAML 1.1 rules
+  (`017` as octal, `<<` as a merge), so panel settings are taken out of
+  its syntax tree and resolved by YAML 1.2's core schema in
+  `internal/config/settings.go`, and the host writes the file with its
+  own emitter. It is saved atomically (temp file and rename) and watched
+  for changes through `fsnotify`. Rewrites by the host drop comments.
+  The schema is versioned (`version: 1`); see `docs/config.md`.
 - **Module path:** `github.com/joncbenderkh/tessera`.
 
 ## Layout
@@ -121,11 +120,10 @@ Use the local toolchain: `export PATH=/usr/local/go/bin:$PATH`.
   rules pinned in the workflow), a `go generate` drift check, and an
   SPDX header check. Pull requests must target `main`; CI fails on any
   other base. A separate job runs the `internal/pluginhost`,
-  `internal/config`, and `internal/ui` tests on macOS and Windows, on both Go versions;
-  the BSD variants of the plugin host's process code are only
-  vetted (`GOOS=freebsd go vet` and so on, in the stable Linux job),
-  never run. It does not run the
-  host.
+  `internal/config`, and `internal/ui` tests on macOS and Windows, on
+  both Go versions; the BSD variants of the plugin host's process code
+  are only vetted (`GOOS=freebsd go vet` and so on, in the stable Linux
+  job), never run. It does not run the host.
 - Plugins and `sdk/` must also build with `CGO_ENABLED=0`.
 
 The host needs Gio's system packages. On Fedora: `wayland-devel`,
