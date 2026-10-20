@@ -218,12 +218,59 @@ func Save(path string, c Config) error {
 	if err != nil {
 		return err
 	}
-	return writeAtomic(path, data)
+	return writeAtomic(path, data, nil)
+}
+
+// ErrChanged is Update's error when the file changed while it was being
+// updated, and was left as it was.
+var ErrChanged = errors.New("the file changed while it was being updated")
+
+// Update reads the config at path, applies change to it, and saves it. If
+// the file changes meanwhile, by size, modification time, or being
+// replaced, Update leaves it alone and returns ErrChanged, so an edit made
+// in an editor is not lost. The check runs just before the final rename,
+// which narrows the window for losing such an edit but cannot close it.
+func Update(path string, change func(*Config)) error {
+	before, err := os.Stat(path)
+	if err != nil {
+		return err
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	c, err := Parse(data)
+	if err != nil {
+		return fmt.Errorf("%s: %w", path, err)
+	}
+	change(&c)
+	if err := c.Validate(); err != nil {
+		return err
+	}
+	if data, err = Marshal(c); err != nil {
+		return err
+	}
+	return writeAtomic(path, data, func() error {
+		now, err := os.Stat(path)
+		if err != nil {
+			return err
+		}
+		if !os.SameFile(before, now) || now.Size() != before.Size() || !now.ModTime().Equal(before.ModTime()) {
+			return ErrChanged
+		}
+		return nil
+	})
 }
 
 // writeAtomic keeps the permissions of the file it replaces. A new file is
-// private (0600), since plugin settings may hold credentials.
-func writeAtomic(path string, data []byte) (err error) {
+// private (0600), since plugin settings may hold credentials. A symlink to
+// an existing file is followed, so that file is replaced and the link
+// kept; a dangling one is replaced. If check is not nil, it runs just
+// before the rename, which happens only if it returns nil.
+func writeAtomic(path string, data []byte, check func() error) (err error) {
+	if target, err := filepath.EvalSymlinks(path); err == nil {
+		path = target
+	}
 	perm := fs.FileMode(0o600)
 	if info, err := os.Stat(path); err == nil {
 		perm = info.Mode().Perm()
@@ -253,6 +300,11 @@ func writeAtomic(path string, data []byte) (err error) {
 	}
 	if err = tmp.Close(); err != nil {
 		return err
+	}
+	if check != nil {
+		if err = check(); err != nil {
+			return err
+		}
 	}
 	return os.Rename(tmp.Name(), path)
 }

@@ -11,7 +11,10 @@ tessera reads the file at startup; restart it after editing. Reloading
 on change and Edit layout arrive with the grid layout engine (#10).
 tessera rewrites the file when you switch the theme from the window
 header, which drops any comments; it rereads the file first, so other
-edits are kept, and leaves a file it cannot read alone.
+edits are kept, and leaves the file alone if it cannot read it or it
+changes during the save. If `config.yaml` is a symlink to a file, as
+with a dotfiles manager, tessera writes the file it points to and keeps
+the link.
 
 ## Example
 
