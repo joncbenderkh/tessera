@@ -42,6 +42,8 @@ func main() {
 	}
 
 	plugins := pluginhost.Start(cfg, pluginhost.DefaultDir(), log.Default())
+	window := new(app.Window)
+	saver := &themeSaver{path: *configPath, done: make(chan error, 1), invalidate: window.Invalidate}
 	signals := make(chan os.Signal, 1)
 	// SIGHUP too: plugins run in their own process groups, so a closed
 	// terminal reaches only the host.
@@ -49,6 +51,7 @@ func main() {
 	go func() {
 		sig := <-signals
 		signal.Stop(signals) // a second signal ends a slow shutdown at once
+		saver.wait()
 		plugins.Close()
 		// The shell convention for a signalled exit, so a supervisor sees
 		// why the host stopped.
@@ -62,9 +65,8 @@ func main() {
 				panic(r)
 			}
 		}()
-		window := new(app.Window)
-		window.Option(app.Title("tessera"), app.Size(unit.Dp(1440), unit.Dp(900)))
-		err := run(window, plugins, cfg.Theme, *configPath)
+		window.Option(app.Title("tessera"), app.Size(unit.Dp(1440), unit.Dp(900)), app.MinSize(unit.Dp(360), unit.Dp(240)))
+		err := run(window, plugins, cfg.Theme, saver)
 		plugins.Close()
 		if err != nil {
 			log.Fatal(err)

@@ -46,3 +46,20 @@ func TestSaveThemeLeavesABrokenFile(t *testing.T) {
 		t.Fatalf("the file was rewritten: %q", data)
 	}
 }
+
+func TestThemeSaverWaits(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := config.Save(path, config.Default()); err != nil {
+		t.Fatal(err)
+	}
+	s := themeSaver{path: path, done: make(chan error, 1), invalidate: func() {}}
+	s.save(false)
+	s.wait()
+	got, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Theme != config.ThemeLight {
+		t.Fatalf("theme %q after wait, want light", got.Theme)
+	}
+}

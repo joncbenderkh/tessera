@@ -18,7 +18,7 @@ import (
 // run draws the window until it is closed: the header over an empty
 // content area, which the grid (#10) will fill, and the toast and
 // dialog over both.
-func run(window *app.Window, plugins *pluginhost.Manager, initial config.Theme, configPath string) error {
+func run(window *app.Window, plugins *pluginhost.Manager, initial config.Theme, saver *themeSaver) error {
 	go func() {
 		for range plugins.Changed() {
 			window.Invalidate()
@@ -27,7 +27,6 @@ func run(window *app.Window, plugins *pluginhost.Manager, initial config.Theme, 
 	shaper := theme.NewShaper(true)
 	dark := initial != config.ThemeLight
 	th := theme.New(dark, shaper)
-	saver := themeSaver{path: configPath, done: make(chan error, 1), invalidate: window.Invalidate}
 
 	var (
 		ops    op.Ops
@@ -38,6 +37,7 @@ func run(window *app.Window, plugins *pluginhost.Manager, initial config.Theme, 
 	for {
 		switch e := window.Event().(type) {
 		case app.DestroyEvent:
+			saver.wait()
 			return e.Err
 		case app.FrameEvent:
 			gtx := app.NewContext(&ops, e)
@@ -72,23 +72,30 @@ func run(window *app.Window, plugins *pluginhost.Manager, initial config.Theme, 
 
 // themeSaver writes the theme to the config file in the background. It
 // rereads the file first, so edits made since tessera started are kept,
-// and it never writes over a file it cannot parse. Saves run one at a
+// and it never writes over a file it cannot parse or one that changes
+// while it saves. Saves run one at a
 // time, each writing the latest theme asked for.
 type themeSaver struct {
 	path       string
 	done       chan error // a failed save's error
 	invalidate func()
 
-	mu   sync.Mutex // held while saving
-	want sync.Mutex // guards dark
-	dark bool
+	mu      sync.Mutex // held while saving
+	want    sync.Mutex // guards dark
+	dark    bool
+	running sync.WaitGroup
 }
+
+// wait returns once every save asked for has finished.
+func (s *themeSaver) wait() { s.running.Wait() }
 
 func (s *themeSaver) save(dark bool) {
 	s.want.Lock()
 	s.dark = dark
 	s.want.Unlock()
+	s.running.Add(1)
 	go func() {
+		defer s.running.Done()
 		s.mu.Lock()
 		defer s.mu.Unlock()
 		s.want.Lock()
@@ -105,13 +112,10 @@ func (s *themeSaver) save(dark bool) {
 }
 
 func saveTheme(path string, dark bool) error {
-	c, err := config.Load(path)
-	if err != nil {
-		return err
-	}
-	c.Theme = config.ThemeLight
-	if dark {
-		c.Theme = config.ThemeDark
-	}
-	return config.Save(path, c)
+	return config.Update(path, func(c *config.Config) {
+		c.Theme = config.ThemeLight
+		if dark {
+			c.Theme = config.ThemeDark
+		}
+	})
 }
