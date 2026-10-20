@@ -86,12 +86,20 @@ func (h *Header) Layout(gtx layout.Context, th *theme.Theme, status Status) layo
 		end = append(end, record(gtx, func(gtx layout.Context) layout.Dimensions { return statusLine(gtx, th, status) }))
 	}
 	h.Theme.Icon = true
-	glyph := "◐"
+	edit := "Edit layout"
+	if h.Edit.Pressed {
+		edit = "Done editing"
+	}
+	// The Go fonts have ☼ but no ◐, so the half disc is drawn.
+	glyph := ""
+	h.Theme.Draw = halfDisc
+	h.Theme.Description = "Switch to dark theme"
 	if th.Dark {
-		glyph = "☼"
+		glyph, h.Theme.Draw = "☼", nil
+		h.Theme.Description = "Switch to light theme"
 	}
 	end = append(end,
-		record(gtx, func(gtx layout.Context) layout.Dimensions { return h.Edit.Layout(gtx, th, "Edit layout") }),
+		record(gtx, func(gtx layout.Context) layout.Dimensions { return h.Edit.Layout(gtx, th, edit) }),
 		record(gtx, func(gtx layout.Context) layout.Dimensions { return h.Theme.Layout(gtx, th, glyph) }),
 	)
 	ex := size.X - gtx.Dp(pad)
@@ -115,6 +123,16 @@ func (h *Header) brand(gtx layout.Context, th *theme.Theme) layout.Dimensions {
 	}
 	name.at(gtx, image.Pt(mark+gtx.Dp(9), 0))
 	return layout.Dimensions{Size: image.Pt(mark+gtx.Dp(9)+name.dims.Size.X, name.dims.Size.Y)}
+}
+
+// halfDisc is ◐: a circle whose left half is filled.
+func halfDisc(gtx layout.Context, side int, c color.NRGBA) {
+	d := side * 3 / 4
+	r := image.Rectangle{Max: image.Pt(d, d)}.Add(image.Pt((side-d)/2, (side-d)/2))
+	strokeRRect(gtx, r, d/2, max(gtx.Dp(1), 1), c)
+	left := clip.Rect(image.Rect(r.Min.X, r.Min.Y, r.Min.X+d/2, r.Max.Y)).Push(gtx.Ops)
+	paint.FillShape(gtx.Ops, c, clip.Ellipse(r).Op(gtx.Ops))
+	left.Pop()
 }
 
 // statusLine is a tone dot and the status text.

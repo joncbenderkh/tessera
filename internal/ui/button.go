@@ -6,6 +6,7 @@ import (
 	"image"
 	"image/color"
 
+	"gioui.org/io/semantic"
 	"gioui.org/layout"
 	"gioui.org/op/clip"
 	"gioui.org/op/paint"
@@ -23,6 +24,12 @@ type Button struct {
 	Pressed bool
 	// Icon makes it a square 32 dp icon button with larger text.
 	Icon bool
+	// Description is what the button does, for screen readers; an icon
+	// button's glyph does not say.
+	Description string
+	// Draw, if set, draws the icon in place of the label, in a square
+	// of the given side.
+	Draw func(gtx layout.Context, side int, c color.NRGBA)
 }
 
 // Layout draws the button with label as its text.
@@ -41,12 +48,24 @@ func (b *Button) Layout(gtx layout.Context, th *theme.Theme, label string) layou
 		}
 		gtx.Constraints.Min = image.Point{}
 		text := recordLabel(gtx, th, label, size, fg, theme.Body)
+		if b.Draw != nil {
+			side := gtx.Sp(size)
+			text = record(gtx, func(gtx layout.Context) layout.Dimensions {
+				b.Draw(gtx, side, fg)
+				return layout.Dimensions{Size: image.Pt(side, side)}
+			})
+		}
 		height := gtx.Dp(32)
 		width := max(text.dims.Size.X+2*gtx.Dp(pad), height)
 		if b.Icon {
 			width = height
 		}
 		bounds := image.Rectangle{Max: image.Pt(width, height)}
+		semantic.Button.Add(gtx.Ops)
+		semantic.SelectedOp(b.Pressed).Add(gtx.Ops)
+		if b.Description != "" {
+			semantic.DescriptionOp(b.Description).Add(gtx.Ops)
+		}
 		rr := gtx.Dp(theme.RadiusSmall)
 		paint.FillShape(gtx.Ops, bg, clip.UniformRRect(bounds, rr).Op(gtx.Ops))
 		strokeRRect(gtx, bounds, rr, gtx.Dp(1), th.Border)

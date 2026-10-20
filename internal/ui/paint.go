@@ -6,10 +6,9 @@ package ui
 
 import (
 	"image"
-
-	"gioui.org/f32"
 	"image/color"
 
+	"gioui.org/f32"
 	"gioui.org/font"
 	"gioui.org/layout"
 	"gioui.org/op"

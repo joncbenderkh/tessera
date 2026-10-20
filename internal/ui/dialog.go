@@ -4,8 +4,10 @@ package ui
 
 import (
 	"image"
+	"strings"
 
 	"gioui.org/font"
+	"gioui.org/gesture"
 	"gioui.org/io/event"
 	"gioui.org/io/key"
 	"gioui.org/io/pointer"
@@ -14,7 +16,6 @@ import (
 	"gioui.org/op/clip"
 	"gioui.org/op/paint"
 	"gioui.org/text"
-	"gioui.org/widget"
 	"gioui.org/widget/material"
 
 	"github.com/joncbenderkh/tessera/internal/ui/theme"
@@ -27,15 +28,23 @@ import (
 type Dialog struct {
 	Title, Subtitle, Body string
 
+	lines    []string // Body's lines
+	list     layout.List
 	open     bool
 	focus    bool // move the focus to Close on the next frame
 	close    Button
-	backdrop widget.Clickable
+	backdrop gesture.Click // not a button: Tab must not reach it
 }
 
 // Open shows the dialog with the given text.
 func (d *Dialog) Open(title, subtitle, body string) {
 	d.Title, d.Subtitle, d.Body = title, subtitle, body
+	d.lines = nil
+	if body != "" {
+		d.lines = strings.Split(body, "\n")
+	}
+	// Opened at the end, where a log's newest lines are.
+	d.list = layout.List{Axis: layout.Vertical, Position: layout.Position{First: len(d.lines)}}
 	d.open, d.focus = true, true
 }
 
@@ -50,8 +59,17 @@ func (d *Dialog) Layout(gtx layout.Context, th *theme.Theme) layout.Dimensions {
 	if !d.open {
 		return layout.Dimensions{}
 	}
-	if d.close.Clicked(gtx) || d.backdrop.Clicked(gtx) {
+	if d.close.Clicked(gtx) {
 		d.open = false
+	}
+	for {
+		e, ok := d.backdrop.Update(gtx.Source)
+		if !ok {
+			break
+		}
+		if e.Kind == gesture.KindClick {
+			d.open = false
+		}
 	}
 	for {
 		e, ok := gtx.Event(key.Filter{Name: key.NameEscape})
@@ -72,10 +90,10 @@ func (d *Dialog) Layout(gtx layout.Context, th *theme.Theme) layout.Dimensions {
 	}
 
 	area := gtx.Constraints.Max
-	d.backdrop.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-		fillRect(gtx, image.Rectangle{Max: area}, theme.Scrim)
-		return layout.Dimensions{Size: area}
-	})
+	fillRect(gtx, image.Rectangle{Max: area}, theme.Scrim)
+	backdrop := clip.Rect{Max: area}.Push(gtx.Ops)
+	d.backdrop.Add(gtx.Ops)
+	backdrop.Pop()
 
 	pad := gtx.Dp(theme.Space24)
 	width := min(gtx.Dp(560), area.X*9/10)
@@ -101,56 +119,72 @@ func (d *Dialog) Layout(gtx layout.Context, th *theme.Theme) layout.Dimensions {
 	return layout.Dimensions{Size: area}
 }
 
-// content is the title, subtitle, body, and buttons, top to bottom.
+// content is the title, subtitle, body, and buttons, top to bottom. The
+// body gets the height the rest leave, and scrolls if it needs more.
 func (d *Dialog) content(gtx layout.Context, th *theme.Theme) layout.Dimensions {
-	children := []layout.FlexChild{
-		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-			l := label(th, d.Title, theme.TextDialog, th.Fg, font.Font{Typeface: theme.Body.Typeface, Weight: font.SemiBold})
-			l.MaxLines = 0
-			return layout.Inset{Bottom: 10}.Layout(gtx, l.Layout)
-		}),
-	}
+	gtx.Constraints.Min = image.Point{}
+	var parts []recorded
+	// Title and subtitle are capped, so a long one cannot push Close
+	// out of the window.
+	l := label(th, d.Title, theme.TextDialog, th.Fg, font.Font{Typeface: theme.Body.Typeface, Weight: font.Bold})
+	l.MaxLines = 2
+	parts = append(parts, record(gtx, func(gtx layout.Context) layout.Dimensions {
+		return layout.Inset{Bottom: 10}.Layout(gtx, l.Layout)
+	}))
 	if d.Subtitle != "" {
-		children = append(children, layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-			l := label(th, d.Subtitle, theme.TextSmall, th.Muted, theme.Body)
-			l.MaxLines = 0
-			return l.Layout(gtx)
-		}))
+		l := label(th, d.Subtitle, theme.TextSmall, th.Muted, theme.Body)
+		l.MaxLines = 3
+		parts = append(parts, record(gtx, l.Layout))
 	}
-	if d.Body != "" {
-		children = append(children, layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
-			return layout.Inset{Top: 18}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-				return d.body(gtx, th)
-			})
-		}))
-	}
-	children = append(children, layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+	buttons := record(gtx, func(gtx layout.Context) layout.Dimensions {
 		return layout.Inset{Top: 18}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
 			gtx.Constraints.Min.X = gtx.Constraints.Max.X
 			return layout.E.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
 				return d.close.Layout(gtx, th, "Close")
 			})
 		})
-	}))
-	return layout.Flex{Axis: layout.Vertical}.Layout(gtx, children...)
+	})
+	if d.Body != "" {
+		used := buttons.dims.Size.Y
+		for _, p := range parts {
+			used += p.dims.Size.Y
+		}
+		body := gtx
+		body.Constraints.Max.Y = max(gtx.Constraints.Max.Y-used, 0)
+		parts = append(parts, record(body, func(gtx layout.Context) layout.Dimensions {
+			return layout.Inset{Top: 18}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+				return d.body(gtx, th)
+			})
+		}))
+	}
+	parts = append(parts, buttons)
+	var size image.Point
+	for _, p := range parts {
+		p.at(gtx, image.Pt(0, size.Y))
+		size.X = max(size.X, p.dims.Size.X)
+		size.Y += p.dims.Size.Y
+	}
+	return layout.Dimensions{Size: size}
 }
 
-// body is the monospaced text on an inset panel, clipped to the space
-// the dialog has.
+// body is the monospaced text on an inset panel. A body taller than
+// the dialog scrolls.
 func (d *Dialog) body(gtx layout.Context, th *theme.Theme) layout.Dimensions {
 	pad := gtx.Dp(15)
 	inner := gtx
 	inner.Constraints = layout.Constraints{Max: gtx.Constraints.Max.Sub(image.Pt(2*pad, 2*pad))}
 	inner.Constraints.Min.X = inner.Constraints.Max.X
-	text := record(inner, material.LabelStyle{
-		Text: d.Body, TextSize: theme.TextMin, LineHeightScale: 1.8, Color: th.Fg,
-		Font: theme.Mono, Shaper: th.Shaper, WrapPolicy: text.WrapGraphemes,
-	}.Layout)
-	size := text.dims.Size.Add(image.Pt(2*pad, 2*pad))
-	size.Y = min(size.Y, gtx.Constraints.Max.Y)
+	list := record(inner, func(gtx layout.Context) layout.Dimensions {
+		return d.list.Layout(gtx, len(d.lines), func(gtx layout.Context, i int) layout.Dimensions {
+			return material.LabelStyle{
+				Text: d.lines[i], TextSize: theme.TextMin, LineHeightScale: 1.8, Color: th.Fg,
+				Font: theme.Mono, Shaper: th.Shaper, WrapPolicy: text.WrapGraphemes,
+			}.Layout(gtx)
+		})
+	})
+	size := list.dims.Size.Add(image.Pt(2*pad, 2*pad))
 	r := image.Rectangle{Max: size}
 	paint.FillShape(gtx.Ops, th.Inset, clip.UniformRRect(r, gtx.Dp(theme.RadiusSmall)).Op(gtx.Ops))
-	defer clip.Rect(r.Inset(pad)).Push(gtx.Ops).Pop()
-	text.at(gtx, image.Pt(pad, pad))
+	list.at(gtx, image.Pt(pad, pad))
 	return layout.Dimensions{Size: size}
 }
