@@ -43,7 +43,7 @@ func run(window *app.Window, plugins *pluginhost.Manager, initial config.Theme, 
 			gtx := app.NewContext(&ops, e)
 			select {
 			case err := <-saver.done:
-				toast.Show("Could not save the theme: " + err.Error())
+				toast.Show("Theme not saved; it applies until tessera restarts: " + err.Error())
 			default:
 			}
 			behind := gtx
@@ -55,11 +55,9 @@ func run(window *app.Window, plugins *pluginhost.Manager, initial config.Theme, 
 				th = theme.New(dark, shaper)
 				saver.save(dark)
 			}
+			// Edit layout stays unpressed until edit mode exists (#15).
 			if header.Edit.Clicked(behind) {
-				header.Edit.Pressed = !header.Edit.Pressed
-				if header.Edit.Pressed {
-					toast.Show("Layout editing is not available yet")
-				}
+				toast.Show("Layout editing is not available yet")
 			}
 			paint.Fill(gtx.Ops, th.Bg)
 			header.Layout(behind, th, ui.StatusOf(plugins.States()))
@@ -73,26 +71,36 @@ func run(window *app.Window, plugins *pluginhost.Manager, initial config.Theme, 
 // themeSaver writes the theme to the config file in the background. It
 // rereads the file first, so edits made since tessera started are kept,
 // and it never writes over a file it cannot parse or one that changes
-// while it saves. Saves run one at a
-// time, each writing the latest theme asked for.
+// while it saves. Saves run one at a time, each writing the latest
+// theme asked for.
 type themeSaver struct {
 	path       string
 	done       chan error // a failed save's error
 	invalidate func()
 
 	mu      sync.Mutex // held while saving
-	want    sync.Mutex // guards dark
+	want    sync.Mutex // guards dark and closed
 	dark    bool
+	closed  bool
 	running sync.WaitGroup
 }
 
-// wait returns once every save asked for has finished.
-func (s *themeSaver) wait() { s.running.Wait() }
+// wait returns once every save asked for has finished. Saves asked for
+// later are ignored, since the host is exiting.
+func (s *themeSaver) wait() {
+	s.want.Lock()
+	s.closed = true
+	s.want.Unlock()
+	s.running.Wait()
+}
 
 func (s *themeSaver) save(dark bool) {
 	s.want.Lock()
+	defer s.want.Unlock()
+	if s.closed {
+		return
+	}
 	s.dark = dark
-	s.want.Unlock()
 	s.running.Add(1)
 	go func() {
 		defer s.running.Done()

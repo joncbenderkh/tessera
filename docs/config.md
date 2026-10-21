@@ -14,7 +14,8 @@ header, which drops any comments; it rereads the file first, so other
 edits are kept, and leaves the file alone if it cannot read it or it
 changes during the save. If `config.yaml` is a symlink to a file, as
 with a dotfiles manager, tessera writes the file it points to and keeps
-the link.
+the link; if that file's directory is read-only, as in the Nix store,
+switching the theme reports an error and the theme is not saved.
 
 ## Example
 

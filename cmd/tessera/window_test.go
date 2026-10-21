@@ -63,3 +63,21 @@ func TestThemeSaverWaits(t *testing.T) {
 		t.Fatalf("theme %q after wait, want light", got.Theme)
 	}
 }
+
+func TestThemeSaverIgnoresSavesAfterWait(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := config.Save(path, config.Default()); err != nil {
+		t.Fatal(err)
+	}
+	s := themeSaver{path: path, done: make(chan error, 1), invalidate: func() {}}
+	s.wait()
+	s.save(false)
+	s.running.Wait()
+	got, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Theme != "" {
+		t.Fatalf("a save after wait wrote theme %q", got.Theme)
+	}
+}
