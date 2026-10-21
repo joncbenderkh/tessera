@@ -160,7 +160,7 @@ hangs restart with backoff, and each panel keeps its state and logs
 heartbeat or by polling Render, shows a polled panel whose Render
 fails as stale, and passes input events on (#14). The window
 has its header (app name, a single "Default" layout, plugin status,
-Edit layout and theme toggles), dark and light themes saved in the
+an Edit layout button whose edit mode is #15, and a theme toggle), dark and light themes saved in the
 config, and toast and dialog primitives (#9). The content area is still
 empty: the grid is #10, rendering views #11, and the SDK #18.
 
