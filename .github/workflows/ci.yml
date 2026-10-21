@@ -140,7 +140,7 @@ jobs:
   # host itself needs cgo and is built only on Linux above, so only the
   # pure-Go packages are tested here; internal/ui lays out without a GPU.
   other-os:
-    name: Plugin host (${{ matrix.os }}, Go ${{ matrix.go }})
+    name: Pure-Go packages (${{ matrix.os }}, Go ${{ matrix.go }})
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
