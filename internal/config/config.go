@@ -166,7 +166,7 @@ func Marshal(c Config) ([]byte, error) {
 	var b strings.Builder
 	fmt.Fprintf(&b, "version: %d\n", c.Version)
 	if c.Theme != "" {
-		fmt.Fprintf(&b, "theme: %s\n", c.Theme)
+		fmt.Fprintf(&b, "theme: %s\n", scalarString(string(c.Theme)))
 	}
 	fmt.Fprintf(&b, "grid:\n  columns: %d\n  row_height: %d\n", c.Grid.Columns, c.Grid.RowHeight)
 	if len(c.Panels) == 0 {

@@ -544,3 +544,16 @@ func TestUpdateLeavesAFileThatChanged(t *testing.T) {
 		t.Fatalf("expected only %s in the directory, found %d entries", FileName, len(entries))
 	}
 }
+
+func TestMarshalQuotesTheme(t *testing.T) {
+	c := Default()
+	c.Theme = "x\npanels: [a]"
+	data, err := Marshal(c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = Parse(data)
+	if err == nil || !strings.Contains(err.Error(), "theme must be") {
+		t.Fatalf("parsing %q: error %v, want only the theme rejected", data, err)
+	}
+}
