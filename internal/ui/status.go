@@ -25,8 +25,9 @@ type Status struct {
 }
 
 // StatusOf summarises the enabled panels: how many there are and how many
-// are starting, stale (or live with a view over a limit), or failing. Any failing panel makes the tone an
-// error, else any starting or stale one a warning.
+// are starting, stale (or live with a view over a limit), or failing.
+// Any failing panel makes the tone an error, else any starting or stale
+// one a warning.
 func StatusOf(states []pluginhost.PanelState) Status {
 	var starting, stale, failing int
 	for _, s := range states {

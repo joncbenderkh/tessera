@@ -22,7 +22,7 @@ const (
 	Narrow  unit.Dp = 560
 )
 
-// HeaderHeight is the height of the window header.
+// HeaderHeight is the window header's height at normal text sizes.
 const HeaderHeight unit.Dp = 58
 
 // LayoutName is the layout selector's one entry until the config has
@@ -35,6 +35,8 @@ const LayoutName = "Default"
 type Header struct {
 	Edit  Button
 	Theme Button
+
+	placed []image.Rectangle // the items' bounds in the last Layout
 }
 
 // headerFit is what the header shows, and its spacing, at a window
@@ -55,40 +57,22 @@ func fitHeader(width unit.Dp) headerFit {
 	return f
 }
 
-// Layout draws the header across the top of gtx's constraints.
+// Layout draws the header across the top of gtx's constraints. It is
+// HeaderHeight tall, or taller if a large text scale needs it. When its
+// items do not fit across, it drops, in turn, the layout selector, the
+// plugin status, the app name (keeping the mark), and Edit's label
+// (keeping an icon).
 func (h *Header) Layout(gtx layout.Context, th *theme.Theme, status Status) layout.Dimensions {
 	fit := fitHeader(widthDp(gtx))
-	pad, gap, endGap := fit.pad, fit.gap, fit.endGap
-	size := image.Pt(gtx.Constraints.Max.X, gtx.Dp(HeaderHeight))
-	fillRect(gtx, image.Rectangle{Max: size}, th.Surface)
-	fillRect(gtx, image.Rect(0, size.Y-gtx.Dp(1), size.X, size.Y), th.Border)
+	pad, gap, endGap := gtx.Dp(fit.pad), gtx.Dp(fit.gap), gtx.Dp(fit.endGap)
+	width := gtx.Constraints.Max.X
+	gtx.Constraints = layout.Constraints{Max: image.Pt(width, gtx.Constraints.Max.Y)}
 
-	gtx.Constraints = layout.Exact(size)
-	gtx.Constraints.Min = image.Point{}
-	middle := func(r recorded) int { return (size.Y - r.dims.Size.Y) / 2 }
-
-	x := gtx.Dp(pad)
-	brand := record(gtx, func(gtx layout.Context) layout.Dimensions { return h.brand(gtx, th) })
-	brand.at(gtx, image.Pt(x, middle(brand)))
-	x += brand.dims.Size.X + gtx.Dp(gap)
-	if fit.selector {
-		divider := gtx.Dp(19)
-		fillRect(gtx, image.Rect(x, (size.Y-divider)/2, x+gtx.Dp(1), (size.Y+divider)/2), th.Border)
-		x += gtx.Dp(1) + gtx.Dp(gap)
-		sel := record(gtx, func(gtx layout.Context) layout.Dimensions {
-			return layout.UniformInset(theme.Space8).Layout(gtx, label(th, LayoutName, theme.TextSmall, th.Fg, theme.Body).Layout)
-		})
-		sel.at(gtx, image.Pt(x, middle(sel)))
-	}
-
-	var end []recorded
-	if fit.status {
-		end = append(end, record(gtx, func(gtx layout.Context) layout.Dimensions { return statusLine(gtx, th, status) }))
-	}
+	// Edit becomes a toggle when edit mode exists (#15).
 	h.Theme.Icon = true
-	edit := "Edit layout"
+	editLabel := "Edit layout"
 	if h.Edit.Pressed {
-		edit = "Done editing"
+		editLabel = "Done editing"
 	}
 	// The Go fonts have ☼ but no ◐, so the half disc is drawn.
 	glyph := ""
@@ -98,31 +82,131 @@ func (h *Header) Layout(gtx layout.Context, th *theme.Theme, status Status) layo
 		glyph, h.Theme.Draw = "☼", nil
 		h.Theme.Description = "Switch to light theme"
 	}
-	end = append(end,
-		record(gtx, func(gtx layout.Context) layout.Dimensions { return h.Edit.Layout(gtx, th, edit) }),
-		record(gtx, func(gtx layout.Context) layout.Dimensions { return h.Theme.Layout(gtx, th, glyph) }),
-	)
-	ex := size.X - gtx.Dp(pad)
+
+	// Each variant is laid out; only the ones placed are drawn.
+	brandFull := record(gtx, func(gtx layout.Context) layout.Dimensions { return brand(gtx, th, true) })
+	brandMark := record(gtx, func(gtx layout.Context) layout.Dimensions { return brand(gtx, th, false) })
+	sel := record(gtx, func(gtx layout.Context) layout.Dimensions {
+		return layout.UniformInset(theme.Space8).Layout(gtx, label(th, LayoutName, theme.TextSmall, th.Fg, theme.Body).Layout)
+	})
+	stat := record(gtx, func(gtx layout.Context) layout.Dimensions { return statusLine(gtx, th, status) })
+	h.Edit.Icon, h.Edit.Draw, h.Edit.Description = false, nil, ""
+	editText := record(gtx, func(gtx layout.Context) layout.Dimensions { return h.Edit.Layout(gtx, th, editLabel) })
+	h.Edit.Icon, h.Edit.Draw, h.Edit.Description = true, gridIcon, editLabel
+	editIcon := record(gtx, func(gtx layout.Context) layout.Dimensions { return h.Edit.Layout(gtx, th, "") })
+	themeBtn := record(gtx, func(gtx layout.Context) layout.Dimensions { return h.Theme.Layout(gtx, th, glyph) })
+
+	showSel, showStatus, showName, showEditText := fit.selector, fit.status, true, true
+	var left, end []recorded
+	divider := gtx.Dp(1)
+	for {
+		left = []recorded{brandMark}
+		if showName {
+			left[0] = brandFull
+		}
+		if showSel {
+			left = append(left, sel)
+		}
+		end = nil
+		if showStatus {
+			end = append(end, stat)
+		}
+		if showEditText {
+			end = append(end, editText)
+		} else {
+			end = append(end, editIcon)
+		}
+		end = append(end, themeBtn)
+		need := 2*pad + gap + left[0].dims.Size.X
+		if showSel {
+			need += 2*gap + divider + sel.dims.Size.X
+		}
+		for i, r := range end {
+			need += r.dims.Size.X
+			if i > 0 {
+				need += endGap
+			}
+		}
+		switch {
+		case need <= width:
+		case showSel:
+			showSel = false
+			continue
+		case showStatus:
+			showStatus = false
+			continue
+		case showName:
+			showName = false
+			continue
+		case showEditText:
+			showEditText = false
+			continue
+		}
+		break
+	}
+
+	height := gtx.Dp(HeaderHeight)
+	for _, r := range append(left, end...) {
+		height = max(height, r.dims.Size.Y+2*gtx.Dp(theme.Space12))
+	}
+	size := image.Pt(width, height)
+	fillRect(gtx, image.Rectangle{Max: size}, th.Surface)
+	fillRect(gtx, image.Rect(0, size.Y-gtx.Dp(1), size.X, size.Y), th.Border)
+	middle := func(r recorded) int { return (size.Y - r.dims.Size.Y) / 2 }
+
+	h.placed = h.placed[:0]
+	place := func(r recorded, x int) {
+		p := image.Pt(x, middle(r))
+		r.at(gtx, p)
+		h.placed = append(h.placed, image.Rectangle{Min: p, Max: p.Add(r.dims.Size)})
+	}
+	x := pad
+	place(left[0], x)
+	x += left[0].dims.Size.X + gap
+	if showSel {
+		d := gtx.Dp(19)
+		fillRect(gtx, image.Rect(x, (size.Y-d)/2, x+divider, (size.Y+d)/2), th.Border)
+		x += divider + gap
+		place(sel, x)
+	}
+	ex := size.X - pad
 	for i := len(end) - 1; i >= 0; i-- {
 		ex -= end[i].dims.Size.X
-		end[i].at(gtx, image.Pt(ex, middle(end[i])))
-		ex -= gtx.Dp(endGap)
+		place(end[i], ex)
+		ex -= endGap
 	}
 	return layout.Dimensions{Size: size}
 }
 
-// brand is the tessera mark, a 2×2 grid of squares, and the app name.
-func (h *Header) brand(gtx layout.Context, th *theme.Theme) layout.Dimensions {
-	name := recordLabel(gtx, th, "tessera", theme.TextBrand, th.Fg, font.Font{Typeface: theme.Body.Typeface, Weight: 250})
+// brand is the tessera mark, a 2×2 grid of squares, and, if name is
+// set, the app name.
+func brand(gtx layout.Context, th *theme.Theme, name bool) layout.Dimensions {
+	text := recordLabel(gtx, th, "tessera", theme.TextBrand, th.Fg, font.Font{Typeface: theme.Body.Typeface, Weight: 250})
 	cell, gap := gtx.Dp(5), gtx.Dp(3)
 	mark := 2*cell + gap
-	top := (name.dims.Size.Y - mark) / 2
+	height := max(text.dims.Size.Y, mark)
+	top := (height - mark) / 2
 	for i := range 4 {
 		p := image.Pt(i%2*(cell+gap), top+i/2*(cell+gap))
 		paint.FillShape(gtx.Ops, th.Fg, clip.UniformRRect(image.Rectangle{Min: p, Max: p.Add(image.Pt(cell, cell))}, gtx.Dp(1)).Op(gtx.Ops))
 	}
-	name.at(gtx, image.Pt(mark+gtx.Dp(9), 0))
-	return layout.Dimensions{Size: image.Pt(mark+gtx.Dp(9)+name.dims.Size.X, name.dims.Size.Y)}
+	if !name {
+		return layout.Dimensions{Size: image.Pt(mark, height)}
+	}
+	text.at(gtx, image.Pt(mark+gtx.Dp(9), 0))
+	return layout.Dimensions{Size: image.Pt(mark+gtx.Dp(9)+text.dims.Size.X, height)}
+}
+
+// gridIcon is Edit's compact icon: a 2×2 grid of outlined squares, as
+// panels on a grid.
+func gridIcon(gtx layout.Context, side int, c color.NRGBA) {
+	cell := side * 3 / 8
+	gap := side - 2*cell
+	line := max(gtx.Dp(1), 1)
+	for i := range 4 {
+		p := image.Pt(i%2*(cell+gap), i/2*(cell+gap))
+		strokeRRect(gtx, image.Rectangle{Min: p, Max: p.Add(image.Pt(cell, cell))}, gtx.Dp(1), line, c)
+	}
 }
 
 // halfDisc is ◐: a circle whose left half is filled.

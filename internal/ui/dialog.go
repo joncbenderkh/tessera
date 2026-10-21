@@ -119,23 +119,12 @@ func (d *Dialog) Layout(gtx layout.Context, th *theme.Theme) layout.Dimensions {
 	return layout.Dimensions{Size: area}
 }
 
-// content is the title, subtitle, body, and buttons, top to bottom. The
-// body gets the height the rest leave, and scrolls if it needs more.
+// content is the title, subtitle, body, and buttons, top to bottom.
+// Close's row is laid out first and always shown; the headings get the
+// height left, clipped if they need more, and the body what remains
+// after them, scrolling if it needs more.
 func (d *Dialog) content(gtx layout.Context, th *theme.Theme) layout.Dimensions {
 	gtx.Constraints.Min = image.Point{}
-	var parts []recorded
-	// Title and subtitle are capped, so a long one cannot push Close
-	// out of the window.
-	l := label(th, d.Title, theme.TextDialog, th.Fg, font.Font{Typeface: theme.Body.Typeface, Weight: font.Bold})
-	l.MaxLines = 2
-	parts = append(parts, record(gtx, func(gtx layout.Context) layout.Dimensions {
-		return layout.Inset{Bottom: 10}.Layout(gtx, l.Layout)
-	}))
-	if d.Subtitle != "" {
-		l := label(th, d.Subtitle, theme.TextSmall, th.Muted, theme.Body)
-		l.MaxLines = 3
-		parts = append(parts, record(gtx, l.Layout))
-	}
 	buttons := record(gtx, func(gtx layout.Context) layout.Dimensions {
 		return layout.Inset{Top: 18}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
 			gtx.Constraints.Min.X = gtx.Constraints.Max.X
@@ -144,26 +133,41 @@ func (d *Dialog) content(gtx layout.Context, th *theme.Theme) layout.Dimensions 
 			})
 		})
 	})
-	if d.Body != "" {
-		used := buttons.dims.Size.Y
-		for _, p := range parts {
-			used += p.dims.Size.Y
+	avail := max(gtx.Constraints.Max.Y-buttons.dims.Size.Y, 0)
+	headings := record(gtx, func(gtx layout.Context) layout.Dimensions {
+		title := label(th, d.Title, theme.TextDialog, th.Fg, font.Font{Typeface: theme.Body.Typeface, Weight: font.Bold})
+		title.MaxLines = 2
+		children := []layout.FlexChild{layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			return layout.Inset{Bottom: 10}.Layout(gtx, title.Layout)
+		})}
+		if d.Subtitle != "" {
+			sub := label(th, d.Subtitle, theme.TextSmall, th.Muted, theme.Body)
+			sub.MaxLines = 3
+			children = append(children, layout.Rigid(sub.Layout))
 		}
+		return layout.Flex{Axis: layout.Vertical}.Layout(gtx, children...)
+	})
+	headings.dims.Size.Y = min(headings.dims.Size.Y, avail)
+
+	var size image.Point
+	place := func(r recorded) {
+		r.at(gtx, image.Pt(0, size.Y))
+		size.X = max(size.X, r.dims.Size.X)
+		size.Y += r.dims.Size.Y
+	}
+	clipped := clip.Rect{Max: headings.dims.Size}.Push(gtx.Ops)
+	place(headings)
+	clipped.Pop()
+	if d.Body != "" {
 		body := gtx
-		body.Constraints.Max.Y = max(gtx.Constraints.Max.Y-used, 0)
-		parts = append(parts, record(body, func(gtx layout.Context) layout.Dimensions {
+		body.Constraints.Max.Y = avail - headings.dims.Size.Y
+		place(record(body, func(gtx layout.Context) layout.Dimensions {
 			return layout.Inset{Top: 18}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
 				return d.body(gtx, th)
 			})
 		}))
 	}
-	parts = append(parts, buttons)
-	var size image.Point
-	for _, p := range parts {
-		p.at(gtx, image.Pt(0, size.Y))
-		size.X = max(size.X, p.dims.Size.X)
-		size.Y += p.dims.Size.Y
-	}
+	place(buttons)
 	return layout.Dimensions{Size: size}
 }
 

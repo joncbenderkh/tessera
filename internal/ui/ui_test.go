@@ -97,6 +97,18 @@ func TestHeaderLayout(t *testing.T) {
 	}
 }
 
+func TestButtonFitsLargeText(t *testing.T) {
+	var r input.Router
+	gtx := context(&r, image.Pt(400, 400), time.Now())
+	gtx.Metric.PxPerSp = 3
+	gtx.Constraints.Min = image.Point{}
+	b := Button{Icon: true}
+	dims := b.Layout(gtx, testTheme, "☼")
+	if glyph := gtx.Sp(theme.TextIcon); dims.Size.Y < glyph || dims.Size.X < glyph {
+		t.Fatalf("button %v is smaller than its %d px glyph", dims.Size, glyph)
+	}
+}
+
 func TestHeaderButtonsClick(t *testing.T) {
 	size := image.Pt(1440, 900)
 	for _, tt := range []struct {
@@ -127,6 +139,31 @@ func TestHeaderButtonsClick(t *testing.T) {
 				t.Fatal("a click on the button was not seen")
 			}
 		})
+	}
+}
+
+func TestHeaderFitsLargeText(t *testing.T) {
+	var r input.Router
+	for _, scale := range []float32{1, 1.5, 2, 3} {
+		for _, w := range []int{360, 560, 1000, 1440} {
+			var h Header
+			gtx := context(&r, image.Pt(w, 900), time.Now())
+			gtx.Metric.PxPerSp = scale
+			dims := h.Layout(gtx, testTheme, Status{Text: "10 panels · 1 starting · 1 error"})
+			for i, a := range h.placed {
+				if !a.In(image.Rectangle{Max: dims.Size}) {
+					t.Errorf("text ×%v, %d dp: item %d at %v is outside the %v header", scale, w, i, a, dims.Size)
+				}
+				for _, b := range h.placed[i+1:] {
+					if a.Overlaps(b) {
+						t.Errorf("text ×%v, %d dp: items %v and %v overlap", scale, w, a, b)
+					}
+				}
+			}
+			if len(h.placed) < 3 {
+				t.Errorf("text ×%v, %d dp: only %d items placed, want the brand, Edit, and theme", scale, w, len(h.placed))
+			}
+		}
 	}
 }
 
@@ -221,13 +258,13 @@ func TestDialogKeepsCloseInView(t *testing.T) {
 	long := strings.Repeat("a long heading that wraps ", 40)
 	var d Dialog
 	d.Open(long, long, strings.Repeat("line\n", 50))
-	gtx := context(&r, size, time.Now())
-	d.Layout(gtx, testTheme)
-	r.Frame(gtx.Ops)
-	// Close sits at the card's bottom right, 24 dp in from its edges.
-	inner := context(&r, image.Pt(size.X*9/10-48, size.Y*9/10-48), time.Now())
-	if h := d.content(inner, testTheme).Size.Y; h > inner.Constraints.Max.Y {
-		t.Fatalf("content is %d px tall in %d px", h, inner.Constraints.Max.Y)
+	for _, scale := range []float32{1, 2, 3} {
+		// Close sits at the card's bottom right, 24 dp in from its edges.
+		inner := context(&r, image.Pt(size.X*9/10-48, size.Y*9/10-48), time.Now())
+		inner.Metric.PxPerSp = scale
+		if h := d.content(inner, testTheme).Size.Y; h > inner.Constraints.Max.Y {
+			t.Errorf("text ×%v: content is %d px tall in %d px", scale, h, inner.Constraints.Max.Y)
+		}
 	}
 }
 

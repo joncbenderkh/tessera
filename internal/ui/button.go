@@ -20,8 +20,9 @@ import (
 // shows a focus ring, and activates on click, Return, or Space.
 type Button struct {
 	widget.Clickable
-	// Pressed draws the button inverted, as a toggle that is on.
-	Pressed bool
+	// Toggle makes it a toggle button, and Pressed draws it inverted, as
+	// a toggle that is on.
+	Toggle, Pressed bool
 	// Icon makes it a square 32 dp icon button with larger text.
 	Icon bool
 	// Description is what the button does, for screen readers; an icon
@@ -55,14 +56,17 @@ func (b *Button) Layout(gtx layout.Context, th *theme.Theme, label string) layou
 				return layout.Dimensions{Size: image.Pt(side, side)}
 			})
 		}
-		height := gtx.Dp(32)
+		// 32 dp, or more if a large text scale needs it.
+		height := max(gtx.Dp(32), text.dims.Size.Y+gtx.Dp(theme.Space8))
 		width := max(text.dims.Size.X+2*gtx.Dp(pad), height)
 		if b.Icon {
 			width = height
 		}
 		bounds := image.Rectangle{Max: image.Pt(width, height)}
 		semantic.Button.Add(gtx.Ops)
-		semantic.SelectedOp(b.Pressed).Add(gtx.Ops)
+		if b.Toggle {
+			semantic.SelectedOp(b.Pressed).Add(gtx.Ops)
+		}
 		if b.Description != "" {
 			semantic.DescriptionOp(b.Description).Add(gtx.Ops)
 		}
