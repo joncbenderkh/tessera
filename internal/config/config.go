@@ -27,9 +27,20 @@ const FileName = "config.yaml"
 // Config is the whole user config file.
 type Config struct {
 	Version int     `yaml:"version"`
+	Theme   Theme   `yaml:"theme,omitempty"`
 	Grid    Grid    `yaml:"grid"`
 	Panels  []Panel `yaml:"panels"`
 }
+
+// Theme is the window's colour theme. The zero value means the default,
+// ThemeDark.
+type Theme string
+
+// The themes a config may name.
+const (
+	ThemeDark  Theme = "dark"
+	ThemeLight Theme = "light"
+)
 
 // Grid sets the shape of the panel grid.
 type Grid struct {
@@ -153,7 +164,11 @@ func decodeInt(dst *int, data []byte) error {
 // string is quoted unless the core schema reads it back unchanged.
 func Marshal(c Config) ([]byte, error) {
 	var b strings.Builder
-	fmt.Fprintf(&b, "version: %d\ngrid:\n  columns: %d\n  row_height: %d\n", c.Version, c.Grid.Columns, c.Grid.RowHeight)
+	fmt.Fprintf(&b, "version: %d\n", c.Version)
+	if c.Theme != "" {
+		fmt.Fprintf(&b, "theme: %s\n", scalarString(string(c.Theme)))
+	}
+	fmt.Fprintf(&b, "grid:\n  columns: %d\n  row_height: %d\n", c.Grid.Columns, c.Grid.RowHeight)
 	if len(c.Panels) == 0 {
 		b.WriteString("panels: []\n")
 		return []byte(b.String()), nil
@@ -203,12 +218,69 @@ func Save(path string, c Config) error {
 	if err != nil {
 		return err
 	}
-	return writeAtomic(path, data)
+	return writeAtomic(path, data, nil)
+}
+
+// ErrChanged is Update's error when the file changed while it was being
+// updated, and was left as it was.
+var ErrChanged = errors.New("the file changed while it was being updated")
+
+// Update reads the config at path, applies change to it, and saves it. If
+// the file changes meanwhile, in its contents, modification time, or by
+// being replaced, Update leaves it alone and returns ErrChanged, so an
+// edit made in an editor is not lost. The check runs just before the final rename,
+// which narrows the window for losing such an edit but cannot close it.
+func Update(path string, change func(*Config)) error {
+	before, err := os.Stat(path)
+	if err != nil {
+		return err
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	c, err := Parse(data)
+	if err != nil {
+		return fmt.Errorf("%s: %w", path, err)
+	}
+	change(&c)
+	if err := c.Validate(); err != nil {
+		return err
+	}
+	updated, err := Marshal(c)
+	if err != nil {
+		return err
+	}
+	return writeAtomic(path, updated, func() error {
+		now, err := os.Stat(path)
+		if err != nil {
+			return err
+		}
+		if !os.SameFile(before, now) || now.Size() != before.Size() || !now.ModTime().Equal(before.ModTime()) {
+			return ErrChanged
+		}
+		// A coarse clock can hide an edit of the same size, so compare
+		// the contents too.
+		current, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		if !bytes.Equal(current, data) {
+			return ErrChanged
+		}
+		return nil
+	})
 }
 
 // writeAtomic keeps the permissions of the file it replaces. A new file is
-// private (0600), since plugin settings may hold credentials.
-func writeAtomic(path string, data []byte) (err error) {
+// private (0600), since plugin settings may hold credentials. A symlink to
+// an existing file is followed, so that file is replaced and the link
+// kept; a dangling one is replaced. If check is not nil, it runs just
+// before the rename, which happens only if it returns nil.
+func writeAtomic(path string, data []byte, check func() error) (err error) {
+	if target, err := filepath.EvalSymlinks(path); err == nil {
+		path = target
+	}
 	perm := fs.FileMode(0o600)
 	if info, err := os.Stat(path); err == nil {
 		perm = info.Mode().Perm()
@@ -238,6 +310,11 @@ func writeAtomic(path string, data []byte) (err error) {
 	}
 	if err = tmp.Close(); err != nil {
 		return err
+	}
+	if check != nil {
+		if err = check(); err != nil {
+			return err
+		}
 	}
 	return os.Rename(tmp.Name(), path)
 }

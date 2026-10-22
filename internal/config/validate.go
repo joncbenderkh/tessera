@@ -29,6 +29,9 @@ func (c Config) Validate() error {
 	if c.Version != SchemaVersion {
 		errs = append(errs, fmt.Errorf("version %d is not supported (want %d)", c.Version, SchemaVersion))
 	}
+	if c.Theme != "" && c.Theme != ThemeDark && c.Theme != ThemeLight {
+		errs = append(errs, fmt.Errorf("theme must be %q or %q, got %q", ThemeDark, ThemeLight, c.Theme))
+	}
 	if c.Grid.Columns < 1 {
 		errs = append(errs, fmt.Errorf("grid.columns must be at least 1, got %d", c.Grid.Columns))
 	}

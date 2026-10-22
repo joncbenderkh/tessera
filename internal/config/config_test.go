@@ -3,6 +3,7 @@
 package config
 
 import (
+	"bytes"
 	"fmt"
 	"math"
 	"os"
@@ -343,6 +344,47 @@ func TestValidateGrid(t *testing.T) {
 	}
 }
 
+func TestParseTheme(t *testing.T) {
+	for _, tt := range []struct {
+		value string
+		want  Theme
+		err   string
+	}{
+		{"light", ThemeLight, ""},
+		{"dark", ThemeDark, ""},
+		{`""`, "", ""},
+		{"blue", "", `theme must be "dark" or "light"`},
+		{"Light", "", `theme must be "dark" or "light"`},
+	} {
+		t.Run(tt.value, func(t *testing.T) {
+			c, err := Parse([]byte("version: 1\ntheme: " + tt.value + "\ngrid:\n  columns: 1\n  row_height: 1\npanels: []\n"))
+			if tt.err != "" {
+				if err == nil || !strings.Contains(err.Error(), tt.err) {
+					t.Fatalf("error %v does not contain %q", err, tt.err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if c.Theme != tt.want {
+				t.Fatalf("theme %q, want %q", c.Theme, tt.want)
+			}
+			data, err := Marshal(c)
+			if err != nil {
+				t.Fatal(err)
+			}
+			again, err := Parse(data)
+			if err != nil {
+				t.Fatalf("reparsing %q: %v", data, err)
+			}
+			if again.Theme != tt.want {
+				t.Fatalf("round trip gave theme %q, want %q", again.Theme, tt.want)
+			}
+		})
+	}
+}
+
 func TestLoadWritesDefaultOnFirstRun(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "tessera", FileName)
 	c, err := Load(path)
@@ -424,5 +466,132 @@ func TestSavePermissions(t *testing.T) {
 	}
 	if got := mode(); got != 0o640 {
 		t.Fatalf("replaced config has mode %o, want the existing 640", got)
+	}
+}
+
+func TestSaveFollowsSymlink(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "dotfiles.yaml")
+	link := filepath.Join(dir, FileName)
+	if err := Save(target, Default()); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, link); err != nil {
+		t.Skipf("cannot create a symlink here: %v", err)
+	}
+	c := Default()
+	c.Theme = ThemeLight
+	if err := Save(link, c); err != nil {
+		t.Fatal(err)
+	}
+	if info, err := os.Lstat(link); err != nil || info.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("the symlink was replaced (lstat %v, %v)", info, err)
+	}
+	got, err := Load(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Theme != ThemeLight {
+		t.Fatalf("the link's target has theme %q, want light", got.Theme)
+	}
+}
+
+func TestUpdate(t *testing.T) {
+	path := filepath.Join(t.TempDir(), FileName)
+	if err := Save(path, Default()); err != nil {
+		t.Fatal(err)
+	}
+	if err := Update(path, func(c *Config) { c.Theme = ThemeLight }); err != nil {
+		t.Fatal(err)
+	}
+	got, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Theme != ThemeLight {
+		t.Fatalf("theme %q, want light", got.Theme)
+	}
+}
+
+func TestUpdateLeavesAFileThatChanged(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, FileName)
+	if err := Save(path, Default()); err != nil {
+		t.Fatal(err)
+	}
+	edited := "# edited\nversion: 1\ngrid:\n  columns: 6\n  row_height: 180\npanels: []\n"
+	err := Update(path, func(c *Config) {
+		c.Theme = ThemeLight
+		// An editor saves the file while the update is under way.
+		if err := os.WriteFile(path, []byte(edited), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	})
+	if err != ErrChanged {
+		t.Fatalf("error %v, want ErrChanged", err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != edited {
+		t.Fatalf("the editor's save was overwritten:\n%s", data)
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("expected only %s in the directory, found %d entries", FileName, len(entries))
+	}
+}
+
+func TestMarshalQuotesTheme(t *testing.T) {
+	c := Default()
+	c.Theme = "x\npanels: [a]"
+	data, err := Marshal(c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = Parse(data)
+	if err == nil || !strings.Contains(err.Error(), "theme must be") {
+		t.Fatalf("parsing %q: error %v, want only the theme rejected", data, err)
+	}
+}
+
+func TestUpdateSpotsAnEditWithinOneTick(t *testing.T) {
+	path := filepath.Join(t.TempDir(), FileName)
+	if err := Save(path, Default()); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	original, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	edited := bytes.Replace(original, []byte("version: 1"), []byte("version: 2"), 1)
+	err = Update(path, func(c *Config) {
+		c.Theme = ThemeLight
+		// An editor saves the file in place, at the same size, within
+		// one tick of a coarse clock.
+		if err := os.WriteFile(path, edited, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chtimes(path, before.ModTime(), before.ModTime()); err != nil {
+			t.Fatal(err)
+		}
+	})
+	if err != ErrChanged {
+		t.Fatalf("error %v, want ErrChanged", err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(data, edited) {
+		t.Fatalf("the editor's save was overwritten:\n%s", data)
 	}
 }
