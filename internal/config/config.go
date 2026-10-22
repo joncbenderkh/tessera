@@ -226,9 +226,9 @@ func Save(path string, c Config) error {
 var ErrChanged = errors.New("the file changed while it was being updated")
 
 // Update reads the config at path, applies change to it, and saves it. If
-// the file changes meanwhile, by size, modification time, or being
-// replaced, Update leaves it alone and returns ErrChanged, so an edit made
-// in an editor is not lost. The check runs just before the final rename,
+// the file changes meanwhile, in its contents, modification time, or by
+// being replaced, Update leaves it alone and returns ErrChanged, so an
+// edit made in an editor is not lost. The check runs just before the final rename,
 // which narrows the window for losing such an edit but cannot close it.
 func Update(path string, change func(*Config)) error {
 	before, err := os.Stat(path)
@@ -247,15 +247,25 @@ func Update(path string, change func(*Config)) error {
 	if err := c.Validate(); err != nil {
 		return err
 	}
-	if data, err = Marshal(c); err != nil {
+	updated, err := Marshal(c)
+	if err != nil {
 		return err
 	}
-	return writeAtomic(path, data, func() error {
+	return writeAtomic(path, updated, func() error {
 		now, err := os.Stat(path)
 		if err != nil {
 			return err
 		}
 		if !os.SameFile(before, now) || now.Size() != before.Size() || !now.ModTime().Equal(before.ModTime()) {
+			return ErrChanged
+		}
+		// A coarse clock can hide an edit of the same size, so compare
+		// the contents too.
+		current, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		if !bytes.Equal(current, data) {
 			return ErrChanged
 		}
 		return nil

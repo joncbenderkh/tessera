@@ -3,6 +3,7 @@
 package config
 
 import (
+	"bytes"
 	"fmt"
 	"math"
 	"os"
@@ -555,5 +556,42 @@ func TestMarshalQuotesTheme(t *testing.T) {
 	_, err = Parse(data)
 	if err == nil || !strings.Contains(err.Error(), "theme must be") {
 		t.Fatalf("parsing %q: error %v, want only the theme rejected", data, err)
+	}
+}
+
+func TestUpdateSpotsAnEditWithinOneTick(t *testing.T) {
+	path := filepath.Join(t.TempDir(), FileName)
+	if err := Save(path, Default()); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	original, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	edited := bytes.Replace(original, []byte("version: 1"), []byte("version: 2"), 1)
+	err = Update(path, func(c *Config) {
+		c.Theme = ThemeLight
+		// An editor saves the file in place, at the same size, within
+		// one tick of a coarse clock.
+		if err := os.WriteFile(path, edited, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chtimes(path, before.ModTime(), before.ModTime()); err != nil {
+			t.Fatal(err)
+		}
+	})
+	if err != ErrChanged {
+		t.Fatalf("error %v, want ErrChanged", err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(data, edited) {
+		t.Fatalf("the editor's save was overwritten:\n%s", data)
 	}
 }
