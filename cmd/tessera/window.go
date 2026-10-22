@@ -3,9 +3,13 @@
 package main
 
 import (
+	"errors"
+	"image"
+	"strings"
 	"sync"
 
 	"gioui.org/app"
+	"gioui.org/layout"
 	"gioui.org/op"
 	"gioui.org/op/paint"
 
@@ -15,22 +19,30 @@ import (
 	"github.com/joncbenderkh/tessera/internal/ui/theme"
 )
 
-// run draws the window until it is closed: the header over an empty
-// content area, which the grid (#10) will fill, and the toast and
-// dialog over both.
-func run(window *app.Window, plugins *pluginhost.Manager, initial config.Theme, saver *themeSaver) error {
+// reload is the config file as Watch read it after a change, or why it
+// could not be used.
+type reload struct {
+	cfg config.Config
+	err error
+}
+
+// run draws the window until it is closed: the header, the grid of
+// cfg's panels below it, and the toast and dialog over both. Each
+// reload replaces cfg; one that failed keeps the last good one.
+func run(window *app.Window, plugins *pluginhost.Manager, cfg config.Config, reloads <-chan reload, saver *themeSaver) error {
 	go func() {
 		for range plugins.Changed() {
 			window.Invalidate()
 		}
 	}()
 	shaper := theme.NewShaper(true)
-	dark := initial != config.ThemeLight
+	dark := cfg.Theme != config.ThemeLight
 	th := theme.New(dark, shaper)
 
 	var (
 		ops    op.Ops
 		header ui.Header
+		grid   ui.Grid
 		toast  ui.Toaster
 		dialog ui.Dialog
 	)
@@ -44,6 +56,19 @@ func run(window *app.Window, plugins *pluginhost.Manager, initial config.Theme, 
 			select {
 			case err := <-saver.done:
 				toast.Show("Theme not saved; it applies until tessera restarts: " + err.Error())
+			default:
+			}
+			select {
+			case r := <-reloads:
+				if r.err != nil {
+					toast.Show("config.yaml not applied: " + r.err.Error())
+					break
+				}
+				cfg = r.cfg
+				if d := cfg.Theme != config.ThemeLight; d != dark {
+					dark = d
+					th = theme.New(dark, shaper)
+				}
 			default:
 			}
 			behind := gtx
@@ -60,11 +85,45 @@ func run(window *app.Window, plugins *pluginhost.Manager, initial config.Theme, 
 				toast.Show("Layout editing is not available yet")
 			}
 			paint.Fill(gtx.Ops, th.Bg)
-			header.Layout(behind, th, ui.StatusOf(plugins.States()))
+			states := plugins.States()
+			head := header.Layout(behind, th, ui.StatusOf(states))
+			content := behind
+			content.Constraints = layout.Exact(image.Pt(gtx.Constraints.Max.X, max(gtx.Constraints.Max.Y-head.Size.Y, 0)))
+			st := op.Offset(image.Pt(0, head.Size.Y)).Push(gtx.Ops)
+			_, actions := grid.Layout(content, th, cfg, states)
+			st.Pop()
+			for _, a := range actions {
+				act(a, plugins, states, &toast, &dialog)
+			}
 			toast.Layout(gtx, th)
 			dialog.Layout(gtx, th)
 			e.Frame(gtx.Ops)
 		}
+	}
+}
+
+// act carries out what the user asked for from a tile.
+func act(a ui.Action, plugins *pluginhost.Manager, states []pluginhost.PanelState, toast *ui.Toaster, dialog *ui.Dialog) {
+	switch a.Kind {
+	case ui.ActionConfigure:
+		toast.Show("Configuring panels is not available yet")
+	case ui.ActionDisable:
+		toast.Show("Disabling panels is not available yet")
+	case ui.ActionRestart:
+		switch err := plugins.Restart(a.Panel); {
+		case errors.Is(err, pluginhost.ErrStarting):
+			toast.Show("Already restarting")
+		case err != nil:
+			toast.Show("Not restarted: " + err.Error())
+		}
+	case ui.ActionLogs:
+		plugin := a.Panel
+		for _, s := range states {
+			if s.ID == a.Panel {
+				plugin = s.Plugin
+			}
+		}
+		dialog.Open("Logs: "+a.Panel, "Plugin "+plugin+", newest last", strings.Join(plugins.Logs(a.Panel), "\n"))
 	}
 }
 

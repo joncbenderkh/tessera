@@ -5,6 +5,7 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"log"
@@ -58,6 +59,24 @@ func main() {
 		os.Exit(128 + int(sig.(syscall.Signal)))
 	}()
 
+	reloads := make(chan reload, 1)
+	go func() {
+		err := config.Watch(context.Background(), *configPath, func(c config.Config, err error) {
+			if err == nil {
+				plugins.Apply(c)
+			}
+			select { // only the latest matters
+			case <-reloads:
+			default:
+			}
+			reloads <- reload{c, err}
+			window.Invalidate()
+		})
+		if err != nil {
+			log.Printf("not watching %s for changes: %v", *configPath, err)
+		}
+	}()
+
 	go func() {
 		defer func() {
 			if r := recover(); r != nil {
@@ -66,7 +85,7 @@ func main() {
 			}
 		}()
 		window.Option(app.Title("tessera"), app.Size(unit.Dp(1440), unit.Dp(900)), app.MinSize(unit.Dp(360), unit.Dp(240)))
-		err := run(window, plugins, cfg.Theme, saver)
+		err := run(window, plugins, cfg, reloads, saver)
 		plugins.Close()
 		if err != nil {
 			log.Fatal(err)

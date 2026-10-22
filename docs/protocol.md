@@ -124,7 +124,8 @@ host                                    plugin
 ```
 
 - **Configure** is called again whenever the panel's settings or size
-  change. A watching plugin then sends a fresh view on its open stream,
+  change. The size is the panel's `w` and `h` in the config, which a
+  narrow window's layout does not change. A watching plugin then sends a fresh view on its open stream,
   and a polled plugin is rendered again right away. If the plugin
   answers `INVALID_ARGUMENT`, it keeps its previous settings, and the
   host shows the message in an error tile and cancels any open Watch or

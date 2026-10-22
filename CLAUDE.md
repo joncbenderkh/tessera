@@ -77,7 +77,9 @@ dialogs). Edit mode must be able to re-enable any disabled panel.
 - `internal/config`: loading, validating, saving, and watching the user
   config.
 - `internal/ui`: the host-owned UI drawn with Gio: the window header,
-  the button, and the toast and dialog primitives. `internal/ui/theme`
+  the grid and its tiles (placement in `Arrange`, the menu, and the
+  starting and error bodies), the button, and the toast and dialog
+  primitives. `internal/ui/theme`
   holds the design tokens (dark and light palettes, spacing, radius, and
   type scales) taken from `docs/design`.
 - `internal/pluginhost`: finding, launching, describing, configuring,
@@ -148,22 +150,24 @@ bare binary, not a signed `.app` bundle.
 
 ## Status
 
-The module and source skeleton exist (#4): the host opens an empty Gio
-window, and `sdk/` and `plugins/` are placeholders. The backlog is tracked
-as GitHub issues. CI (#5), the release workflow (#6), the config file
-(#7), and plugin protocol v1 (#8) are in place. The host loads the config
-at startup but does not yet apply reloads; that comes with the grid (#10).
-The host launches, describes, and configures each enabled panel's plugin
-and shuts them all down on exit (#12), and supervises them: crashes and
-hangs restart with backoff, and each panel keeps its state and logs
-(#13). It reads each panel's view, from the Watch stream with its
-heartbeat or by polling Render, shows a polled panel whose Render
-fails as stale, and passes input events on (#14). The window has
-its header (app name, a single "Default" layout, plugin status, an
-Edit layout button whose edit mode is #15, and a theme toggle), dark
-and light themes saved in the config, and toast and dialog primitives
-(#9). The content area is still empty: the grid is #10, rendering
-views #11, and the SDK #18.
+The module and source skeleton exist (#4); `sdk/` and `plugins/` are
+placeholders. The backlog is tracked as GitHub issues. CI (#5), the
+release workflow (#6), the config file (#7), and plugin protocol v1
+(#8) are in place. The host launches, describes, and configures each
+enabled panel's plugin and shuts them all down on exit (#12), and
+supervises them: crashes and hangs restart with backoff, and each
+panel keeps its state and logs (#13). It reads each panel's view, from
+the Watch stream with its heartbeat or by polling Render, shows a
+polled panel whose Render fails as stale, and passes input events on
+(#14). The window has its header (app name, a single "Default" layout,
+plugin status, an Edit layout button whose edit mode is #15, and a
+theme toggle), dark and light themes saved in the config, and toast
+and dialog primitives (#9). The grid lays the enabled panels out,
+compacted upward and flowed into fewer columns in narrow windows, as
+tiles with a title, the plugin on hover, an options menu whose items
+are stubs until #15 and #16, and a body for starting and failed
+panels, with Restart and Logs; config changes apply live (#10). Tile
+bodies stay empty until views are rendered (#11); the SDK is #18.
 
 ## Git workflow
 
