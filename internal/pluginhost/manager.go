@@ -343,11 +343,12 @@ func (m *Manager) supervise(pn *panel) {
 				s.State, s.Info = Live, inst.Info
 				pn.inst = inst
 			})
-			var exited, restart bool
+			var exited bool
+			var restart string // why it restarts, if it does
 			var lived time.Duration
 			exited, lived, restart, err = m.watchLive(pn, inst)
-			if restart {
-				m.event(pn, "restart requested")
+			if restart != "" {
+				m.event(pn, "%s", restart)
 				m.update(pn, func(s *PanelState) { s.State = Stopping })
 			} else if pn.ctx.Err() == nil {
 				m.stopping(pn, err)
@@ -364,7 +365,7 @@ func (m *Manager) supervise(pn *panel) {
 					m.note(pn, "plugin exited: %s", orUnknown(inst.ExitStatus()))
 				}
 				return
-			case restart:
+			case restart != "":
 				failures = 0
 				continue
 			}

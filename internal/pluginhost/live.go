@@ -47,8 +47,9 @@ const (
 const viewEvery = 33 * time.Millisecond
 
 // end says why watchLive stopped waiting: inst exited, Restart was
-// asked for, or neither, which is Close.
-type end struct{ exited, restart bool }
+// asked for, or neither, which is Close. changed marks a restart for
+// new settings or size.
+type end struct{ exited, restart, changed bool }
 
 // live is one live plugin's watch: its views, events, and health.
 type live struct {
@@ -71,14 +72,20 @@ type live struct {
 // live only until its last sign of life (see alive), since it may have
 // frozen right after, so the count of failures it resets agrees with
 // PanelState.Failures.
-func (m *Manager) watchLive(pn *panel, inst *Instance) (exited bool, lived time.Duration, restart bool, err error) {
+func (m *Manager) watchLive(pn *panel, inst *Instance) (exited bool, lived time.Duration, restart string, err error) {
 	w := &live{m: m, pn: pn, inst: inst, start: time.Now()}
 	w.lastOK = w.start
 	e, err := w.run()
 	if e.exited {
 		err = fmt.Errorf("plugin %q exited unexpectedly", w.name())
 	}
-	return e.exited, w.lastOK.Sub(w.start), e.restart, err
+	switch {
+	case e.changed:
+		restart = "settings or size changed; restarting"
+	case e.restart:
+		restart = "restart requested"
+	}
+	return e.exited, w.lastOK.Sub(w.start), restart, err
 }
 
 func (w *live) name() string { return w.inst.Info.GetName() }
@@ -197,6 +204,9 @@ func (w *live) run() (end, error) {
 			}
 		case <-pn.changed:
 			resumed()
+			if w.off { // new settings may fit the limits; only a relaunch shows views again
+				return end{restart: true, changed: true}, nil
+			}
 			cfg := m.config(pn)
 			stop, _, err := w.call(func(ctx context.Context) error {
 				return configure(ctx, inst, cfg, m.opts.CallTimeout)

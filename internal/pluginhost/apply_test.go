@@ -199,3 +199,42 @@ func TestSameSettings(t *testing.T) {
 		}
 	}
 }
+
+// A polled plugin configured again is rendered at once, not at its next
+// poll.
+func TestApplyRendersPolledPluginAgain(t *testing.T) {
+	dir := install(t, "polled-events")
+	logger, _ := newLogger()
+	opts := fast
+	opts.PollInterval = time.Hour // only the reconfigure makes it render
+	m := StartWith(panels("polled-events"), dir, logger, opts)
+	defer m.Close()
+	waitFor(t, m, "p0", "rendered", showing("render"))
+	cfg := panels("polled-events")
+	cfg.Panels[0].Settings = config.Settings{"units": "metric"}
+	m.Apply(cfg)
+	waitFor(t, m, "p0", "rendered after configuring again", showing("render,render"))
+}
+
+// A panel whose views stopped over a limit is relaunched when its
+// settings change, as a crashed one is: they may fit the limits now.
+func TestApplyRelaunchesPanelOverLimit(t *testing.T) {
+	dir := install(t, "big-view")
+	logger, _ := newLogger()
+	m := StartWith(panels("big-view"), dir, logger, fast)
+	defer m.Close()
+	waitFor(t, m, "p0", "refusing the view", func(s PanelState) bool { return s.ViewErr != nil })
+	cfg := panels("big-view")
+	cfg.Panels[0].Settings = config.Settings{"items": 10}
+	m.Apply(cfg)
+	deadline := time.Now().Add(5 * time.Second)
+	for countLines(m.Logs("p0"), "starting plugin") < 2 {
+		if time.Now().After(deadline) {
+			t.Fatalf("not relaunched after new settings:\n%s", strings.Join(m.Logs("p0"), "\n"))
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if logs := m.Logs("p0"); countLines(logs, "settings or size changed; restarting") != 1 || countLines(logs, "restart requested") != 0 {
+		t.Errorf("relaunch logged as:\n%s", strings.Join(logs, "\n"))
+	}
+}
