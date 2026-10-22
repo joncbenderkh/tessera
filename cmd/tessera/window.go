@@ -19,11 +19,44 @@ import (
 	"github.com/joncbenderkh/tessera/internal/ui/theme"
 )
 
-// reload is the config file as Watch read it after a change, or why it
-// could not be used.
+// reload is the latest valid config Watch read since the window last
+// looked, if any, and why a later change could not be used, if one
+// could not, as the toast shows it.
 type reload struct {
-	cfg config.Config
-	err error
+	cfg   config.Config
+	valid bool
+	err   error
+}
+
+// queue hands a change Watch reported to the window, folded into one
+// the window has not read yet: it keeps the latest valid config, which
+// Apply already runs, and the latest error, unless a valid config
+// followed it. Only Watch's goroutine calls it, so the send never
+// blocks.
+func queue(reloads chan reload, c config.Config, err error) {
+	var r reload
+	select {
+	case r = <-reloads:
+	default:
+	}
+	if err == nil {
+		r.cfg, r.valid, r.err = c, true, nil
+	} else {
+		r.err = err
+	}
+	reloads <- r
+}
+
+// themeOnReload is the theme to show, dark or not, after a reload
+// changes the file's theme from was to now. Only a change in the file
+// counts, so an edit elsewhere in it keeps a theme whose save failed,
+// and a save of the host's own still pending means the file is about
+// to hold the theme shown.
+func themeOnReload(shown, was, now, saving bool) bool {
+	if now == was || saving {
+		return shown
+	}
+	return now
 }
 
 // run draws the window until it is closed: the header, the grid of
@@ -37,6 +70,7 @@ func run(window *app.Window, plugins *pluginhost.Manager, cfg config.Config, rel
 	}()
 	shaper := theme.NewShaper(true)
 	dark := cfg.Theme != config.ThemeLight
+	fileDark := dark // the theme config.yaml held at the latest reload
 	th := theme.New(dark, shaper)
 
 	var (
@@ -61,11 +95,15 @@ func run(window *app.Window, plugins *pluginhost.Manager, cfg config.Config, rel
 			select {
 			case r := <-reloads:
 				if r.err != nil {
-					toast.Show("config.yaml not applied: " + r.err.Error())
+					toast.Show(r.err.Error())
+				}
+				if !r.valid {
 					break
 				}
 				cfg = r.cfg
-				if d := cfg.Theme != config.ThemeLight; d != dark {
+				was := fileDark
+				fileDark = cfg.Theme != config.ThemeLight
+				if d := themeOnReload(dark, was, fileDark, saver.pending()); d != dark {
 					dark = d
 					th = theme.New(dark, shaper)
 				}
@@ -95,8 +133,12 @@ func run(window *app.Window, plugins *pluginhost.Manager, cfg config.Config, rel
 			for _, a := range actions {
 				act(a, plugins, states, &toast, &dialog)
 			}
+			// Deferred after the tiles' popovers, which are deferred too, so
+			// the toast and the dialog stay on top of them.
+			over := op.Record(gtx.Ops)
 			toast.Layout(gtx, th)
 			dialog.Layout(gtx, th)
+			op.Defer(gtx.Ops, over.Stop())
 			e.Frame(gtx.Ops)
 		}
 	}
@@ -140,10 +182,11 @@ type themeSaver struct {
 	write      func(path string, dark bool) error // saveTheme if nil
 
 	mu      sync.Mutex // held while saving
-	want    sync.Mutex // guards dark, asked, handled and closed
+	want    sync.Mutex // guards dark, asked, handled, written and closed
 	dark    bool
 	asked   int // saves asked for so far
 	handled int // saves asked for when the latest write began
+	written int // saves asked for when the latest write ended
 	closed  bool
 	running sync.WaitGroup
 }
@@ -155,6 +198,13 @@ func (s *themeSaver) wait() {
 	s.closed = true
 	s.want.Unlock()
 	s.running.Wait()
+}
+
+// pending reports whether a save asked for has not been written yet.
+func (s *themeSaver) pending() bool {
+	s.want.Lock()
+	defer s.want.Unlock()
+	return s.asked != s.written
 }
 
 func (s *themeSaver) save(dark bool) {
@@ -186,6 +236,7 @@ func (s *themeSaver) save(dark bool) {
 		err := write(s.path, dark)
 		s.want.Lock()
 		superseded := s.asked != asked
+		s.written = asked
 		s.want.Unlock()
 		if err != nil && !superseded {
 			select {

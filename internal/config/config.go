@@ -193,19 +193,34 @@ func Marshal(c Config) ([]byte, error) {
 // Load reads the config at path. If the file does not exist, it writes
 // Default there and returns it.
 func Load(path string) (Config, error) {
+	c, _, err := Read(path)
+	return c, err
+}
+
+// Read is Load, and also returns the file's content, which Watch takes
+// as the content to compare the file with. A symlink to a file that is
+// not there is an error: writing Default would replace the link.
+func Read(path string) (Config, []byte, error) {
 	data, err := os.ReadFile(path)
 	if errors.Is(err, fs.ErrNotExist) {
+		if to, lerr := os.Readlink(path); lerr == nil {
+			return Config{}, nil, fmt.Errorf("%s is a link to %s, which does not exist", path, to)
+		}
 		c := Default()
-		return c, Save(path, c)
+		if err := Save(path, c); err != nil {
+			return c, nil, err
+		}
+		data, err := Marshal(c)
+		return c, data, err
 	}
 	if err != nil {
-		return Config{}, err
+		return Config{}, nil, err
 	}
 	c, err := Parse(data)
 	if err != nil {
-		return Config{}, fmt.Errorf("%s: %w", path, err)
+		return Config{}, nil, fmt.Errorf("%s: %w", path, err)
 	}
-	return c, nil
+	return c, data, nil
 }
 
 // Save validates c and writes it to path atomically: readers see either the

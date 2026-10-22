@@ -11,6 +11,7 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 
 	"gioui.org/app"
@@ -37,7 +38,7 @@ func main() {
 		}
 		*configPath = path
 	}
-	cfg, err := config.Load(*configPath)
+	cfg, read, err := config.Read(*configPath)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -61,19 +62,23 @@ func main() {
 
 	reloads := make(chan reload, 1)
 	go func() {
-		err := config.Watch(context.Background(), *configPath, func(c config.Config, err error) {
+		name := filepath.Base(*configPath)
+		err := config.Watch(context.Background(), *configPath, read, func(c config.Config, err error) {
+			if err != nil {
+				err = fmt.Errorf("%s not applied: %w", name, err)
+			}
+			// Queued first, so a frame that shows the new plugins' states
+			// lays out the new config.
+			queue(reloads, c, err)
 			if err == nil {
 				plugins.Apply(c)
 			}
-			select { // only the latest matters
-			case <-reloads:
-			default:
-			}
-			reloads <- reload{c, err}
 			window.Invalidate()
 		})
 		if err != nil {
 			log.Printf("not watching %s for changes: %v", *configPath, err)
+			queue(reloads, config.Config{}, fmt.Errorf("%s is not watched, so edits apply only after a restart: %w", name, err))
+			window.Invalidate()
 		}
 	}()
 

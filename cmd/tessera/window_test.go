@@ -3,6 +3,7 @@
 package main
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -122,5 +123,59 @@ func TestThemeSaverWritesQueuedSavesOnce(t *testing.T) {
 	s.wait()
 	if writes != 1 {
 		t.Fatalf("%d writes, want 1", writes)
+	}
+}
+
+// An invalid edit queued behind a valid one must not hide it: Apply
+// already runs the valid config, so the grid has to show it too.
+func TestQueueKeepsValidConfig(t *testing.T) {
+	reloads := make(chan reload, 1)
+	valid := config.Config{Version: 1, Theme: config.ThemeLight}
+	queue(reloads, valid, nil)
+	queue(reloads, config.Config{}, errors.New("line 3: bad"))
+	r := <-reloads
+	if !r.valid || r.cfg.Theme != config.ThemeLight || r.err == nil {
+		t.Errorf("after a valid then an invalid change: %+v, want the valid config and the error", r)
+	}
+
+	queue(reloads, config.Config{}, errors.New("line 3: bad"))
+	queue(reloads, valid, nil)
+	if r := <-reloads; !r.valid || r.err != nil {
+		t.Errorf("after an invalid then a valid change: %+v, want only the valid config", r)
+	}
+}
+
+func TestThemeOnReload(t *testing.T) {
+	for _, tt := range []struct {
+		name                    string
+		shown, was, now, saving bool
+		want                    bool
+	}{
+		{"the file's theme changed", false, false, true, false, true},
+		{"an edit elsewhere keeps a toggle whose save failed", true, false, false, false, true},
+		{"a pending save wins over the file", true, true, false, true, true},
+		{"the host's own save arrives", true, false, true, false, true},
+	} {
+		if got := themeOnReload(tt.shown, tt.was, tt.now, tt.saving); got != tt.want {
+			t.Errorf("%s: dark %t, want %t", tt.name, got, tt.want)
+		}
+	}
+}
+
+func TestThemeSaverPending(t *testing.T) {
+	release := make(chan struct{})
+	s := &themeSaver{done: make(chan error, 1), invalidate: func() {},
+		write: func(string, bool) error { <-release; return nil }}
+	if s.pending() {
+		t.Fatal("pending before any save")
+	}
+	s.save(true)
+	if !s.pending() {
+		t.Error("not pending while writing")
+	}
+	close(release)
+	s.wait()
+	if s.pending() {
+		t.Error("pending after the write")
 	}
 }
