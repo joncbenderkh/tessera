@@ -4,6 +4,7 @@ package ui
 
 import (
 	"image"
+	"slices"
 	"time"
 
 	"gioui.org/layout"
@@ -19,17 +20,21 @@ import (
 const ToastFor = 2800 * time.Millisecond
 
 // Toaster shows one short message at a time at the bottom of the window.
-// A new message replaces the one showing.
+// A new message waits for the ones before it to go.
 type Toaster struct {
-	text    string
-	pending bool      // shown by the next frame, which starts its clock
-	until   time.Time // when the message goes
+	text  string
+	until time.Time // when the message goes
+	next  []string  // waiting, oldest first
 }
 
-// Show puts text up for ToastFor from the next frame. The caller must
-// invalidate the window if Show is not called from a frame.
+// Show puts text up for ToastFor, from the next frame or once the
+// messages before it have gone; a message showing or waiting already is
+// not repeated. The caller must invalidate the window if Show is not
+// called from a frame.
 func (t *Toaster) Show(text string) {
-	t.text, t.pending = text, true
+	if text != t.text && !slices.Contains(t.next, text) {
+		t.next = append(t.next, text)
+	}
 }
 
 // Text is the message showing, or "".
@@ -38,15 +43,15 @@ func (t *Toaster) Text() string { return t.text }
 // Layout draws the toast over gtx's constraints, centred 24 dp above
 // the bottom edge, and asks for a frame when it is due to go.
 func (t *Toaster) Layout(gtx layout.Context, th *theme.Theme) layout.Dimensions {
-	if t.pending {
-		t.pending, t.until = false, gtx.Now.Add(ToastFor)
+	if t.text != "" && !gtx.Now.Before(t.until) {
+		t.text = ""
 	}
 	if t.text == "" {
-		return layout.Dimensions{}
-	}
-	if !gtx.Now.Before(t.until) {
-		t.text = ""
-		return layout.Dimensions{}
+		if len(t.next) == 0 {
+			return layout.Dimensions{}
+		}
+		t.text, t.until = t.next[0], gtx.Now.Add(ToastFor)
+		t.next = t.next[1:]
 	}
 	gtx.Execute(op.InvalidateCmd{At: t.until})
 
