@@ -371,6 +371,18 @@ func TestReadKeepsDanglingLink(t *testing.T) {
 	}
 }
 
+func TestReadRefusesDanglingDirectoryLink(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "tessera")
+	if err := os.Symlink(filepath.Join(root, "dotfiles", "tessera"), dir); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	_, _, err := Read(filepath.Join(dir, FileName))
+	if err == nil || !strings.Contains(err.Error(), dir+" is a link to") {
+		t.Errorf("Read: %v, want an error naming the linked directory", err)
+	}
+}
+
 // A link's target directory replaced by another of the same name, as a
 // dotfiles checkout can do, is watched again.
 func TestWatchFollowsReplacedTargetDirectory(t *testing.T) {
@@ -466,4 +478,106 @@ func repoint(t *testing.T, target, link string) {
 	if err := os.Rename(swap, link); err != nil {
 		t.Fatal(err)
 	}
+}
+
+// Only a link at the path itself is followed as one; a linked directory
+// above it is not, as the directory watch sees through it.
+func TestLinkTarget(t *testing.T) {
+	if err := os.Symlink(t.TempDir(), filepath.Join(t.TempDir(), "probe")); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	real := t.TempDir()
+	file := filepath.Join(real, FileName)
+	if err := Save(file, Default()); err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Join(t.TempDir(), "tessera")
+	if err := os.Symlink(real, dir); err != nil {
+		t.Fatal(err)
+	}
+	if got := linkTarget(filepath.Join(dir, FileName)); got != "" {
+		t.Errorf("in a linked directory: %q, want none", got)
+	}
+	link := filepath.Join(t.TempDir(), FileName)
+	if err := os.Symlink(file, link); err != nil {
+		t.Fatal(err)
+	}
+	want, err := filepath.EvalSymlinks(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := linkTarget(link); got != want {
+		t.Errorf("a linked file: %q, want %q", got, want)
+	}
+}
+
+func TestWatchReportsRecoveryFromReadError(t *testing.T) {
+	path := filepath.Join(t.TempDir(), FileName)
+	if err := Save(path, Default()); err != nil {
+		t.Fatal(err)
+	}
+	data := read(t, path)
+	ctx, cancel := context.WithCancel(context.Background())
+	changes := make(chan change, 8)
+	done := make(chan error, 1)
+	go func() {
+		done <- Watch(ctx, path, data, func(c Config, err error) { changes <- change{c, err} })
+	}()
+	defer func() {
+		cancel()
+		if err := <-done; err != nil {
+			t.Errorf("Watch: %v", err)
+		}
+	}()
+	time.Sleep(50 * time.Millisecond) // let the watcher register before writing
+	next := func(step string) change {
+		t.Helper()
+		select {
+		case c := <-changes:
+			return c
+		case <-time.After(5 * time.Second):
+			t.Fatalf("%s: no change reported", step)
+			return change{}
+		}
+	}
+
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	if c := next("removed"); c.err == nil {
+		t.Fatalf("removed: got %+v, want a read error", c)
+	}
+	// The same content back clears the error, though nothing changed.
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if c := next("restored"); c.err != nil || c.config.Grid != Default().Grid {
+		t.Fatalf("restored: got %+v, want the config without an error", c)
+	}
+}
+
+// A directory moved away and back, between two checks, is watched again:
+// moving it ended the watch on it.
+func TestWatchFollowsDirectoryMovedBack(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "tessera")
+	if err := os.Mkdir(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, FileName)
+	if err := Save(path, columns(4)); err != nil {
+		t.Fatal(err)
+	}
+	wait := watching(t, path)
+	if err := os.Rename(dir, dir+".moved"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(dir+".moved", dir); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(3 * settleDelay)
+	if err := Save(path, columns(7)); err != nil {
+		t.Fatal(err)
+	}
+	wait("edited after the move back", 7)
 }

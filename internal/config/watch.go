@@ -5,6 +5,7 @@ package config
 import (
 	"bytes"
 	"context"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"time"
@@ -92,8 +93,15 @@ func Watch(ctx context.Context, path string, from []byte, onChange func(Config, 
 				settle.Reset(settleDelay)
 			}
 		case err := <-watcher.Errors:
-			onChange(Config{}, err)
+			onChange(Config{}, &WatchError{err})
 		case event := <-watcher.Events:
+			// Moving or removing the directory ends its watch, though it
+			// may be back, the same directory, by the next check.
+			if filepath.Clean(event.Name) == dir && event.Has(fsnotify.Rename|fsnotify.Remove) {
+				dir = ""
+				settle.Reset(settleDelay)
+				continue
+			}
 			// Matched by name alone: an event names the file by the path
 			// its directory was watched under, and the content check
 			// below drops events for other files of the same name.
@@ -110,8 +118,11 @@ func Watch(ctx context.Context, path string, from []byte, onChange func(Config, 
 				}
 				continue
 			}
+			// After a read error, the content it last had is reported
+			// again, so the error is known to be over.
+			recovered := lastErr != ""
 			lastErr = ""
-			if bytes.Equal(data, last) {
+			if bytes.Equal(data, last) && !recovered {
 				continue
 			}
 			last = data
@@ -119,6 +130,13 @@ func Watch(ctx context.Context, path string, from []byte, onChange func(Config, 
 		}
 	}
 }
+
+// WatchError is an error in watching the file, such as missed events,
+// rather than in its content.
+type WatchError struct{ Err error }
+
+func (e *WatchError) Error() string { return "watching for changes: " + e.Err.Error() }
+func (e *WatchError) Unwrap() error { return e.Err }
 
 // same reports whether a and b are the same file.
 func same(a, b os.FileInfo) bool { return a != nil && b != nil && os.SameFile(a, b) }
@@ -129,6 +147,9 @@ func stat(path string) os.FileInfo {
 	if err != nil {
 		return nil
 	}
+	// On Windows, SameFile reads the file's ID by path on its first call;
+	// read it now, before the path can name another file.
+	os.SameFile(info, info)
 	return info
 }
 
@@ -142,10 +163,15 @@ func realDir(path string) string {
 }
 
 // linkTarget returns the file a symlink at path points to, or "" if path is
-// not a symlink or does not resolve.
+// not a symlink or does not resolve. A link only above path, such as a
+// linked config directory or a /home that links to /var/home, does not
+// count: the directory watch sees through it.
 func linkTarget(path string) string {
+	if info, err := os.Lstat(path); err != nil || info.Mode()&fs.ModeSymlink == 0 {
+		return ""
+	}
 	target, err := filepath.EvalSymlinks(path)
-	if err != nil || target == path {
+	if err != nil {
 		return ""
 	}
 	return filepath.Clean(target)

@@ -206,6 +206,13 @@ func Read(path string) (Config, []byte, error) {
 		if to, lerr := os.Readlink(path); lerr == nil {
 			return Config{}, nil, fmt.Errorf("%s is a link to %s, which does not exist", path, to)
 		}
+		// So is a linked directory, which Save cannot create.
+		dir := filepath.Dir(path)
+		if to, lerr := os.Readlink(dir); lerr == nil {
+			if _, serr := os.Stat(dir); serr != nil {
+				return Config{}, nil, fmt.Errorf("%s is a link to %s, which does not exist", dir, to)
+			}
+		}
 		c := Default()
 		if err := Save(path, c); err != nil {
 			return c, nil, err
@@ -290,7 +297,8 @@ func Update(path string, change func(*Config)) error {
 // writeAtomic keeps the permissions of the file it replaces. A new file is
 // private (0600), since plugin settings may hold credentials. A symlink to
 // an existing file is followed, so that file is replaced and the link
-// kept; a dangling one is replaced. If check is not nil, it runs just
+// kept; a dangling one would be replaced, so Read refuses one before any
+// write. If check is not nil, it runs just
 // before the rename, which happens only if it returns nil.
 func writeAtomic(path string, data []byte, check func() error) (err error) {
 	if target, err := filepath.EvalSymlinks(path); err == nil {
