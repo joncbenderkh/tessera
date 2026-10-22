@@ -3,6 +3,7 @@
 package ui
 
 import (
+	"cmp"
 	"errors"
 	"image"
 	"slices"
@@ -56,48 +57,52 @@ func TestArrange(t *testing.T) {
 		panel("d", 1, 0, 1, 2), panel("e", 1, 2, 1, 1),
 	}
 	for _, tt := range []struct {
-		name    string
-		panels  []config.Panel
-		columns int
-		want    []Cell
+		name       string
+		panels     []config.Panel
+		configured int // the config's columns, if not 4
+		columns    int
+		want       []Cell
 	}{
-		{"mockup", dashboard(), 4, []Cell{
+		{"mockup", dashboard(), 0, 4, []Cell{
 			cell("greeting", 0, 0, 4, 1), cell("clock", 0, 1, 1, 1), cell("compute", 1, 1, 2, 1),
 			cell("disk", 3, 1, 1, 1), cell("processes", 0, 2, 2, 2), cell("calendar", 2, 2, 1, 2),
 			cell("weather", 3, 2, 1, 1), cell("network", 3, 3, 1, 1),
 		}},
-		{"config order does not matter", shuffled, 4, []Cell{
+		{"config order does not matter", shuffled, 0, 4, []Cell{
 			cell("greeting", 0, 0, 4, 1), cell("clock", 0, 1, 1, 1), cell("compute", 1, 1, 2, 1),
 			cell("disk", 3, 1, 1, 1), cell("processes", 0, 2, 2, 2), cell("calendar", 2, 2, 1, 2),
 			cell("weather", 3, 2, 1, 1), cell("network", 3, 3, 1, 1),
 		}},
-		{"disabled greeting", withoutGreeting, 4, []Cell{
+		{"disabled greeting", withoutGreeting, 0, 4, []Cell{
 			cell("clock", 0, 0, 1, 1), cell("compute", 1, 0, 2, 1), cell("disk", 3, 0, 1, 1),
 			cell("processes", 0, 1, 2, 2), cell("calendar", 2, 1, 1, 2),
 			cell("weather", 3, 1, 1, 1), cell("network", 3, 2, 1, 1),
 		}},
-		{"removed from a column", slices.Delete(slices.Clone(column), 1, 2), 2, []Cell{
+		{"removed from a column", slices.Delete(slices.Clone(column), 1, 2), 2, 2, []Cell{
 			cell("a", 0, 0, 1, 1), cell("d", 1, 0, 1, 2), cell("c", 0, 1, 1, 1), cell("e", 1, 2, 1, 1),
 		}},
-		{"two columns", withoutGreeting, 2, []Cell{
+		// below cannot rise past wide, which tall keeps from rising.
+		{"never passes a panel above it", []config.Panel{
+			panel("tall", 1, 0, 1, 2), panel("wide", 0, 2, 2, 1), panel("below", 0, 5, 1, 1),
+		}, 2, 2, []Cell{
+			cell("tall", 1, 0, 1, 2), cell("wide", 0, 2, 2, 1), cell("below", 0, 3, 1, 1),
+		}},
+		{"two columns", withoutGreeting, 0, 2, []Cell{
 			cell("clock", 0, 0, 1, 1), cell("compute", 0, 1, 2, 1), cell("disk", 0, 2, 1, 1),
 			cell("processes", 0, 3, 2, 2), cell("calendar", 0, 5, 1, 2),
 			cell("weather", 1, 5, 1, 1), cell("network", 1, 6, 1, 1),
 		}},
-		{"one column", withoutGreeting, 1, []Cell{
+		{"one column", withoutGreeting, 0, 1, []Cell{
 			cell("clock", 0, 0, 1, 1), cell("compute", 0, 1, 1, 1), cell("disk", 0, 2, 1, 1),
 			cell("processes", 0, 3, 1, 2), cell("calendar", 0, 5, 1, 2),
 			cell("weather", 0, 7, 1, 1), cell("network", 0, 8, 1, 1),
 		}},
-		{"full width in one column", []config.Panel{panel("wide", 0, 0, 4, 1), panel("next", 0, 1, 1, 1)}, 1, []Cell{
+		{"full width in one column", []config.Panel{panel("wide", 0, 0, 4, 1), panel("next", 0, 1, 1, 1)}, 0, 1, []Cell{
 			cell("wide", 0, 0, 1, 1), cell("next", 0, 1, 1, 1),
 		}},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			got := Arrange(tt.panels, 4, tt.columns)
-			if tt.name == "removed from a column" {
-				got = Arrange(tt.panels, 2, tt.columns)
-			}
+			got := Arrange(tt.panels, cmp.Or(tt.configured, 4), tt.columns)
 			if !slices.Equal(got, tt.want) {
 				t.Fatalf("got  %v\nwant %v", got, tt.want)
 			}
@@ -121,7 +126,10 @@ func TestColumns(t *testing.T) {
 		configured int
 		want       int
 	}{
-		{1440, 4, 4}, {1001, 6, 6}, {1000, 4, 2}, {1000, 1, 1}, {561, 4, 2}, {560, 4, 1}, {300, 4, 1},
+		{1440, 4, 4}, {1001, 4, 4}, {1000, 4, 2},
+		// No column narrower than minColumn: (1384+14)/(200+14) and
+		// (1600+14)/(200+14), rounded down.
+		{1001, 6, 4}, {1440, 24, 6}, {2400, 24, 7}, {1000, 1, 1}, {561, 4, 2}, {560, 4, 1}, {300, 4, 1},
 	} {
 		if got := Columns(tt.width, tt.configured); got != tt.want {
 			t.Errorf("Columns(%v, %d) = %d, want %d", tt.width, tt.configured, got, tt.want)
@@ -169,6 +177,24 @@ func TestGridTilesFit(t *testing.T) {
 				}
 				rects = append(rects, rect)
 			}
+		}
+	}
+}
+
+// The breakpoints are the window's width, as the mockup's @media rules,
+// not the content area's, which is narrower by the padding.
+func TestGridColumnsFollowWindow(t *testing.T) {
+	var r input.Router
+	cfg := gridConfig(dashboard())
+	for _, tt := range []struct{ width, columns int }{{1001, 4}, {1000, 2}, {561, 2}, {560, 1}} {
+		var g Grid
+		g.Layout(context(&r, image.Pt(tt.width, 900), time.Now()), testTheme, cfg, live())
+		starts := map[int]bool{}
+		for _, rect := range g.placed {
+			starts[rect.Min.X] = true
+		}
+		if len(starts) != tt.columns {
+			t.Errorf("width %d: tiles start in %d columns, want %d", tt.width, len(starts), tt.columns)
 		}
 	}
 }
@@ -267,8 +293,67 @@ func TestTileMenu(t *testing.T) {
 	}
 }
 
+// A dialog disables the grid, and the menu's backdrop must not stay
+// over the dialog.
+func TestTileMenuClosesWhenDisabled(t *testing.T) {
+	cfg := gridConfig([]config.Panel{panel("clock", 0, 0, 1, 1)})
+	states := live("clock")
+	var r input.Router
+	var g Grid
+	now := time.Now()
+	frame(&r, &g, cfg, states, now)
+	rect := g.placed["clock"]
+	frame(&r, &g, cfg, states, now, click(image.Pt(rect.Max.X-16-13, rect.Min.Y+22))...)
+	if !g.tiles["clock"].open {
+		t.Fatal("the menu did not open")
+	}
+	gtx := context(&r, image.Pt(1440, 900), now).Disabled()
+	g.Layout(gtx, testTheme, cfg, states)
+	if g.tiles["clock"].open {
+		t.Error("the menu stayed open under a dialog")
+	}
+}
+
+// A menu opened at the window's bottom edge moves up into view, and its
+// items can be chosen there.
+func TestTileMenuStaysInView(t *testing.T) {
+	cfg := gridConfig([]config.Panel{panel("clock", 0, 0, 1, 1)})
+	states := live("clock")
+	var r input.Router
+	var g Grid
+	size := image.Pt(1440, 130)
+	layout := func(events ...event.Event) []Action {
+		for _, e := range events {
+			r.Queue(e)
+		}
+		gtx := context(&r, size, time.Now())
+		_, actions := g.Layout(gtx, testTheme, cfg, states)
+		r.Frame(gtx.Ops)
+		return actions
+	}
+	layout()
+	rect := g.placed["clock"]
+	layout(click(image.Pt(rect.Max.X-16-13, rect.Min.Y+22))...)
+	layout()
+	tl := g.tiles["clock"]
+	if !tl.open {
+		t.Fatal("the menu did not open")
+	}
+	box := tl.menuBox.Add(rect.Min)
+	if box.Max.Y > size.Y || box.Min.Y < 0 {
+		t.Fatalf("menu at %v, outside the %v window", box, size)
+	}
+	last := image.Pt(box.Min.X+20, box.Max.Y-6-8) // inside the last item
+	actions := layout(click(last)...)
+	actions = append(actions, layout()...)
+	if !slices.Equal(actions, []Action{{ActionDisable, "clock"}}) {
+		t.Errorf("actions %v, want Disable panel", actions)
+	}
+}
+
 func TestErrorTileActions(t *testing.T) {
 	cfg := gridConfig([]config.Panel{panel("weather", 0, 0, 2, 1)})
+	cfg.Grid.RowHeight = 150 // the least config allows, which the buttons fit
 	now := time.Now()
 	states := []pluginhost.PanelState{{
 		ID: "weather", Plugin: "weather", State: pluginhost.Restarting,
@@ -308,5 +393,68 @@ func TestRetryText(t *testing.T) {
 	s.State, s.Failures = pluginhost.Crashed, 5
 	if _, text := retryText(s, now); text != "Gave up after 5 attempts" {
 		t.Errorf("crashed: %q", text)
+	}
+}
+
+func TestErrorTileButtonsFitLongError(t *testing.T) {
+	cfg := gridConfig([]config.Panel{panel("weather", 0, 0, 1, 1)})
+	cfg.Grid.RowHeight = 150
+	states := []pluginhost.PanelState{{
+		ID: "weather", Plugin: "weather", State: pluginhost.Crashed, Failures: 5, MaxAttempts: 5,
+		Err: errors.New(strings.Repeat("plugin \"weather\" failed to start: fork/exec: no such file or directory ", 4)),
+	}}
+	for _, tt := range []struct {
+		scale   float32
+		columns int
+	}{{1, 4}, {1.5, 4}, {2, 4}, {1, 24}, {1.5, 24}} {
+		scale := tt.scale
+		cfg.Grid.Columns = tt.columns
+		var r input.Router
+		var g Grid
+		gtx := context(&r, image.Pt(1440, 900), time.Now())
+		gtx.Metric.PxPerSp = scale
+		g.Layout(gtx, testTheme, cfg, states)
+		// Inside the tile, above its 16 dp bottom padding.
+		body := image.Rectangle{Max: g.placed["weather"].Size()}
+		body.Max.Y -= 16
+		if b := g.tiles["weather"].buttons; b.Empty() || !b.In(body) {
+			t.Errorf("text ×%v, %d columns: buttons at %v, outside the body %v", scale, tt.columns, b, body)
+		}
+	}
+}
+
+func TestGridTinyWindow(t *testing.T) {
+	for _, size := range []image.Point{{}, {10, 10}} {
+		var r input.Router
+		var g Grid
+		g.Layout(context(&r, size, time.Now()), testTheme, gridConfig(dashboard()), live())
+		for id, rect := range g.placed {
+			if rect.Dx() < 0 || rect.Dy() < 0 {
+				t.Errorf("%v window: %s at %v", size, id, rect)
+			}
+		}
+	}
+}
+
+// Opening a tile's menu from the keyboard, while another tile's menu is
+// open, closes that one.
+func TestTileMenuOneAtATime(t *testing.T) {
+	cfg := gridConfig([]config.Panel{panel("clock", 0, 0, 1, 1), panel("disk", 1, 0, 1, 1)})
+	states := live("clock", "disk")
+	var r input.Router
+	var g Grid
+	now := time.Now()
+	frame(&r, &g, cfg, states, now)
+	rect := g.placed["clock"]
+	frame(&r, &g, cfg, states, now, click(image.Pt(rect.Max.X-16-13, rect.Min.Y+22))...)
+	frame(&r, &g, cfg, states, now)
+	gtx := context(&r, image.Pt(1440, 900), now)
+	gtx.Execute(key.FocusCmd{Tag: &g.tiles["disk"].menu.Clickable})
+	g.Layout(gtx, testTheme, cfg, states)
+	r.Frame(gtx.Ops)
+	frame(&r, &g, cfg, states, now, key.Event{Name: key.NameReturn, State: key.Press}, key.Event{Name: key.NameReturn, State: key.Release})
+	frame(&r, &g, cfg, states, now)
+	if !g.tiles["disk"].open || g.tiles["clock"].open {
+		t.Errorf("disk open %t, clock open %t; want only disk", g.tiles["disk"].open, g.tiles["clock"].open)
 	}
 }

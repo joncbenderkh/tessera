@@ -38,22 +38,25 @@ func fits(cells []Cell, c Cell) bool {
 	return true
 }
 
-// Columns is how many grid columns a content area width dp wide shows:
-// the configured count, at most 2 at Compact widths and 1 at Narrow ones.
+// Columns is how many grid columns a window width dp wide shows: the
+// configured count, at most 2 at Compact widths and 1 at Narrow ones,
+// and never so many that a column is narrower than minColumn.
 func Columns(width unit.Dp, configured int) int {
 	switch {
 	case width <= Narrow:
 		return 1
 	case width <= Compact:
-		return min(configured, 2)
+		configured = min(configured, 2)
 	}
-	return configured
+	content := min(width-2*contentPadding(width), maxContent)
+	return max(min(configured, int((content+gridGap)/(minColumn+gridGap))), 1)
 }
 
 // Arrange places the enabled panels on a grid columns wide, for a config
 // whose grid is configured columns wide. Each panel keeps its column and
 // rises into rows left free above it, by disabled or removed panels, in
-// the order of its row and then its column. On a grid narrower than the
+// the order of its row and then its column; it stops below the first
+// panel in its way, so it never passes one. On a grid narrower than the
 // config's, the panels then flow in that reading order, as CSS grid's
 // auto-placement does, each as wide as it was or as the grid, whichever
 // is less.
@@ -70,11 +73,17 @@ func Arrange(panels []config.Panel, configured, columns int) []Cell {
 	})
 	cells := make([]Cell, 0, len(order))
 	for _, p := range order {
-		c := Cell{ID: p.ID, X: p.X, W: p.W, H: p.H}
-		// It fits at its own row at the latest, as panels placed before
-		// it only moved up.
-		for c.Y < p.Y && !fits(cells, c) {
-			c.Y++
+		// It rises while the row above is free, so it stops below the
+		// panels placed before it in its columns. Its own row fits, as
+		// they only moved up.
+		c := Cell{ID: p.ID, X: p.X, Y: p.Y, W: p.W, H: p.H}
+		for c.Y > 0 {
+			up := c
+			up.Y--
+			if !fits(cells, up) {
+				break
+			}
+			c = up
 		}
 		cells = append(cells, c)
 	}
@@ -132,8 +141,13 @@ type Action struct {
 	Panel string
 }
 
-// gridGap is the space between tiles.
-const gridGap unit.Dp = 14
+const (
+	gridGap    unit.Dp = 14   // the space between tiles
+	maxContent unit.Dp = 1600 // the widest the grid gets
+	// minColumn is the narrowest a column gets, which a failed panel's
+	// buttons fit.
+	minColumn unit.Dp = 200
+)
 
 // contentPadding is the padding around the grid at a window width.
 func contentPadding(width unit.Dp) unit.Dp {
@@ -152,11 +166,11 @@ func (g *Grid) Layout(gtx layout.Context, th *theme.Theme, cfg config.Config, st
 	area := gtx.Constraints.Max
 	width := widthDp(gtx)
 	pad := gtx.Dp(contentPadding(width))
-	content := min(area.X-2*pad, gtx.Dp(1600))
-	columns := Columns(unit.Dp(float32(content)/gtx.Metric.PxPerDp), cfg.Grid.Columns)
+	content := max(min(area.X-2*pad, gtx.Dp(maxContent)), 0)
+	columns := Columns(width, cfg.Grid.Columns)
 	cells := Arrange(cfg.Panels, cfg.Grid.Columns, columns)
 	gap, rowH := gtx.Dp(gridGap), gtx.Dp(unit.Dp(cfg.Grid.RowHeight))
-	colW := (content - gap*(columns-1)) / columns
+	colW := max((content-gap*(columns-1))/columns, 0)
 	rows := 0
 	for _, c := range cells {
 		rows = max(rows, c.Y+c.H)
@@ -184,6 +198,7 @@ func (g *Grid) Layout(gtx layout.Context, th *theme.Theme, cfg config.Config, st
 	seen := make(map[string]*tile, len(cells))
 	g.placed = make(map[string]image.Rectangle, len(cells))
 	var actions []Action
+	var opened *tile // the tile whose menu opened this frame
 	origin := image.Pt((area.X-content)/2, pad-g.offset)
 	for _, c := range cells {
 		t := g.tiles[c.ID]
@@ -200,13 +215,25 @@ func (g *Grid) Layout(gtx layout.Context, th *theme.Theme, cfg config.Config, st
 		}
 		r.Max = r.Min.Add(image.Pt(c.W*colW+(c.W-1)*gap, c.H*rowH+(c.H-1)*gap))
 		g.placed[c.ID] = r
+		t.view = image.Rectangle{Max: area}.Sub(r.Min)
 		tgtx := gtx
 		tgtx.Constraints = layout.Exact(r.Size())
 		st := op.Offset(r.Min).Push(gtx.Ops)
+		wasOpen := t.open
 		for _, k := range t.Layout(tgtx, th, s, width <= Narrow) {
 			actions = append(actions, Action{Kind: k, Panel: c.ID})
 		}
 		st.Pop()
+		if t.open && !wasOpen {
+			opened = t
+		}
+	}
+	// One menu at a time: the keyboard can reach another tile's ⋯ past
+	// an open menu's backdrop.
+	if opened != nil {
+		for _, t := range seen {
+			t.open = t == opened
+		}
 	}
 	g.tiles = seen
 	return layout.Dimensions{Size: area}, actions
