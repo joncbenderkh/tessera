@@ -11,8 +11,9 @@ tessera reads the file at startup and again whenever it changes, and
 applies the change at once: the grid and theme are redrawn, panels
 added or enabled start, panels removed or disabled stop, and a panel
 whose settings or size changed is configured again. An edit that does
-not parse or validate is reported in the window and ignored, so the
-last good config stays in use until the file is fixed.
+not parse or validate is reported in the window, by its first problem
+(the log has them all), and ignored, so the last good config stays in
+use until the file is fixed, when the report goes away.
 tessera rewrites the file when you switch the theme from the window
 header, which drops any comments; it rereads the file first, so other
 edits are kept, and leaves the file alone if it cannot read it or it
@@ -21,10 +22,11 @@ with a dotfiles manager, tessera writes the file it points to and keeps
 the link; if that file's directory is read-only, as in the Nix store,
 switching the theme reports an error and the theme is not saved.
 Changes are noticed through such links too, including a linked
-`tessera` directory, and when a link is pointed elsewhere; an edit
-made to the file a link points to can take up to a second. A link to a
-file that does not exist yet stops tessera at startup with an error,
-rather than being replaced by a default config.
+`tessera` directory, and when a link is pointed elsewhere. An edit
+made to the file a link points to, and a link pointed elsewhere, can
+take about a second to be noticed. A link, to the file or to the
+`tessera` directory, whose target does not exist yet stops tessera at
+startup with an error, rather than being replaced by a default config.
 
 ## Example
 
@@ -59,7 +61,7 @@ panels:
 | `version` | Schema version. Must be `1`. |
 | `theme` | `dark` or `light`. Defaults to `dark`. The header's theme toggle sets it. |
 | `grid.columns` | Number of grid columns, from 1 to 24. |
-| `grid.row_height` | Height of one grid row in dp (logical pixels), from 150 to 2000. |
+| `grid.row_height` | Height of one grid row in dp (logical pixels), from 150 to 2000. Large text makes rows taller where a panel's head and buttons need it. |
 | `panels[].id` | Unique name for this panel, read as written (`017` stays `017`). One plugin can back several panels. |
 | `panels[].plugin` | Name of the plugin that provides the panel: lowercase letters, digits, and hyphens, starting with a letter or digit, at most 64 characters, and not a Windows device name such as `con` or `com1`. Read as written, like `id`. |
 | `panels[].enabled` | `false` hides the panel. Defaults to `true`. |
@@ -82,9 +84,11 @@ the grid has no gaps for them. Panels are placed in the order of their
 Narrow windows show fewer columns: at most two at 1000 dp (logical
 pixels) or less, and one at 560 dp or less. No window shows a column
 narrower than 200 dp, so many columns need a wide window: 1440 dp shows
-at most six. With fewer columns than the config, the panels flow left to
-right and top to bottom in that order, each at most as wide as the
-window's columns, and keep their heights. Plugins are told the size in
+at most six. Large text widens that minimum to what a failed panel's
+Restart and Logs buttons need side by side. With fewer columns than
+the config, the panels flow left to right and top to bottom in that
+order, each at most as wide as the window's columns, and keep their
+heights. Plugins are told the size in
 the config, not the size they get in a narrow window. Arranging panels
 freely is #36.
 
