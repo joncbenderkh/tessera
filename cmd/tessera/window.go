@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"image"
+	"log"
 	"math"
 	"strings"
 	"sync"
@@ -222,6 +223,12 @@ func act(a ui.Action, plugins *pluginhost.Manager, states []pluginhost.PanelStat
 			toast.Show("Already restarting")
 		case err != nil:
 			toast.Show("Not restarted: " + err.Error())
+		}
+	case ui.ActionEvent:
+		// A plugin that is busy or not live misses the event: it was
+		// meant for a view that is about to change.
+		if err := plugins.HandleEvent(a.Panel, a.Event); err != nil && !errors.Is(err, pluginhost.ErrBusy) && !errors.Is(err, pluginhost.ErrNotLive) {
+			log.Printf("panel %s: event not sent: %v", a.Panel, err)
 		}
 	case ui.ActionLogs:
 		plugin := a.Panel
