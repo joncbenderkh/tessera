@@ -217,6 +217,8 @@ func (testPlugin) GRPCClient(context.Context, *plugin.GRPCBroker, *grpc.ClientCo
 //   - events: Watch answers each event with a view "got <action id>".
 //   - hangs-event: HandleEvent never answers.
 //   - unavailable-event: HandleEvent fails with UNAVAILABLE.
+//   - rejects-later: rejects the settings of each Configure after the
+//     first.
 //
 // Any other name is a well-behaved plugin of that name, which reports
 // each Configure on stderr, and whose Watch sends a view naming it,
@@ -228,6 +230,7 @@ type server struct {
 
 	mu      sync.Mutex
 	renders int      // Renders answered
+	configs int      // rejects-later: Configures answered
 	seen    []string // polled-events: the calls so far
 	deep    bool     // polled-event-deep: an event came since the last Render
 }
@@ -294,6 +297,14 @@ func (s *server) Configure(ctx context.Context, req *tesserav1.ConfigureRequest)
 	switch s.mode {
 	case "rejects":
 		return nil, status.Error(codes.InvalidArgument, "timezone: unknown")
+	case "rejects-later":
+		s.mu.Lock()
+		s.configs++
+		later := s.configs > 1
+		s.mu.Unlock()
+		if later {
+			return nil, status.Error(codes.InvalidArgument, "timezone: unknown")
+		}
 	case "no-configure":
 		return s.UnimplementedPanelServiceServer.Configure(ctx, req)
 	case "hangs-configure":

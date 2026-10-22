@@ -98,7 +98,7 @@ func (w *live) run() (end, error) {
 	m, pn, inst := w.m, w.pn, w.inst
 	health := time.NewTicker(m.opts.PingInterval)
 	defer health.Stop()
-	ctx, stopWatch := context.WithCancel(m.ctx)
+	ctx, stopWatch := context.WithCancel(pn.ctx)
 	defer stopWatch()
 	st := w.watch(ctx)
 	ready := st.ready
@@ -135,7 +135,7 @@ func (w *live) run() (end, error) {
 			}
 		}
 		select {
-		case <-m.ctx.Done():
+		case <-pn.ctx.Done():
 			return end{}, nil
 		case <-pn.restart:
 			return end{restart: true}, nil
@@ -195,6 +195,31 @@ func (w *live) run() (end, error) {
 			if stop, err := render(); stop != nil || err != nil {
 				return orClose(stop), err
 			}
+		case <-pn.changed:
+			resumed()
+			cfg := m.config(pn)
+			stop, _, err := w.call(func(ctx context.Context) error {
+				return configure(ctx, inst, cfg, m.opts.CallTimeout)
+			})
+			if stop != nil {
+				return *stop, nil
+			}
+			if err != nil {
+				var hung hangError
+				if Retryable(err) && !errors.As(err, &hung) && !answered(err) {
+					if stop := w.settle(); stop != nil {
+						return *stop, nil
+					}
+				}
+				return end{}, err
+			}
+			w.alive()
+			m.event(pn, "settings or size changed; plugin configured again")
+			if w.polled && !w.off {
+				if stop, err := render(); stop != nil || err != nil {
+					return orClose(stop), err
+				}
+			}
 		case req := <-pn.events:
 			resumed()
 			stop, err := w.handle(req)
@@ -225,14 +250,14 @@ func orClose(stop *end) end {
 // whether that is a hang. It returns stop instead, and cancels f, if
 // inst exits, Restart is asked for, or Close comes first.
 func (w *live) call(f func(context.Context) error) (stop *end, hang bool, err error) {
-	ctx, cancel := context.WithTimeout(w.m.ctx, w.m.opts.CallTimeout)
+	ctx, cancel := context.WithTimeout(w.pn.ctx, w.m.opts.CallTimeout)
 	defer cancel()
 	answer := make(chan error, 1)
 	go func() { answer <- f(ctx) }()
 	select {
 	case err = <-answer:
 		return nil, err != nil && hung(ctx, err, w.m.opts.CallTimeout), err
-	case <-w.m.ctx.Done():
+	case <-w.pn.ctx.Done():
 		return &end{}, false, nil
 	case <-w.pn.restart:
 		return &end{restart: true}, false, nil
@@ -246,7 +271,7 @@ func (w *live) call(f func(context.Context) error) (stop *end, hang bool, err er
 // returns stop if something ended the wait.
 func (w *live) settle() *end {
 	select {
-	case <-w.m.ctx.Done():
+	case <-w.pn.ctx.Done():
 		return &end{}
 	case <-w.pn.restart:
 		return &end{restart: true}
