@@ -10,7 +10,6 @@ import (
 	"path/filepath"
 	"reflect"
 	"runtime"
-	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -305,16 +304,12 @@ func TestValidate(t *testing.T) {
 		{"x past the grid", []Panel{panel("a", 4, 0, 1, 1)}, "4 columns"},
 		{"x+w overflows", []Panel{panel("a", math.MaxInt, 0, 1, 1)}, "4 columns"},
 		{"y+h overflows", []Panel{panel("a", 0, math.MaxInt, 1, 1)}, "out of range"},
-		{"huge panels overlap", []Panel{panel("a", 0, 0, 1, math.MaxInt32), panel("b", 0, 1_000_000_000, 1, 1)}, `overlaps panel "a"`},
+		{"tall panels overlap", []Panel{panel("a", 0, 0, 1, 1000), panel("b", 0, 999, 1, 1)}, `overlaps panel "a"`},
+		{"down to the last row", []Panel{panel("a", 0, 0, 1, 1000)}, ""},
+		{"past the last row", []Panel{panel("a", 0, 1, 1, 1000)}, "out of range"},
+		{"y past the last row", []Panel{panel("a", 0, 1000, 1, 1)}, "out of range"},
 		{"overlap", []Panel{panel("a", 0, 0, 2, 2), panel("b", 1, 1, 1, 1)}, `overlaps panel "a"`},
 		{"disabled panels may overlap", []Panel{panel("a", 0, 0, 1, 1), disabled}, ""},
-	}
-	if strconv.IntSize == 64 {
-		maxSpan := int(^uint(0) >> 32) // 2^32-1 where int has 64 bits
-		tests = append(tests,
-			test{"h of 2^32-1", []Panel{panel("a", 0, 0, 1, maxSpan)}, ""},
-			test{"h beyond uint32", []Panel{panel("a", 0, 0, 1, maxSpan+1)}, "at most 4294967295"},
-		)
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -357,7 +352,7 @@ func TestParseTheme(t *testing.T) {
 		{"Light", "", `theme must be "dark" or "light"`},
 	} {
 		t.Run(tt.value, func(t *testing.T) {
-			c, err := Parse([]byte("version: 1\ntheme: " + tt.value + "\ngrid:\n  columns: 1\n  row_height: 1\npanels: []\n"))
+			c, err := Parse([]byte("version: 1\ntheme: " + tt.value + "\ngrid:\n  columns: 1\n  row_height: 180\npanels: []\n"))
 			if tt.err != "" {
 				if err == nil || !strings.Contains(err.Error(), tt.err) {
 					t.Fatalf("error %v does not contain %q", err, tt.err)
@@ -593,5 +588,27 @@ func TestUpdateSpotsAnEditWithinOneTick(t *testing.T) {
 	}
 	if !bytes.Equal(data, edited) {
 		t.Fatalf("the editor's save was overwritten:\n%s", data)
+	}
+}
+
+func TestValidateGridBounds(t *testing.T) {
+	for _, tt := range []struct {
+		columns, rowHeight int
+		want               string
+	}{
+		{1, 150, ""},
+		{24, 2000, ""},
+		{0, 180, "grid.columns must be from 1 to 24"},
+		{25, 180, "grid.columns must be from 1 to 24"},
+		{4, 149, "grid.row_height must be from 150 to 2000"},
+		{4, 2001, "grid.row_height must be from 150 to 2000"},
+	} {
+		c := Default()
+		c.Panels = nil
+		c.Grid = Grid{Columns: tt.columns, RowHeight: tt.rowHeight}
+		err := c.Validate()
+		if tt.want == "" && err != nil || tt.want != "" && (err == nil || !strings.Contains(err.Error(), tt.want)) {
+			t.Errorf("columns %d, row_height %d: error %v, want %q", tt.columns, tt.rowHeight, err, tt.want)
+		}
 	}
 }

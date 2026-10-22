@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"maps"
-	"math"
 	"regexp"
 	"slices"
 	"unicode/utf8"
@@ -20,6 +19,15 @@ var pluginName = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,63}$`)
 // cannot be executable names there.
 var windowsDevice = regexp.MustCompile(`^(con|prn|aux|nul|com[0-9]|lpt[0-9])$`)
 
+// The grid's bounds keep the window's arithmetic in range and every tile
+// usable: a row is tall enough for a failed panel's message and buttons.
+const (
+	maxColumns   = 24
+	minRowHeight = 150
+	maxRowHeight = 2000
+	maxRows      = 1000 // no panel reaches below this many rows
+)
+
 // Validate checks the config's internal consistency. Plugin settings are
 // checked only for values Marshal cannot write or a plugin would not
 // receive exactly; checking them against each plugin's config schema
@@ -32,11 +40,11 @@ func (c Config) Validate() error {
 	if c.Theme != "" && c.Theme != ThemeDark && c.Theme != ThemeLight {
 		errs = append(errs, fmt.Errorf("theme must be %q or %q, got %q", ThemeDark, ThemeLight, c.Theme))
 	}
-	if c.Grid.Columns < 1 {
-		errs = append(errs, fmt.Errorf("grid.columns must be at least 1, got %d", c.Grid.Columns))
+	if c.Grid.Columns < 1 || c.Grid.Columns > maxColumns {
+		errs = append(errs, fmt.Errorf("grid.columns must be from 1 to %d, got %d", maxColumns, c.Grid.Columns))
 	}
-	if c.Grid.RowHeight < 1 {
-		errs = append(errs, fmt.Errorf("grid.row_height must be at least 1, got %d", c.Grid.RowHeight))
+	if c.Grid.RowHeight < minRowHeight || c.Grid.RowHeight > maxRowHeight {
+		errs = append(errs, fmt.Errorf("grid.row_height must be from %d to %d, got %d", minRowHeight, maxRowHeight, c.Grid.RowHeight))
 	}
 
 	seen := make(map[string]bool, len(c.Panels))
@@ -70,11 +78,6 @@ func (c Config) Validate() error {
 			errs = append(errs, fmt.Errorf("%s: w and h must be at least 1, got %dx%d", name, p.W, p.H))
 			continue
 		}
-		// Plugins receive the size as two uint32s.
-		if int64(p.W) > math.MaxUint32 || int64(p.H) > math.MaxUint32 {
-			errs = append(errs, fmt.Errorf("%s: w and h must be at most %d, got %dx%d", name, uint32(math.MaxUint32), p.W, p.H))
-			continue
-		}
 		if p.X < 0 || p.Y < 0 {
 			errs = append(errs, fmt.Errorf("%s: x and y must not be negative, got (%d, %d)", name, p.X, p.Y))
 			continue
@@ -84,8 +87,9 @@ func (c Config) Validate() error {
 			errs = append(errs, fmt.Errorf("%s: x %d with w %d does not fit the grid's %d columns", name, p.X, p.W, c.Grid.Columns))
 			continue
 		}
-		if p.H > math.MaxInt-p.Y {
-			errs = append(errs, fmt.Errorf("%s: y %d with h %d is out of range", name, p.Y, p.H))
+		// As above, without computing Y+H.
+		if p.Y >= maxRows || p.H > maxRows-p.Y {
+			errs = append(errs, fmt.Errorf("%s: y %d with h %d is out of range: panels end by row %d", name, p.Y, p.H, maxRows))
 			continue
 		}
 		if !p.IsEnabled() {
