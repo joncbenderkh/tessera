@@ -81,3 +81,46 @@ func TestThemeSaverIgnoresSavesAfterWait(t *testing.T) {
 		t.Fatalf("a save after wait wrote theme %q", got.Theme)
 	}
 }
+
+func TestThemeSaverDropsASupersededError(t *testing.T) {
+	started, release := make(chan struct{}), make(chan struct{})
+	calls := 0
+	s := themeSaver{done: make(chan error, 1), invalidate: func() {}}
+	s.write = func(string, bool) error {
+		calls++
+		if calls == 1 {
+			close(started)
+			<-release
+			return config.ErrChanged
+		}
+		return nil
+	}
+	s.save(false)
+	<-started
+	s.save(true)
+	close(release)
+	s.wait()
+	select {
+	case err := <-s.done:
+		t.Fatalf("reported %v, which a later save replaced", err)
+	default:
+	}
+}
+
+func TestThemeSaverWritesQueuedSavesOnce(t *testing.T) {
+	writes := 0
+	s := themeSaver{done: make(chan error, 1), invalidate: func() {}}
+	s.write = func(string, bool) error {
+		writes++
+		return nil
+	}
+	// Both saves are asked for before either goroutine starts writing.
+	s.mu.Lock()
+	s.save(false)
+	s.save(true)
+	s.mu.Unlock()
+	s.wait()
+	if writes != 1 {
+		t.Fatalf("%d writes, want 1", writes)
+	}
+}

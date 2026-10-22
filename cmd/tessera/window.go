@@ -72,15 +72,19 @@ func run(window *app.Window, plugins *pluginhost.Manager, initial config.Theme, 
 // rereads the file first, so edits made since tessera started are kept,
 // and it never writes over a file it cannot parse or one that changes
 // while it saves. Saves run one at a time, each writing the latest
-// theme asked for.
+// theme asked for; a failure is reported only if no later save was asked
+// for, since that one replaces it.
 type themeSaver struct {
 	path       string
 	done       chan error // a failed save's error
 	invalidate func()
+	write      func(path string, dark bool) error // saveTheme if nil
 
 	mu      sync.Mutex // held while saving
-	want    sync.Mutex // guards dark and closed
+	want    sync.Mutex // guards dark, asked, handled and closed
 	dark    bool
+	asked   int // saves asked for so far
+	handled int // saves asked for when the latest write began
 	closed  bool
 	running sync.WaitGroup
 }
@@ -101,15 +105,30 @@ func (s *themeSaver) save(dark bool) {
 		return
 	}
 	s.dark = dark
+	s.asked++
 	s.running.Add(1)
 	go func() {
 		defer s.running.Done()
 		s.mu.Lock()
 		defer s.mu.Unlock()
 		s.want.Lock()
-		dark := s.dark
+		dark, asked := s.dark, s.asked
+		if asked == s.handled {
+			// An earlier goroutine already wrote this theme.
+			s.want.Unlock()
+			return
+		}
+		s.handled = asked
 		s.want.Unlock()
-		if err := saveTheme(s.path, dark); err != nil {
+		write := s.write
+		if write == nil {
+			write = saveTheme
+		}
+		err := write(s.path, dark)
+		s.want.Lock()
+		superseded := s.asked != asked
+		s.want.Unlock()
+		if err != nil && !superseded {
 			select {
 			case s.done <- err:
 			default: // one error is enough to show
