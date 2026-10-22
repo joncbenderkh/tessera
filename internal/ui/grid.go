@@ -17,6 +17,7 @@ import (
 	"github.com/joncbenderkh/tessera/internal/config"
 	"github.com/joncbenderkh/tessera/internal/pluginhost"
 	"github.com/joncbenderkh/tessera/internal/ui/theme"
+	tesserav1 "github.com/joncbenderkh/tessera/proto/tessera/v1"
 )
 
 // Cell is a panel's place on the grid, in cells.
@@ -160,6 +161,8 @@ const (
 	ActionRestart
 	// ActionLogs is the error tile's Logs.
 	ActionLogs
+	// ActionEvent is input for the panel's plugin, in Event.
+	ActionEvent
 )
 
 // Action is a request from panel Panel's tile, which the host carries
@@ -167,6 +170,7 @@ const (
 type Action struct {
 	Kind  ActionKind
 	Panel string
+	Event *tesserav1.HandleEventRequest // for ActionEvent
 }
 
 const (
@@ -261,8 +265,12 @@ func (g *Grid) Layout(gtx layout.Context, th *theme.Theme, cfg config.Config, st
 		tgtx.Constraints = layout.Exact(r.Size())
 		st := op.Offset(r.Min).Push(gtx.Ops)
 		wasOpen := t.open
-		for _, k := range t.Layout(tgtx, th, s, width <= Narrow) {
+		kinds, events := t.Layout(tgtx, th, s, width <= Narrow)
+		for _, k := range kinds {
 			actions = append(actions, Action{Kind: k, Panel: c.ID})
+		}
+		for _, e := range events {
+			actions = append(actions, Action{Kind: ActionEvent, Panel: c.ID, Event: e})
 		}
 		st.Pop()
 		if t.open && !wasOpen {

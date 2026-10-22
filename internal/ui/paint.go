@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-// Package ui draws the host-owned parts of the window: the header, and
-// the toast and dialog primitives for transient host UI.
+// Package ui draws the window: the header, the grid of tiles with the
+// plugins' views in them, and the toast and dialog primitives for
+// transient host UI.
 package ui
 
 import (

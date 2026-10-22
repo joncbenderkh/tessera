@@ -21,6 +21,7 @@ import (
 
 	"github.com/joncbenderkh/tessera/internal/pluginhost"
 	"github.com/joncbenderkh/tessera/internal/ui/theme"
+	tesserav1 "github.com/joncbenderkh/tessera/proto/tessera/v1"
 )
 
 // Menu items, in the order the tile menu lists them.
@@ -33,9 +34,10 @@ var menuItems = [...]struct {
 }
 
 // tile is one panel's frame: its head, with the title, the plugin on
-// hover, and the options menu, and a body for its state. A live panel's
-// body is empty until views are rendered (#11).
+// hover, and the options menu, and a body for its state: a live panel's
+// view, or why it has none.
 type tile struct {
+	content  viewState
 	head     gesture.Hover
 	menu     Button
 	items    [len(menuItems)]Button
@@ -108,9 +110,10 @@ func pluginInfo(s pluginhost.PanelState) string {
 }
 
 // Layout draws the tile over exactly gtx's constraints and returns the
-// actions the user chose.
-func (t *tile) Layout(gtx layout.Context, th *theme.Theme, s pluginhost.PanelState, narrow bool) []ActionKind {
+// actions the user chose and the input for the plugin.
+func (t *tile) Layout(gtx layout.Context, th *theme.Theme, s pluginhost.PanelState, narrow bool) ([]ActionKind, []*tesserav1.HandleEventRequest) {
 	var actions []ActionKind
+	var events []*tesserav1.HandleEventRequest
 	if !gtx.Enabled() {
 		// A dialog is open. The menu's backdrop would draw over it and
 		// take its clicks, and a disabled gtx never sees them close it.
@@ -182,9 +185,17 @@ func (t *tile) Layout(gtx layout.Context, th *theme.Theme, s pluginhost.PanelSta
 	case kindFailing:
 		t.errorBody(body, th, s, narrow)
 		t.buttons = t.buttons.Add(image.Pt(padX, headH))
+	default:
+		switch {
+		case s.View != nil:
+			events = t.content.Layout(body, th, s.View)
+		case s.ViewErr != nil:
+			// A view over a limit: none is shown until a restart.
+			wrapped(th, s.ViewErr.Error(), theme.TextMin, th.Muted, theme.Mono).Layout(body)
+		}
 	}
 	st.Pop()
-	return actions
+	return actions, events
 }
 
 // layoutHead draws the head and returns its height. The plugin popover
