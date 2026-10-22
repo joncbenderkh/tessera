@@ -160,14 +160,16 @@ type Manager struct {
 
 	mu          sync.Mutex
 	panels      []*panel
-	viewSignal  time.Time // the last Changed signal for a view
-	viewPending bool      // one is scheduled
+	dropped     map[string]<-chan struct{} // by id: done of a dropped panel whose supervisor runs
+	viewSignal  time.Time                  // the last Changed signal for a view
+	viewPending bool                       // one is scheduled
 }
 
 type panel struct {
 	PanelState
 	ctx     context.Context // done once Close begins or Apply drops the panel
 	stop    context.CancelFunc
+	done    chan struct{} // closed once its supervisor, and any before it for the id, returned
 	cfg     config.Panel  // under mu
 	changed chan struct{} // Apply changed cfg's settings or size; buffered, coalesced
 	inst    *Instance     // the live one, if any; under mu; read by tests
@@ -192,7 +194,7 @@ func Start(cfg config.Config, dir string, logger *log.Logger) *Manager {
 func StartWith(cfg config.Config, dir string, logger *log.Logger, opts Options) *Manager {
 	ctx, cancel := context.WithCancel(context.Background())
 	m := &Manager{
-		ctx: ctx, cancel: cancel, changed: make(chan struct{}, 1),
+		ctx: ctx, cancel: cancel, changed: make(chan struct{}, 1), dropped: map[string]<-chan struct{}{},
 		opts: opts.withDefaults(), dir: dir, logger: logger,
 	}
 	m.Apply(cfg)
@@ -205,8 +207,9 @@ func StartWith(cfg config.Config, dir string, logger *log.Logger, opts Options) 
 // re-enabled one is launched, and one whose plugin changed is both. A
 // live panel whose settings or size changed is configured again, and a
 // failed Configure is a failure like any other; a crashed panel, or
-// one waiting to restart, whose settings or size changed restarts now. States then lists the
-// panels in cfg's order. Once Close has begun, Apply does nothing.
+// one waiting to restart, whose settings or size changed restarts now.
+// States then lists the panels in cfg's order. Once Close has begun,
+// Apply does nothing.
 func (m *Manager) Apply(cfg config.Config) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -224,7 +227,7 @@ func (m *Manager) Apply(cfg config.Config) {
 		}
 		if pn := old[p.ID]; pn != nil && pn.Plugin == p.Plugin {
 			delete(old, p.ID)
-			if !reflect.DeepEqual(pn.cfg.Settings, p.Settings) || pn.cfg.W != p.W || pn.cfg.H != p.H {
+			if !sameSettings(pn.cfg.Settings, p.Settings) || pn.cfg.W != p.W || pn.cfg.H != p.H {
 				select {
 				case pn.changed <- struct{}{}:
 				default: // one is already pending; it reads the latest cfg
@@ -234,16 +237,37 @@ func (m *Manager) Apply(cfg config.Config) {
 			next = append(next, pn)
 			continue
 		}
+		// A plugin for this id still shutting down, after its plugin
+		// changed or it was dropped, exits before the new one launches,
+		// so the two never hold the panel's resources at once.
+		before := m.dropped[p.ID]
+		if pn := old[p.ID]; pn != nil {
+			before = pn.done
+		}
 		pn := m.newPanel(p)
 		next = append(next, pn)
 		m.wg.Add(1)
 		go func() {
 			defer m.wg.Done()
-			m.supervise(pn)
+			defer func() {
+				m.mu.Lock()
+				if m.dropped[pn.ID] == pn.done {
+					delete(m.dropped, pn.ID)
+				}
+				m.mu.Unlock()
+				close(pn.done)
+			}()
+			if before != nil {
+				<-before // also when pn is dropped first, so done waits too
+			}
+			if pn.ctx.Err() == nil {
+				m.supervise(pn)
+			}
 		}()
 	}
 	for _, pn := range old {
 		pn.stop() // its supervisor shuts its plugin down
+		m.dropped[pn.ID] = pn.done
 	}
 	m.panels = next
 	m.signal()
@@ -255,6 +279,7 @@ func (m *Manager) newPanel(p config.Panel) *panel {
 		PanelState: PanelState{ID: p.ID, Plugin: p.Plugin, State: Starting, Since: time.Now(), MaxAttempts: m.opts.MaxAttempts},
 		ctx:        ctx,
 		stop:       stop,
+		done:       make(chan struct{}),
 		cfg:        p,
 		changed:    make(chan struct{}, 1),
 		logs:       newRing(logLines),
@@ -270,9 +295,10 @@ func (m *Manager) config(pn *panel) config.Panel {
 	return pn.cfg
 }
 
-// supervise runs one panel's plugin until Close: it launches and
-// configures it, waits for it to exit, and restarts it after a failure
-// with exponential backoff, up to MaxAttempts launches in a row. A
+// supervise runs one panel's plugin until Close, or until Apply drops
+// the panel: it launches and configures it, waits for it to exit, and
+// restarts it after a failure with exponential backoff, up to
+// MaxAttempts launches in a row. A
 // permanent failure (see Retryable) and the last failed attempt leave
 // the panel Crashed until Restart.
 func (m *Manager) supervise(pn *panel) {
@@ -291,10 +317,6 @@ func (m *Manager) supervise(pn *panel) {
 			}
 			for len(pn.events) > 0 { // meant for the last launch's view
 				<-pn.events
-			}
-			select {
-			case <-pn.changed: // this launch configures the latest
-			default:
 			}
 			s.State, s.Info, s.Err, s.ExitStatus = Starting, nil, nil, ""
 			s.Failures, s.RestartAt = failures, time.Time{}
@@ -404,6 +426,12 @@ func (m *Manager) supervise(pn *panel) {
 	}
 }
 
+// sameSettings reports whether a and b are the same settings; no
+// settings and empty ones are the same, as Save writes neither.
+func sameSettings(a, b config.Settings) bool {
+	return len(a) == 0 && len(b) == 0 || reflect.DeepEqual(a, b)
+}
+
 // stopping logs err and shows pn as Stopping, before its failed plugin
 // is shut down, which can take seconds; the next one starts only after.
 func (m *Manager) stopping(pn *panel, err error) {
@@ -459,6 +487,10 @@ func (m *Manager) launch(pn *panel) (*Instance, string, error) {
 	if err != nil {
 		pn.fence()
 		return nil, exit, err
+	}
+	select {
+	case <-pn.changed: // this Configure sends the latest
+	default:
 	}
 	if err := configure(pn.ctx, inst, m.config(pn), m.opts.CallTimeout); err != nil {
 		if pn.ctx.Err() == nil {

@@ -26,6 +26,9 @@ func TestApplyAddsAndRemovesPanels(t *testing.T) {
 	defer m.Close()
 	waitFor(t, m, "p0", "live", is(Live))
 	waitFor(t, m, "p1", "live", is(Live))
+	m.mu.Lock()
+	disabled := m.panels[1].inst
+	m.mu.Unlock()
 
 	cfg := panels("clock", "disk")
 	cfg.Panels[1].Enabled = new(bool) // disabled
@@ -33,6 +36,11 @@ func TestApplyAddsAndRemovesPanels(t *testing.T) {
 	m.Apply(cfg)
 	if got := ids(m); !slices.Equal(got, []string{"p0", "p2"}) {
 		t.Fatalf("panels %v after Apply, want [p0 p2]", got)
+	}
+	select {
+	case <-disabled.Done():
+	case <-time.After(10 * time.Second):
+		t.Fatal("the disabled panel's plugin is still running")
 	}
 	waitFor(t, m, "p2", "live", is(Live))
 	if s := m.States()[0]; s.State != Live {
@@ -109,6 +117,46 @@ func TestApplyRejectedSettingsCrash(t *testing.T) {
 	waitFor(t, m, "p0", "live again", is(Live))
 }
 
+// A panel waiting out its backoff restarts at once when its settings
+// change, since the edit may be the fix.
+func TestApplyRestartsBackingOffPanel(t *testing.T) {
+	dir := install(t, "crashes")
+	logger, _ := newLogger()
+	slow := fast
+	slow.Backoff = time.Minute
+	m := StartWith(panels("crashes"), dir, logger, slow)
+	defer m.Close()
+	waitFor(t, m, "p0", "restarting", is(Restarting))
+	cfg := panels("crashes")
+	cfg.Panels[0].Settings = config.Settings{"timezone": "UTC"}
+	m.Apply(cfg)
+	waitFor(t, m, "p0", "launched again before its backoff", func(PanelState) bool {
+		return countLines(m.Logs("p0"), "plugin exited: ") >= 2
+	})
+}
+
+// A panel disabled and enabled again, or given another plugin, waits for
+// its old plugin to exit before it launches the new one.
+func TestApplyWaitsForOldPlugin(t *testing.T) {
+	dir := install(t, "slow-shutdown")
+	logger, _ := newLogger()
+	m := StartWith(panels("slow-shutdown"), dir, logger, fast)
+	defer m.Close()
+	waitFor(t, m, "p0", "live", is(Live))
+	m.mu.Lock()
+	old := m.panels[0].inst
+	m.mu.Unlock()
+
+	off := panels("slow-shutdown")
+	off.Panels[0].Enabled = new(bool)
+	m.Apply(off)
+	m.Apply(panels("slow-shutdown"))
+	waitFor(t, m, "p0", "live again", is(Live))
+	if !old.Exited() {
+		t.Error("the new plugin launched while the old one was still shutting down")
+	}
+}
+
 func TestApplyAfterClose(t *testing.T) {
 	dir := install(t, "clock")
 	logger, _ := newLogger()
@@ -117,5 +165,37 @@ func TestApplyAfterClose(t *testing.T) {
 	m.Apply(panels("clock", "clock"))
 	if got := ids(m); !slices.Equal(got, []string{"p0"}) {
 		t.Errorf("panels %v after Apply following Close, want [p0]", got)
+	}
+}
+
+func TestApplyWaitsForOldPluginOnPluginChange(t *testing.T) {
+	dir := install(t, "slow-shutdown", "clock")
+	logger, _ := newLogger()
+	m := StartWith(panels("slow-shutdown"), dir, logger, fast)
+	defer m.Close()
+	waitFor(t, m, "p0", "live", is(Live))
+	m.mu.Lock()
+	old := m.panels[0].inst
+	m.mu.Unlock()
+
+	m.Apply(panels("clock"))
+	waitFor(t, m, "p0", "live with the new plugin", func(s PanelState) bool { return s.State == Live && s.Plugin == "clock" })
+	if !old.Exited() {
+		t.Error("the new plugin launched while the old one was still shutting down")
+	}
+}
+
+func TestSameSettings(t *testing.T) {
+	for _, tt := range []struct {
+		a, b config.Settings
+		want bool
+	}{
+		{nil, config.Settings{}, true},
+		{config.Settings{"zone": "UTC"}, config.Settings{"zone": "UTC"}, true},
+		{nil, config.Settings{"zone": "UTC"}, false},
+	} {
+		if got := sameSettings(tt.a, tt.b); got != tt.want {
+			t.Errorf("sameSettings(%v, %v) = %t", tt.a, tt.b, got)
+		}
 	}
 }

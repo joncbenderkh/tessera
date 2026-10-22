@@ -102,6 +102,9 @@ func servePlugin(mode string) {
 	if mode == "fails-shutdown" || mode == "misnamed-fails-shutdown" {
 		os.Exit(2)
 	}
+	if mode == "slow-shutdown" {
+		time.Sleep(time.Second)
+	}
 }
 
 // notServing answers every health check NOT_SERVING.
@@ -167,6 +170,7 @@ func (testPlugin) GRPCClient(context.Context, *plugin.GRPCBroker, *grpc.ClientCo
 //     file named after the plugin plus ".open" exists next to it.
 //   - fails-shutdown: exits with status 2 when shut down.
 //   - misnamed-fails-shutdown: as misnamed and fails-shutdown.
+//   - slow-shutdown: exits a second after it is shut down.
 //   - forks: Describe starts a long-lived child that shares the
 //     plugin's stderr, and reports its PID there.
 //   - exits: as forks, then the plugin exits on its own.
