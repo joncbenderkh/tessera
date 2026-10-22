@@ -238,3 +238,52 @@ func TestApplyRelaunchesPanelOverLimit(t *testing.T) {
 		t.Errorf("relaunch logged as:\n%s", strings.Join(logs, "\n"))
 	}
 }
+
+// A live plugin that does not answer Configure again is restarted with
+// backoff, as a hang, not left crashed.
+func TestApplyHungReconfigureRestarts(t *testing.T) {
+	dir := install(t, "hangs-configure-later")
+	logger, _ := newLogger()
+	m := StartWith(panels("hangs-configure-later"), dir, logger, fast)
+	defer m.Close()
+	waitFor(t, m, "p0", "live", is(Live))
+	cfg := panels("hangs-configure-later")
+	cfg.Panels[0].Settings = config.Settings{"timezone": "UTC"}
+	m.Apply(cfg)
+	s := waitFor(t, m, "p0", "restarted", func(s PanelState) bool { return s.Failures > 0 })
+	if s.State == Crashed {
+		t.Fatalf("crashed after a hung Configure: %+v", s)
+	}
+	// The next launch's first Configure answers.
+	waitFor(t, m, "p0", "live again", is(Live))
+	if n := countLines(m.Logs("p0"), "starting plugin"); n != 2 {
+		t.Errorf("%d launches, want 2:\n%s", n, strings.Join(m.Logs("p0"), "\n"))
+	}
+}
+
+// Settings changed while a panel is launching are the ones its first
+// Configure sends, and it is not configured a second time for them.
+func TestApplyDuringLaunch(t *testing.T) {
+	dir := install(t, "clock")
+	logger, _ := newLogger()
+	held, release := make(chan struct{}), make(chan struct{})
+	beforeLaunchHook = func(*panel) {
+		held <- struct{}{}
+		<-release
+	}
+	defer func() { beforeLaunchHook = func(*panel) {} }()
+	m := StartWith(panels("clock"), dir, logger, fast)
+	defer m.Close()
+	<-held
+	cfg := panels("clock")
+	cfg.Panels[0].Settings = config.Settings{"timezone": "UTC"}
+	m.Apply(cfg)
+	beforeLaunchHook = func(*panel) {}
+	close(release)
+	waitFor(t, m, "p0", "live", is(Live))
+	time.Sleep(200 * time.Millisecond) // time for a second Configure, if any
+	logs := m.Logs("p0")
+	if countLines(logs, "configured p0") != 1 || countLines(logs, "configured p0 map[timezone:UTC]") != 1 {
+		t.Errorf("want one Configure, with the new settings:\n%s", strings.Join(logs, "\n"))
+	}
+}

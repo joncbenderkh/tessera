@@ -238,8 +238,9 @@ func (m *Manager) Apply(cfg config.Config) {
 			continue
 		}
 		// A plugin for this id still shutting down, after its plugin
-		// changed or it was dropped, exits before the new one launches,
-		// so the two never hold the panel's resources at once.
+		// changed or it was dropped, exits, or is given up on, before
+		// the new one launches, so the two rarely hold the panel's
+		// resources at once.
 		before := m.dropped[p.ID]
 		if pn := old[p.ID]; pn != nil {
 			before = pn.done
