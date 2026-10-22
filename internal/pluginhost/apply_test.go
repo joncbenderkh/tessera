@@ -102,6 +102,11 @@ func TestApplyRejectedSettingsCrash(t *testing.T) {
 	if s.Err == nil || !strings.Contains(s.Err.Error(), "rejected the settings") {
 		t.Errorf("error %v, want the rejection", s.Err)
 	}
+
+	// Fixing the settings relaunches it, with no Restart.
+	cfg.Panels[0].Settings = config.Settings{"timezone": "UTC"}
+	m.Apply(cfg)
+	waitFor(t, m, "p0", "live again", is(Live))
 }
 
 func TestApplyAfterClose(t *testing.T) {

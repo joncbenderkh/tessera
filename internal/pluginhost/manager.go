@@ -204,7 +204,8 @@ func StartWith(cfg config.Config, dir string, logger *log.Logger, opts Options) 
 // gone or disabled has its plugin shut down in the background, a new or
 // re-enabled one is launched, and one whose plugin changed is both. A
 // live panel whose settings or size changed is configured again, and a
-// failed Configure is a failure like any other. States then lists the
+// failed Configure is a failure like any other; a crashed panel, or
+// one waiting to restart, whose settings or size changed restarts now. States then lists the
 // panels in cfg's order. Once Close has begun, Apply does nothing.
 func (m *Manager) Apply(cfg config.Config) {
 	m.mu.Lock()
@@ -377,6 +378,10 @@ func (m *Manager) supervise(pn *panel) {
 				m.event(pn, "restart requested")
 				failures = 0
 				continue
+			case <-pn.changed:
+				m.event(pn, "settings or size changed; restarting")
+				failures = 0
+				continue
 			}
 		}
 		delay := m.opts.backoff(failures)
@@ -390,6 +395,9 @@ func (m *Manager) supervise(pn *panel) {
 			return
 		case <-pn.restart:
 			m.event(pn, "restart requested")
+			failures = 0
+		case <-pn.changed:
+			m.event(pn, "settings or size changed; restarting")
 			failures = 0
 		case <-time.After(delay):
 		}
