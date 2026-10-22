@@ -458,3 +458,70 @@ func TestTileMenuOneAtATime(t *testing.T) {
 		t.Errorf("disk open %t, clock open %t; want only disk", g.tiles["disk"].open, g.tiles["clock"].open)
 	}
 }
+
+// The plugin popover stays up while the pointer moves from the title
+// onto ⋯, as hovering anywhere on the head shows it.
+func TestPluginPopoverOnMenuButton(t *testing.T) {
+	cfg := gridConfig([]config.Panel{panel("clock", 0, 0, 1, 1)})
+	states := live("clock")
+	var r input.Router
+	var g Grid
+	now := time.Now()
+	frame(&r, &g, cfg, states, now)
+	rect := g.placed["clock"]
+	for _, at := range []image.Point{{rect.Min.X + 30, rect.Min.Y + 22}, {rect.Max.X - 16 - 13, rect.Min.Y + 22}} {
+		frame(&r, &g, cfg, states, now, pointer.Event{Kind: pointer.Move, Source: pointer.Mouse, Position: f32.Pt(float32(at.X), float32(at.Y))})
+		frame(&r, &g, cfg, states, now)
+		if g.tiles["clock"].infoBox.Empty() {
+			t.Errorf("pointer at %v: no plugin popover", at)
+		}
+	}
+}
+
+// A narrow tile in the first column keeps its popovers inside the
+// window, at large text too.
+func TestTilePopoversStayInViewSideways(t *testing.T) {
+	cfg := gridConfig([]config.Panel{panel("net", 0, 0, 1, 1)})
+	cfg.Grid.Columns = 24
+	states := []pluginhost.PanelState{{ID: "net", Plugin: "system-stats-network-monitor-with-a-long-name", State: pluginhost.Starting}}
+	// At 400 wide the head is narrow; at both, large text makes it taller,
+	// and the popovers keep below its ⋯ button.
+	for _, size := range []image.Point{{1440, 900}, {400, 900}} {
+		var r input.Router
+		var g Grid
+		layout := func(events ...event.Event) {
+			for _, e := range events {
+				r.Queue(e)
+			}
+			gtx := context(&r, size, time.Now())
+			gtx.Metric.PxPerSp = 3
+			g.Layout(gtx, testTheme, cfg, states)
+			r.Frame(gtx.Ops)
+		}
+		layout()
+		rect := g.placed["net"]
+		head := f32.Pt(float32(rect.Min.X+20), float32(rect.Min.Y+10))
+		layout(pointer.Event{Kind: pointer.Move, Source: pointer.Mouse, Position: head})
+		layout()
+		window := image.Rectangle{Max: size}
+		tl := g.tiles["net"]
+		if box := tl.infoBox.Add(rect.Min); box.Empty() || !box.In(window) {
+			t.Errorf("%v: plugin popover at %v, outside the window", size, box)
+		}
+		if tl.infoBox.Min.Y < tl.menuEnd {
+			t.Errorf("%v: plugin popover top %d, over the ⋯ button ending at %d", size, tl.infoBox.Min.Y, tl.menuEnd)
+		}
+		headH := tl.headSize.Y
+		layout(click(image.Pt(rect.Max.X-16-13, rect.Min.Y+headH/2))...)
+		layout()
+		if !tl.open {
+			t.Fatalf("%v: the menu did not open", size)
+		}
+		if box := tl.menuBox.Add(rect.Min); !box.In(window) {
+			t.Errorf("%v: menu at %v, outside the window", size, box)
+		}
+		if tl.menuBox.Min.Y < headH {
+			t.Errorf("%v: menu top %d, over the %d px head", size, tl.menuBox.Min.Y, headH)
+		}
+	}
+}

@@ -46,10 +46,14 @@ type tile struct {
 	restart  Button
 	logs     Button
 	headSize image.Point
+	// menuEnd is the bottom of the head's ⋯ button, which the plugin
+	// popover stays below.
+	menuEnd int
 	// view is the grid's visible area, in the tile's coordinates, which
 	// the popovers stay inside.
 	view    image.Rectangle
 	menuBox image.Rectangle // where the menu was drawn; for tests
+	infoBox image.Rectangle // where the plugin popover was drawn; for tests
 	buttons image.Rectangle // where Restart and Logs were drawn; for tests
 }
 
@@ -221,13 +225,16 @@ func (t *tile) layoutHead(gtx layout.Context, th *theme.Theme, s pluginhost.Pane
 	name.at(gtx, image.Pt(pad, (headH-name.dims.Size.Y)/2))
 	x := width - pad - menu.dims.Size.X
 	menu.at(gtx, image.Pt(x, (headH-menu.dims.Size.Y)/2))
+	t.menuEnd = (headH + menu.dims.Size.Y) / 2
 	if kind == kindStale {
 		x -= gap + tag.dims.Size.X
 		tag.at(gtx, image.Pt(x, (headH-tag.dims.Size.Y)/2))
 	}
 
+	t.infoBox = image.Rectangle{}
 	pop := op.Record(gtx.Ops)
-	if (hovered || gtx.Focused(&t.menu.Clickable)) && !t.open {
+	// ⋯ sits over the head's hover area, so hovering it counts too.
+	if (hovered || t.menu.Hovered() || gtx.Focused(&t.menu.Clickable)) && !t.open {
 		t.infoPopover(gtx, th, s, narrow)
 	}
 	if t.open {
@@ -244,11 +251,16 @@ func (t *tile) infoPopover(gtx layout.Context, th *theme.Theme, s pluginhost.Pan
 	if narrow {
 		top = gtx.Dp(28)
 	}
+	top = max(top, t.menuEnd) // large text makes the head taller
 	padX, padY := gtx.Dp(10), gtx.Dp(theme.Space8)
-	text := recordLabel(gtx, th, pluginInfo(s), theme.TextMin, th.Fg, theme.Mono)
+	lgtx := gtx
+	lgtx.Constraints = layout.Constraints{Max: image.Pt(max(t.view.Dx()-2*padX, 0), gtx.Constraints.Max.Y)}
+	text := recordLabel(lgtx, th, pluginInfo(s), theme.TextMin, th.Fg, theme.Mono)
 	box := image.Rectangle{Max: text.dims.Size.Add(image.Pt(2*padX, 2*padY))}
+	at := t.inView(image.Pt(gtx.Constraints.Max.X-gtx.Dp(theme.Space12)-box.Dx(), top), box.Size())
+	t.infoBox = box.Add(at)
 	defer clip.Rect(t.view).Push(gtx.Ops).Pop()
-	defer op.Offset(image.Pt(gtx.Constraints.Max.X-gtx.Dp(theme.Space12)-box.Dx(), t.inView(top, box.Dy()))).Push(gtx.Ops).Pop()
+	defer op.Offset(at).Push(gtx.Ops).Pop()
 	rr := gtx.Dp(theme.RadiusSmall)
 	paint.FillShape(gtx.Ops, th.Inset, clip.UniformRRect(box, rr).Op(gtx.Ops))
 	strokeRRect(gtx, box, rr, gtx.Dp(1), th.Border)
@@ -269,7 +281,7 @@ func (t *tile) menuPopover(gtx layout.Context, th *theme.Theme, narrow bool) {
 	}
 	pad := gtx.Dp(6)
 	igtx := gtx
-	igtx.Constraints = layout.Constraints{Max: image.Pt(gtx.Dp(240), gtx.Dp(400))}
+	igtx.Constraints = layout.Constraints{Max: image.Pt(max(min(gtx.Dp(240), t.view.Dx()-2*pad), 0), gtx.Dp(400))}
 	widest := 0
 	for i := range t.items {
 		t.items[i].Bare = true
@@ -289,12 +301,9 @@ func (t *tile) menuPopover(gtx layout.Context, th *theme.Theme, narrow bool) {
 	}
 	box := image.Rectangle{Max: image.Pt(widest+2*pad, height+2*pad)}
 	top := t.headSize.Y
-	if narrow {
-		top = gtx.Dp(32)
-	}
 	// Moved up if it would run past the visible area's bottom, so its
 	// items stay reachable at the window's edge.
-	at := image.Pt(gtx.Constraints.Max.X-gtx.Dp(theme.Space8)-box.Dx(), t.inView(top, box.Dy()))
+	at := t.inView(image.Pt(gtx.Constraints.Max.X-gtx.Dp(theme.Space8)-box.Dx(), top), box.Size())
 	t.menuBox = box.Add(at)
 	defer clip.Rect(t.view).Push(gtx.Ops).Pop()
 	defer op.Offset(at).Push(gtx.Ops).Pop()
@@ -312,11 +321,14 @@ func (t *tile) menuPopover(gtx layout.Context, th *theme.Theme, narrow bool) {
 	}
 }
 
-// inView is the y at which a popover h tall, meant to sit at y, stays
-// inside the visible area: moved up past its bottom, then down past its
-// top if it is taller than the area.
-func (t *tile) inView(y, h int) int {
-	return max(min(y, t.view.Max.Y-h), t.view.Min.Y)
+// inView is where a popover of size, meant to sit at at, stays inside
+// the visible area: moved up and left past its bottom and right edges,
+// then down and right past its top and left ones if it is larger.
+func (t *tile) inView(at, size image.Point) image.Point {
+	return image.Pt(
+		max(min(at.X, t.view.Max.X-size.X), t.view.Min.X),
+		max(min(at.Y, t.view.Max.Y-size.Y), t.view.Min.Y),
+	)
 }
 
 // errorBody is a failed panel's body: what went wrong, when it restarts,
