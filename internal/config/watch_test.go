@@ -8,6 +8,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -313,13 +314,7 @@ func TestWatchFollowsLinkedDirectory(t *testing.T) {
 	if err := Save(filepath.Join(second, FileName), columns(6)); err != nil {
 		t.Fatal(err)
 	}
-	swap := link + ".new"
-	if err := os.Symlink(second, swap); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Rename(swap, link); err != nil {
-		t.Fatal(err)
-	}
+	repoint(t, second, link)
 	want("pointing the directory elsewhere", 6)
 	for _, n := range []int{7, 8} {
 		if err := Save(filepath.Join(second, FileName), columns(n)); err != nil {
@@ -447,5 +442,28 @@ func TestWatchReportsMissingDirectoryOnce(t *testing.T) {
 	defer mu.Unlock()
 	if len(errs) != 1 {
 		t.Errorf("%d errors reported, want 1: %v", len(errs), errs)
+	}
+}
+
+// repoint points the link at link to target. It replaces the link in
+// one rename, as dotfiles managers do, where it can: Windows refuses to
+// rename over a link to a directory, so there it removes the link first.
+func repoint(t *testing.T, target, link string) {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		if err := os.Remove(link); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(target, link); err != nil {
+			t.Fatal(err)
+		}
+		return
+	}
+	swap := link + ".new"
+	if err := os.Symlink(target, swap); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(swap, link); err != nil {
+		t.Fatal(err)
 	}
 }
