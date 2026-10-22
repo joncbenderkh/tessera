@@ -73,17 +73,15 @@ func Arrange(panels []config.Panel, configured, columns int) []Cell {
 	})
 	cells := make([]Cell, 0, len(order))
 	for _, p := range order {
-		// It rises while the row above is free, so it stops below the
-		// panels placed before it in its columns. Its own row fits, as
-		// they only moved up.
-		c := Cell{ID: p.ID, X: p.X, Y: p.Y, W: p.W, H: p.H}
-		for c.Y > 0 {
-			up := c
-			up.Y--
-			if !fits(cells, up) {
-				break
+		// It rises to just below the panels placed before it in its
+		// columns, all of which end by its own row: they come no lower
+		// in the config, enabled panels do not overlap, and they only
+		// moved up.
+		c := Cell{ID: p.ID, X: p.X, W: p.W, H: p.H}
+		for _, d := range cells {
+			if c.X < d.X+d.W && d.X < c.X+c.W {
+				c.Y = max(c.Y, d.Y+d.H)
 			}
-			c = up
 		}
 		cells = append(cells, c)
 	}
