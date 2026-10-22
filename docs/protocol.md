@@ -288,6 +288,22 @@ or a step on the type and spacing scales, never a color, font, or pixel
 size. Numbers are formatted by the plugin, which knows its units and
 locale.
 
+How the host draws a view:
+- A view taller than its tile is cut off at the tile's edge, except
+  tables and lists, which scroll within the space they get. A table or
+  list with an `id` keeps its scroll position across views and sends a
+  `ScrollEvent` whenever its visible range changes, including the
+  first time it is drawn.
+- A loading widget is a static placeholder in its shape. A loading
+  `Stack` is drawn as usual: its children carry their own `loading`.
+- A stat narrower than 200 dp uses a smaller value size. A stat's or
+  gauge's caption with no tone is muted.
+- Digits in stat and gauge values and in end-aligned table cells are
+  equally wide, so a changing value keeps its width.
+- The row or item last activated stays highlighted, by its
+  `action_id`, until another one is activated; the plugin never sees
+  this.
+
 The vocabulary is deliberately small. `docs/design/widget-vocabulary.html`
 shows each widget as the renderer should draw it. A new widget or field is
 a schema change: add it to `view.proto` with a comment, and to that
