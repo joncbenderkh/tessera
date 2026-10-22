@@ -142,8 +142,8 @@ type Action struct {
 const (
 	gridGap    unit.Dp = 14   // the space between tiles
 	maxContent unit.Dp = 1600 // the widest the grid gets
-	// minColumn is the narrowest a column gets, which a failed panel's
-	// buttons fit.
+	// minColumn is the narrowest a column gets; large text widens it
+	// further, to fit a failed panel's buttons (minTile).
 	minColumn unit.Dp = 200
 )
 
@@ -165,10 +165,17 @@ func (g *Grid) Layout(gtx layout.Context, th *theme.Theme, cfg config.Config, st
 	width := widthDp(gtx)
 	pad := gtx.Dp(contentPadding(width))
 	content := max(min(area.X-2*pad, gtx.Dp(maxContent)), 0)
-	columns := Columns(width, cfg.Grid.Columns)
+	// Large text takes fewer columns and taller rows: a tile never gets
+	// too small for a failed panel's buttons.
+	least, stacked := minTile(gtx, th, width <= Narrow)
+	gap := gtx.Dp(gridGap)
+	columns := max(min(Columns(width, cfg.Grid.Columns), (content+gap)/(least.X+gap)), 1)
 	cells := Arrange(cfg.Panels, cfg.Grid.Columns, columns)
-	gap, rowH := gtx.Dp(gridGap), gtx.Dp(unit.Dp(cfg.Grid.RowHeight))
 	colW := max((content-gap*(columns-1))/columns, 0)
+	rowH := max(gtx.Dp(unit.Dp(cfg.Grid.RowHeight)), least.Y)
+	if colW < least.X {
+		rowH = max(rowH, stacked)
+	}
 	rows := 0
 	for _, c := range cells {
 		rows = max(rows, c.Y+c.H)

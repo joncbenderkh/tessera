@@ -206,16 +206,8 @@ func (t *tile) layoutHead(gtx layout.Context, th *theme.Theme, s pluginhost.Pane
 	titleW := max(inner.Constraints.Max.X-menu.dims.Size.X-tag.dims.Size.X-2*gap, 0)
 	tgtx := inner
 	tgtx.Constraints = layout.Constraints{Max: image.Pt(titleW, gtx.Constraints.Max.Y)}
-	name := record(tgtx, material.LabelStyle{
-		Text: title(s), TextSize: theme.TextSmall, Color: th.Fg,
-		Font: font.Font{Typeface: theme.Body.Typeface, Weight: 150}, MaxLines: 1, Shaper: th.Shaper,
-	}.Layout)
-
-	h := unit.Dp(44)
-	if narrow {
-		h = 32
-	}
-	headH := max(gtx.Dp(h), name.dims.Size.Y+gap, menu.dims.Size.Y+gap)
+	name := record(tgtx, titleLabel(th, title(s)).Layout)
+	headH := headHeight(gtx, name.dims.Size.Y, menu.dims.Size.Y, narrow)
 	t.headSize = image.Pt(width, headH)
 	area := clip.Rect{Max: t.headSize}.Push(gtx.Ops)
 	t.head.Add(gtx.Ops)
@@ -331,6 +323,44 @@ func (t *tile) inView(at, size image.Point) image.Point {
 	)
 }
 
+// titleLabel is a tile head's title.
+func titleLabel(th *theme.Theme, text string) material.LabelStyle {
+	return material.LabelStyle{
+		Text: text, TextSize: theme.TextSmall, Color: th.Fg,
+		Font: font.Font{Typeface: theme.Body.Typeface, Weight: 150}, MaxLines: 1, Shaper: th.Shaper,
+	}
+}
+
+// headHeight is the height of a tile head whose title and menu button
+// are nameH and menuH tall.
+func headHeight(gtx layout.Context, nameH, menuH int, narrow bool) int {
+	h := unit.Dp(44)
+	if narrow {
+		h = 32
+	}
+	gap := gtx.Dp(theme.Space8)
+	return max(gtx.Dp(h), nameH+gap, menuH+gap)
+}
+
+// minTile is the smallest tile that holds its head and, below it, a
+// failed panel's Restart and Logs buttons side by side, at gtx's text
+// size, and the height that holds them one above the other, as a
+// narrower tile has them. No column is narrower, if the window allows,
+// and no row shorter, so the buttons stay in reach.
+func minTile(gtx layout.Context, th *theme.Theme, narrow bool) (least image.Point, stacked int) {
+	gtx.Constraints = layout.Constraints{Max: image.Pt(1<<20, 1<<20)}
+	var restart, logs, menu Button
+	menu.Icon, menu.Bare = true, true
+	measure := func(b *Button, label string) image.Point {
+		return record(gtx, func(gtx layout.Context) layout.Dimensions { return b.Layout(gtx, th, label) }).dims.Size
+	}
+	r, l, m := measure(&restart, "Restart"), measure(&logs, "Logs"), measure(&menu, "⋯")
+	name := record(gtx, titleLabel(th, "Ag").Layout).dims.Size
+	pad, space := gtx.Dp(theme.Space16), gtx.Dp(theme.Space8)
+	head := headHeight(gtx, name.Y, m.Y, narrow)
+	return image.Pt(2*pad+r.X+space+l.X, head+max(r.Y, l.Y)+pad), head + r.Y + space + l.Y + pad
+}
+
 // errorBody is a failed panel's body: what went wrong, when it restarts,
 // and the Restart and Logs buttons.
 func (t *tile) errorBody(gtx layout.Context, th *theme.Theme, s pluginhost.PanelState, narrow bool) {
@@ -349,10 +379,23 @@ func (t *tile) errorBody(gtx layout.Context, th *theme.Theme, s pluginhost.Panel
 	restart := record(gtx, func(gtx layout.Context) layout.Dimensions { return t.restart.Layout(gtx, th, "Restart") })
 	logs := record(gtx, func(gtx layout.Context) layout.Dimensions { return t.logs.Layout(gtx, th, "Logs") })
 
+	// The buttons sit in a row beside the symbol, or below it if they do
+	// not fit there, or one above the other if they do not fit in a row.
+	space := gtx.Dp(theme.Space8)
+	x, logsAt := symbol+gap, image.Pt(restart.dims.Size.X+space, 0)
+	buttons := image.Pt(logsAt.X+logs.dims.Size.X, max(restart.dims.Size.Y, logs.dims.Size.Y))
+	if narrow || x+buttons.X > gtx.Constraints.Max.X {
+		x = 0
+	}
+	if buttons.X > gtx.Constraints.Max.X {
+		logsAt = image.Pt(0, restart.dims.Size.Y+space)
+		buttons = image.Pt(max(restart.dims.Size.X, logs.dims.Size.X), logsAt.Y+logs.dims.Size.Y)
+	}
+
 	// The buttons come first: in a short tile the message gives up lines,
 	// then the text is cut off above the buttons, so they stay reachable.
 	// The full message is in the Logs.
-	buttonsH := max(restart.dims.Size.Y, logs.dims.Size.Y)
+	buttonsH := buttons.Y
 	lineGap, buttonGap := gtx.Dp(7), gtx.Dp(theme.Space12)
 	room := gtx.Constraints.Max.Y - buttonsH - buttonGap
 	var msg recorded
@@ -378,16 +421,10 @@ func (t *tile) errorBody(gtx layout.Context, th *theme.Theme, s pluginhost.Panel
 	detail.at(gtx, image.Pt(symbol+gap, msg.dims.Size.Y+lineGap))
 	text.Pop()
 
-	// Beside the symbol, if they fit there.
-	x := symbol + gap
-	lx := restart.dims.Size.X + gtx.Dp(theme.Space8)
-	if narrow || x+lx+logs.dims.Size.X > gtx.Constraints.Max.X {
-		x = 0
-	}
-	lx += x
-	restart.at(gtx, image.Pt(x, y))
-	logs.at(gtx, image.Pt(lx, y))
-	t.buttons = image.Rect(x, y, lx+logs.dims.Size.X, y+buttonsH)
+	at := image.Pt(x, y)
+	restart.at(gtx, at)
+	logs.at(gtx, at.Add(logsAt))
+	t.buttons = image.Rectangle{Min: at, Max: at.Add(buttons)}
 }
 
 // errorText says why the panel failed.

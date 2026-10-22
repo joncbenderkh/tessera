@@ -398,27 +398,33 @@ func TestRetryText(t *testing.T) {
 
 func TestErrorTileButtonsFitLongError(t *testing.T) {
 	cfg := gridConfig([]config.Panel{panel("weather", 0, 0, 1, 1)})
-	cfg.Grid.RowHeight = 150
 	states := []pluginhost.PanelState{{
 		ID: "weather", Plugin: "weather", State: pluginhost.Crashed, Failures: 5, MaxAttempts: 5,
 		Err: errors.New(strings.Repeat("plugin \"weather\" failed to start: fork/exec: no such file or directory ", 4)),
 	}}
+	// Large text widens the columns and heightens the rows to fit them,
+	// even with many columns and the shortest rows, and a window too
+	// narrow for them side by side stacks them in a taller row.
 	for _, tt := range []struct {
-		scale   float32
-		columns int
-	}{{1, 4}, {1.5, 4}, {2, 4}, {1, 24}, {1.5, 24}} {
+		scale                     float32
+		width, columns, rowHeight int
+	}{
+		{1, 1440, 4, 150}, {1.5, 1440, 4, 150}, {2, 1440, 4, 150},
+		{1, 1440, 24, 150}, {1.5, 1440, 24, 150}, {2, 1440, 24, 150}, {2.5, 1440, 24, 150}, {3, 1440, 24, 150},
+		{3, 360, 4, 150}, {4, 360, 4, 150},
+	} {
 		scale := tt.scale
-		cfg.Grid.Columns = tt.columns
+		cfg.Grid.Columns, cfg.Grid.RowHeight = tt.columns, tt.rowHeight
 		var r input.Router
 		var g Grid
-		gtx := context(&r, image.Pt(1440, 900), time.Now())
+		gtx := context(&r, image.Pt(tt.width, 900), time.Now())
 		gtx.Metric.PxPerSp = scale
 		g.Layout(gtx, testTheme, cfg, states)
-		// Inside the tile, above its 16 dp bottom padding.
-		body := image.Rectangle{Max: g.placed["weather"].Size()}
-		body.Max.Y -= 16
+		// Inside the tile's 16 dp side and bottom padding.
+		size := g.placed["weather"].Size()
+		body := image.Rect(16, 0, size.X-16, size.Y-16)
 		if b := g.tiles["weather"].buttons; b.Empty() || !b.In(body) {
-			t.Errorf("text ×%v, %d columns: buttons at %v, outside the body %v", scale, tt.columns, b, body)
+			t.Errorf("text ×%v, %d wide, %d columns: buttons at %v, outside the body %v", scale, tt.width, tt.columns, b, body)
 		}
 	}
 }
