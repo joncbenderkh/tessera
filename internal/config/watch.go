@@ -16,6 +16,11 @@ import (
 // produces into a single reload.
 const settleDelay = 100 * time.Millisecond
 
+// linkCheck is how often Watch checks where a symlinked config points.
+// kqueue (macOS, the BSDs) watches the file a link points to, not the
+// link, so it reports no event when the link is replaced.
+const linkCheck = time.Second
+
 // Watch calls onChange whenever the file at path changes content, until ctx
 // is done. It reports invalid configs as errors rather than stopping, so a
 // half-finished edit does not end the watch. Saves that leave the content
@@ -58,10 +63,16 @@ func Watch(ctx context.Context, path string, onChange func(Config, error)) error
 	last, _ := os.ReadFile(path)
 	settle := time.NewTimer(0)
 	<-settle.C
+	check := time.NewTicker(linkCheck)
+	defer check.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			return nil
+		case <-check.C:
+			if target != "" && linkTarget(path) != target {
+				settle.Reset(settleDelay)
+			}
 		case err := <-watcher.Errors:
 			onChange(Config{}, err)
 		case event := <-watcher.Events:
