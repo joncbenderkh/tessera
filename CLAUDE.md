@@ -85,7 +85,9 @@ dialogs). Edit mode must be able to re-enable any disabled panel.
 - `internal/pluginhost`: finding, launching, describing, configuring,
   supervising, and shutting down plugins, one process per enabled
   panel: restarts with backoff, panel states, each panel's logs, its
-  latest view (from Watch, or by polling Render), and input events.
+  latest view (from Watch, or by polling Render), input events, and
+  config changes while running (`Manager.Apply` starts, stops and
+  reconfigures panels).
   Its tests run the test binary itself as a plugin whose behaviour
   follows its file name (`plugin_test.go`).
 - `proto/`: the plugin protocol. The `.proto` files and the Go code
