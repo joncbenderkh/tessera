@@ -25,6 +25,9 @@ type Button struct {
 	Toggle, Pressed bool
 	// Icon makes it a square 32 dp icon button with larger text.
 	Icon bool
+	// Bare drops the border, as the tile menu and its items have, and
+	// sets the text at the start. A bare icon button is 26 dp and Muted.
+	Bare bool
 	// Description is what the button does, for screen readers; an icon
 	// button's glyph does not say.
 	Description string
@@ -35,8 +38,12 @@ type Button struct {
 
 // Layout draws the button with label as its text.
 func (b *Button) Layout(gtx layout.Context, th *theme.Theme, label string) layout.Dimensions {
+	minWidth := gtx.Constraints.Min.X
 	dims := b.Clickable.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
 		fg, bg := th.Fg, color.NRGBA{}
+		if b.Bare && b.Icon {
+			fg = th.Muted
+		}
 		switch {
 		case b.Pressed:
 			fg, bg = th.Bg, th.Fg
@@ -57,8 +64,12 @@ func (b *Button) Layout(gtx layout.Context, th *theme.Theme, label string) layou
 			})
 		}
 		// 32 dp, or more if a large text scale needs it.
-		height := max(gtx.Dp(32), text.dims.Size.Y+gtx.Dp(theme.Space8))
-		width := max(text.dims.Size.X+2*gtx.Dp(pad), height)
+		side := unit.Dp(32)
+		if b.Bare && b.Icon {
+			side = 26
+		}
+		height := max(gtx.Dp(side), text.dims.Size.Y+gtx.Dp(theme.Space8))
+		width := max(text.dims.Size.X+2*gtx.Dp(pad), height, minWidth)
 		if b.Icon {
 			width = height
 		}
@@ -72,8 +83,13 @@ func (b *Button) Layout(gtx layout.Context, th *theme.Theme, label string) layou
 		}
 		rr := gtx.Dp(theme.RadiusSmall)
 		paint.FillShape(gtx.Ops, bg, clip.UniformRRect(bounds, rr).Op(gtx.Ops))
-		strokeRRect(gtx, bounds, rr, gtx.Dp(1), th.Border)
-		text.at(gtx, bounds.Max.Sub(text.dims.Size).Div(2))
+		at := bounds.Max.Sub(text.dims.Size).Div(2)
+		if b.Bare && !b.Icon {
+			at.X = gtx.Dp(pad)
+		} else if !b.Bare {
+			strokeRRect(gtx, bounds, rr, gtx.Dp(1), th.Border)
+		}
+		text.at(gtx, at)
 		return layout.Dimensions{Size: bounds.Max}
 	})
 	if gtx.Focused(&b.Clickable) {

@@ -195,9 +195,9 @@ func (x *DescribeResponse) GetDefaultSize() *GridSize {
 // GridSize is a panel's size in grid cells.
 type GridSize struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// Width in grid columns, at least 1.
+	// Width in grid columns, at least 1. The host sends at most 24.
 	Columns uint32 `protobuf:"varint,1,opt,name=columns,proto3" json:"columns,omitempty"`
-	// Height in grid rows, at least 1.
+	// Height in grid rows, at least 1. The host sends at most 1000.
 	Rows          uint32 `protobuf:"varint,2,opt,name=rows,proto3" json:"rows,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache

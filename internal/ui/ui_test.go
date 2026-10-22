@@ -189,15 +189,67 @@ func TestToaster(t *testing.T) {
 		t.Fatalf("still showing %q after %v", got, ToastFor)
 	}
 
+	// A message waits for the one showing; one already waiting is not
+	// queued twice, but the one showing can come again.
 	toast.Show("two")
 	frame(&toast, 10*time.Second)
 	toast.Show("three")
-	if got := frame(&toast, 11*time.Second); got != "three" {
-		t.Fatalf("shows %q, want the newest message", got)
+	toast.Show("two")
+	toast.Show("three")
+	if got := frame(&toast, 11*time.Second); got != "two" {
+		t.Fatalf("shows %q, want two until its time is up", got)
 	}
-	// The newest message's clock starts when it is first drawn.
-	if got := frame(&toast, 11*time.Second+ToastFor-time.Millisecond); got != "three" {
-		t.Fatalf("the newest message went with the old one's clock: %q", got)
+	if got := frame(&toast, 10*time.Second+ToastFor); got != "three" {
+		t.Fatalf("shows %q, want three after two", got)
+	}
+	// Its clock starts when it is first drawn.
+	if got := frame(&toast, 10*time.Second+2*ToastFor-time.Millisecond); got != "three" {
+		t.Fatalf("three went early: %q", got)
+	}
+	if got := frame(&toast, 10*time.Second+2*ToastFor); got != "two" {
+		t.Fatalf("shows %q, want two again", got)
+	}
+	if got := frame(&toast, 10*time.Second+3*ToastFor); got != "" {
+		t.Fatalf("still showing %q, though nothing waits", got)
+	}
+}
+
+func TestToasterKinds(t *testing.T) {
+	var r input.Router
+	t0 := time.Now()
+	frame := func(tt *Toaster, at time.Duration) string {
+		tt.Layout(context(&r, image.Pt(800, 600), t0.Add(at)), testTheme)
+		return tt.Text()
+	}
+	var toast Toaster
+	toast.Put("reload", "bad 1")
+	if got := frame(&toast, 0); got != "bad 1" {
+		t.Fatalf("shows %q, want bad 1", got)
+	}
+	// One of a kind showing is replaced, with a new clock; one waiting
+	// is replaced in its place.
+	toast.Show("other")
+	toast.Put("reload", "bad 2")
+	if got := frame(&toast, time.Second); got != "bad 2" {
+		t.Fatalf("shows %q, want bad 2 in place of bad 1", got)
+	}
+	if got := frame(&toast, time.Second+ToastFor-time.Millisecond); got != "bad 2" {
+		t.Fatalf("bad 2 went with bad 1's clock: %q", got)
+	}
+	if got := frame(&toast, time.Second+ToastFor); got != "other" {
+		t.Fatalf("shows %q, want other", got)
+	}
+	toast.Put("reload", "bad 3")
+	toast.Put("reload", "bad 4")
+	toast.Drop("reload")
+	if got := frame(&toast, time.Second+2*ToastFor); got != "" {
+		t.Fatalf("shows %q after Drop", got)
+	}
+	toast.Put("reload", "bad 5")
+	frame(&toast, 10*time.Second)
+	toast.Drop("reload")
+	if got := frame(&toast, 10*time.Second+time.Millisecond); got != "" {
+		t.Fatalf("shows %q after dropping the one showing", got)
 	}
 }
 

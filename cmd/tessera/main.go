@@ -5,11 +5,13 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"log"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 
 	"gioui.org/app"
@@ -36,7 +38,7 @@ func main() {
 		}
 		*configPath = path
 	}
-	cfg, err := config.Load(*configPath)
+	cfg, read, err := config.Read(*configPath)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -58,6 +60,29 @@ func main() {
 		os.Exit(128 + int(sig.(syscall.Signal)))
 	}()
 
+	reloads := make(chan reload, 1)
+	go func() {
+		name := filepath.Base(*configPath)
+		err := config.Watch(context.Background(), *configPath, read, func(c config.Config, err error) {
+			if err != nil {
+				log.Print(reloadError(*configPath, err, error.Error))
+				err = reloadError(name, err, brief)
+			}
+			// Queued first, so a frame that shows the new plugins' states
+			// lays out the new config.
+			queue(reloads, c, err)
+			if err == nil {
+				plugins.Apply(c)
+			}
+			window.Invalidate()
+		})
+		if err != nil {
+			log.Printf("not watching %s for changes: %v", *configPath, err)
+			queue(reloads, config.Config{}, fmt.Errorf("%s is not watched, so edits apply only after a restart: %w", name, err))
+			window.Invalidate()
+		}
+	}()
+
 	go func() {
 		defer func() {
 			if r := recover(); r != nil {
@@ -65,8 +90,8 @@ func main() {
 				panic(r)
 			}
 		}()
-		window.Option(app.Title("tessera"), app.Size(unit.Dp(1440), unit.Dp(900)), app.MinSize(unit.Dp(360), unit.Dp(240)))
-		err := run(window, plugins, cfg.Theme, saver)
+		window.Option(app.Title("tessera"), app.Size(unit.Dp(1440), unit.Dp(900)), app.MinSize(minWidth, minHeight))
+		err := run(window, plugins, cfg, reloads, saver)
 		plugins.Close()
 		if err != nil {
 			log.Fatal(err)

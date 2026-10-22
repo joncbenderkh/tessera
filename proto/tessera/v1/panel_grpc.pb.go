@@ -46,10 +46,10 @@ type PanelServiceClient interface {
 	// schema version it will speak.
 	Describe(ctx context.Context, in *DescribeRequest, opts ...grpc.CallOption) (*DescribeResponse, error)
 	// Configure passes the panel's settings and size. The plugin returns
-	// INVALID_ARGUMENT with a readable message if it rejects the settings;
-	// it then keeps its previous settings, if any. The host shows the
-	// message in an error tile, cancels any open Watch or stops polling,
-	// and makes no Watch or Render call until a later Configure succeeds.
+	// INVALID_ARGUMENT with a readable message if it rejects the settings.
+	// The host then shuts the plugin down and shows the panel as crashed,
+	// with the message, until its settings or size change again or the
+	// user restarts it; the plugin need not keep its previous settings.
 	Configure(ctx context.Context, in *ConfigureRequest, opts ...grpc.CallOption) (*ConfigureResponse, error)
 	// Watch streams a new view whenever the panel's content changes,
 	// starting with the current view (the first response always carries
@@ -161,10 +161,10 @@ type PanelServiceServer interface {
 	// schema version it will speak.
 	Describe(context.Context, *DescribeRequest) (*DescribeResponse, error)
 	// Configure passes the panel's settings and size. The plugin returns
-	// INVALID_ARGUMENT with a readable message if it rejects the settings;
-	// it then keeps its previous settings, if any. The host shows the
-	// message in an error tile, cancels any open Watch or stops polling,
-	// and makes no Watch or Render call until a later Configure succeeds.
+	// INVALID_ARGUMENT with a readable message if it rejects the settings.
+	// The host then shuts the plugin down and shows the panel as crashed,
+	// with the message, until its settings or size change again or the
+	// user restarts it; the plugin need not keep its previous settings.
 	Configure(context.Context, *ConfigureRequest) (*ConfigureResponse, error)
 	// Watch streams a new view whenever the panel's content changes,
 	// starting with the current view (the first response always carries

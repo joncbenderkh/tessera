@@ -25,10 +25,10 @@ service PanelService {
   rpc Describe(DescribeRequest) returns (DescribeResponse);
 
   // Configure passes the panel's settings and size. The plugin returns
-  // INVALID_ARGUMENT with a readable message if it rejects the settings;
-  // it then keeps its previous settings, if any. The host shows the
-  // message in an error tile, cancels any open Watch or stops polling,
-  // and makes no Watch or Render call until a later Configure succeeds.
+  // INVALID_ARGUMENT with a readable message if it rejects the settings.
+  // The host then shuts the plugin down and shows the panel as crashed,
+  // with the message, until its settings or size change again or the
+  // user restarts it; the plugin need not keep its previous settings.
   rpc Configure(ConfigureRequest) returns (ConfigureResponse);
 
   // Watch streams a new view whenever the panel's content changes,
@@ -98,9 +98,9 @@ message DescribeResponse {
 
 // GridSize is a panel's size in grid cells.
 message GridSize {
-  // Width in grid columns, at least 1.
+  // Width in grid columns, at least 1. The host sends at most 24.
   uint32 columns = 1;
-  // Height in grid rows, at least 1.
+  // Height in grid rows, at least 1. The host sends at most 1000.
   uint32 rows = 2;
 }
 

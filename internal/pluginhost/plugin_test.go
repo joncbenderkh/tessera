@@ -102,6 +102,9 @@ func servePlugin(mode string) {
 	if mode == "fails-shutdown" || mode == "misnamed-fails-shutdown" {
 		os.Exit(2)
 	}
+	if mode == "slow-shutdown" {
+		time.Sleep(time.Second)
+	}
 }
 
 // notServing answers every health check NOT_SERVING.
@@ -167,6 +170,7 @@ func (testPlugin) GRPCClient(context.Context, *plugin.GRPCBroker, *grpc.ClientCo
 //     file named after the plugin plus ".open" exists next to it.
 //   - fails-shutdown: exits with status 2 when shut down.
 //   - misnamed-fails-shutdown: as misnamed and fails-shutdown.
+//   - slow-shutdown: exits a second after it is shut down.
 //   - forks: Describe starts a long-lived child that shares the
 //     plugin's stderr, and reports its PID there.
 //   - exits: as forks, then the plugin exits on its own.
@@ -217,6 +221,10 @@ func (testPlugin) GRPCClient(context.Context, *plugin.GRPCBroker, *grpc.ClientCo
 //   - events: Watch answers each event with a view "got <action id>".
 //   - hangs-event: HandleEvent never answers.
 //   - unavailable-event: HandleEvent fails with UNAVAILABLE.
+//   - rejects-later: rejects the settings of each Configure after the
+//     first.
+//   - hangs-configure-later: each Configure after the first never
+//     answers.
 //
 // Any other name is a well-behaved plugin of that name, which reports
 // each Configure on stderr, and whose Watch sends a view naming it,
@@ -228,6 +236,7 @@ type server struct {
 
 	mu      sync.Mutex
 	renders int      // Renders answered
+	configs int      // rejects-later, hangs-configure-later: Configures asked for
 	seen    []string // polled-events: the calls so far
 	deep    bool     // polled-event-deep: an event came since the last Render
 }
@@ -294,6 +303,23 @@ func (s *server) Configure(ctx context.Context, req *tesserav1.ConfigureRequest)
 	switch s.mode {
 	case "rejects":
 		return nil, status.Error(codes.InvalidArgument, "timezone: unknown")
+	case "rejects-later":
+		s.mu.Lock()
+		s.configs++
+		later := s.configs > 1
+		s.mu.Unlock()
+		if later {
+			return nil, status.Error(codes.InvalidArgument, "timezone: unknown")
+		}
+	case "hangs-configure-later":
+		s.mu.Lock()
+		s.configs++
+		later := s.configs > 1
+		s.mu.Unlock()
+		if later {
+			<-ctx.Done()
+			return nil, ctx.Err()
+		}
 	case "no-configure":
 		return s.UnimplementedPanelServiceServer.Configure(ctx, req)
 	case "hangs-configure":

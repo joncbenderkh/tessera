@@ -31,24 +31,12 @@ type Status struct {
 func StatusOf(states []pluginhost.PanelState) Status {
 	var starting, stale, failing int
 	for _, s := range states {
-		switch s.State {
-		case pluginhost.Starting:
+		switch kindOf(s) {
+		case kindStarting:
 			starting++
-		case pluginhost.Stale:
+		case kindStale:
 			stale++
-		case pluginhost.Live:
-			// A view over a limit: no more are read until a restart.
-			if s.ViewErr != nil {
-				stale++
-			}
-		case pluginhost.Stopping:
-			// Without an error, a restart the user asked for.
-			if s.Err != nil {
-				failing++
-			} else {
-				starting++
-			}
-		case pluginhost.Restarting, pluginhost.Crashed:
+		case kindFailing:
 			failing++
 		}
 	}

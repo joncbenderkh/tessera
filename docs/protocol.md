@@ -124,16 +124,18 @@ host                                    plugin
 ```
 
 - **Configure** is called again whenever the panel's settings or size
-  change. A watching plugin then sends a fresh view on its open stream,
-  and a polled plugin is rendered again right away. If the plugin
-  answers `INVALID_ARGUMENT`, it keeps its previous settings, and the
-  host shows the message in an error tile and cancels any open Watch or
-  stops polling; until a Configure succeeds, it makes no Watch or Render
-  call. Configure should not depend on anything outside the plugin: one
-  that fails for another reason fails the launch, and five in a row
-  leave the panel crashed. A plugin whose data source is down (no
-  network at login, say) answers Configure and shows the outage in its
-  view, retrying on its own.
+  change. The size is the panel's `w` and `h` in the config, which a
+  narrow window's layout does not change. A watching plugin then sends a
+  fresh view on its open stream, and a polled plugin is rendered again
+  right away. If the plugin answers `INVALID_ARGUMENT`, the host shuts
+  it down and shows the panel as crashed, with the message, until its
+  settings or size change again or the user restarts it; the plugin need
+  not keep its previous settings. Configure should not depend on
+  anything outside the plugin: one that fails for another reason fails
+  the plugin, which is restarted with backoff, and five failed launches
+  in a row leave the panel crashed. A plugin whose
+  data source is down (no network at login, say) answers Configure and
+  shows the outage in its view, retrying on its own.
 - **Watch** is the normal path: the plugin pushes a complete view each
   time its content changes, starting with the current one. The first
   response always carries a view: a plugin still fetching data sends
@@ -172,7 +174,8 @@ default receive limit, and widgets nest at most 16 deep (`View.body` is
 depth 1, and each `StackItem.widget` adds 1). A view over either limit
 fails its stream or Render call; the host shows an error tile naming the
 limit, does not restart the plugin, and reads no more views from it
-until it is restarted. Until then only the health check and the deadline
+until it is restarted, by the user or by a change to the panel's
+settings or size. Until then only the health check and the deadline
 on each event show that it still answers, so a hang inside its own code
 goes unseen. A response over 16 MiB is not read at all, and counts as an
 error the plugin returned. The host keeps only each panel's latest view
@@ -200,7 +203,9 @@ and restarts a plugin that crashes, hangs, or breaks the protocol:
   the deadline on a Render or an event.
 - At the fifth failure in a row the host gives up and shows the panel
   as crashed, with the last error and, for a plugin that exited by
-  itself, its exit status, until the user restarts it.
+  itself, its exit status, until the user restarts it or its settings
+  or size change. A change to them also cuts a wait between restarts
+  short.
 - A plugin that stays up for a minute starts its count again. It
   counts as up only until the last health check it passed, so one
   that freezes is not counted as up while frozen.
@@ -228,7 +233,8 @@ plugins directory, such as `clock.py` next to `clock`, are ignored.
 Install or update a plugin by renaming it into place (write it as
 `clock.new` in the plugins directory, then rename it to `clock`): a
 panel that restarts while its plugin is missing or half-written fails
-for good, as above, until the user restarts it. On Windows a launch
+for good, as above, until the user restarts it or its settings or size
+change. On Windows a launch
 denied access, to the file or to running it, is retried, since an
 antivirus scan of a new `.exe` can deny it for a moment.
 
@@ -241,9 +247,8 @@ rejected `Configure` is recorded the same way. Of these, a failed
 handshake (other than one on a protocol version the host does not
 speak) or connection and a `Describe` that does not answer, or
 answers with an error other than `UNIMPLEMENTED`, are retried as
-above; the rest are the permanent failures. The reason is logged now
-and will be shown in the panel's place once the host draws the grid
-(#10, #13).
+above; the rest are the permanent failures. The reason is logged and
+shown in the panel's place, in its error tile.
 Names are 1 to 64 lowercase letters, digits, and hyphens, starting with a
 letter or digit, so they can never name a path outside the plugins
 directory. Names Windows reserves for devices (`con`, `prn`, `aux`,

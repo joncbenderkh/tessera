@@ -172,9 +172,12 @@ func TestViewOverLimitIsRefused(t *testing.T) {
 			if s.State != Live || s.View != nil || !strings.Contains(s.ViewErr.Error(), tt.want) {
 				t.Errorf("got %+v, want Live with no view and %q", s, tt.want)
 			}
+			// Counted from the refusal: a slow machine may fail a launch
+			// before it.
+			starts := countLines(m.Logs("p0"), "starting plugin")
 			time.Sleep(time.Second)
-			if s := m.States()[0]; s.State != Live || countLines(m.Logs("p0"), "starting plugin") != 1 {
-				t.Errorf("restarted over a view limit: %+v", s)
+			if s := m.States()[0]; s.State != Live || countLines(m.Logs("p0"), "starting plugin") != starts {
+				t.Errorf("restarted over a view limit: %+v\n%s", s, strings.Join(m.Logs("p0"), "\n"))
 			}
 		})
 	}
