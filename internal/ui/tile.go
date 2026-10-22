@@ -271,7 +271,7 @@ func (t *tile) menuPopover(gtx layout.Context, th *theme.Theme, narrow bool) {
 		t.focus = false
 		gtx.Execute(key.FocusCmd{Tag: &t.items[0].Clickable})
 	}
-	pad := gtx.Dp(6)
+	pad := gtx.Dp(menuPad)
 	igtx := gtx
 	igtx.Constraints = layout.Constraints{Max: image.Pt(max(min(gtx.Dp(240), t.view.Dx()-2*pad), 0), gtx.Dp(400))}
 	widest := 0
@@ -343,10 +343,11 @@ func headHeight(gtx layout.Context, nameH, menuH int, narrow bool) int {
 }
 
 // minTile is the smallest tile that holds its head and, below it, a
-// failed panel's Restart and Logs buttons side by side, at gtx's text
-// size, and the height that holds them one above the other, as a
-// narrower tile has them. No column is narrower, if the window allows,
-// and no row shorter, so the buttons stay in reach.
+// failed panel's Restart and Logs buttons side by side, or its open
+// menu, at gtx's text size, and the height that holds the buttons one
+// above the other, as a narrower tile has them. No column is narrower,
+// if the window allows, and no row shorter, so all of them stay in
+// reach.
 func minTile(gtx layout.Context, th *theme.Theme, narrow bool) (least image.Point, stacked int) {
 	gtx.Constraints = layout.Constraints{Max: image.Pt(1<<20, 1<<20)}
 	var restart, logs, menu Button
@@ -355,11 +356,19 @@ func minTile(gtx layout.Context, th *theme.Theme, narrow bool) (least image.Poin
 		return record(gtx, func(gtx layout.Context) layout.Dimensions { return b.Layout(gtx, th, label) }).dims.Size
 	}
 	r, l, m := measure(&restart, "Restart"), measure(&logs, "Logs"), measure(&menu, "⋯")
+	items := 2 * gtx.Dp(menuPad)
+	for _, it := range menuItems {
+		item := Button{Bare: true}
+		items += measure(&item, it.label).Y
+	}
 	name := record(gtx, titleLabel(th, "Ag").Layout).dims.Size
 	pad, space := gtx.Dp(theme.Space16), gtx.Dp(theme.Space8)
 	head := headHeight(gtx, name.Y, m.Y, narrow)
-	return image.Pt(2*pad+r.X+space+l.X, head+max(r.Y, l.Y)+pad), head + r.Y + space + l.Y + pad
+	return image.Pt(2*pad+r.X+space+l.X, max(head+max(r.Y, l.Y)+pad, head+items)), max(head+r.Y+space+l.Y+pad, head+items)
 }
+
+// menuPad is the padding around the tile menu's items.
+const menuPad unit.Dp = 6
 
 // errorBody is a failed panel's body: what went wrong, when it restarts,
 // and the Restart and Logs buttons.

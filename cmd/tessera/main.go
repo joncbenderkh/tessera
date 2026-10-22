@@ -90,7 +90,7 @@ func main() {
 				panic(r)
 			}
 		}()
-		window.Option(app.Title("tessera"), app.Size(unit.Dp(1440), unit.Dp(900)), app.MinSize(unit.Dp(360), unit.Dp(240)))
+		window.Option(app.Title("tessera"), app.Size(unit.Dp(1440), unit.Dp(900)), app.MinSize(minWidth, minHeight))
 		err := run(window, plugins, cfg, reloads, saver)
 		plugins.Close()
 		if err != nil {

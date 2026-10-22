@@ -138,6 +138,16 @@ func (g *Grid) minTile(gtx layout.Context, th *theme.Theme, narrow bool) (image.
 	return g.sizes.least, g.sizes.stacked
 }
 
+// MinHeight is the shortest content area, at gtx's width and text size,
+// that shows a whole tile of the smallest size: one whose menu, or
+// failed panel's buttons, just fit. The window keeps at least this much
+// room below its header.
+func (g *Grid) MinHeight(gtx layout.Context, th *theme.Theme) int {
+	width := widthDp(gtx)
+	least, stacked := g.minTile(gtx, th, width <= Narrow)
+	return 2*gtx.Dp(contentPadding(width)) + max(least.Y, stacked)
+}
+
 // ActionKind is what the user asked for from a tile.
 type ActionKind int
 

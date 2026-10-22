@@ -16,6 +16,7 @@ import (
 	"gioui.org/io/input"
 	"gioui.org/io/key"
 	"gioui.org/io/pointer"
+	"gioui.org/layout"
 	"gioui.org/unit"
 
 	"github.com/joncbenderkh/tessera/internal/config"
@@ -528,6 +529,41 @@ func TestTilePopoversStayInViewSideways(t *testing.T) {
 		}
 		if tl.menuBox.Min.Y < headH {
 			t.Errorf("%v: menu top %d, over the %d px head", size, tl.menuBox.Min.Y, headH)
+		}
+	}
+}
+
+// A tile is never shorter than its head and open menu, and a content
+// area of MinHeight shows the whole menu, at large text too.
+func TestTileMenuFitsSmallestTile(t *testing.T) {
+	cfg := gridConfig([]config.Panel{panel("clock", 0, 0, 1, 1)})
+	cfg.Grid.RowHeight = 150
+	states := live("clock")
+	for _, scale := range []float32{1, 2, 3} {
+		var r input.Router
+		var g Grid
+		step := func(events ...event.Event) {
+			for _, e := range events {
+				r.Queue(e)
+			}
+			gtx := context(&r, image.Pt(360, 1000), time.Now())
+			gtx.Metric.PxPerSp = scale
+			gtx.Constraints = layout.Exact(image.Pt(360, g.MinHeight(gtx, testTheme)))
+			g.Layout(gtx, testTheme, cfg, states)
+			r.Frame(gtx.Ops)
+		}
+		step()
+		rect, tl := g.placed["clock"], g.tiles["clock"]
+		step(click(image.Pt(rect.Max.X-16-13, rect.Min.Y+tl.headSize.Y/2))...)
+		step()
+		if !tl.open {
+			t.Fatalf("text ×%v: the menu did not open", scale)
+		}
+		if tile := (image.Rectangle{Max: rect.Size()}); !tl.menuBox.In(tile) {
+			t.Errorf("text ×%v: menu at %v, outside the %v tile", scale, tl.menuBox, tile)
+		}
+		if !tl.menuBox.In(tl.view) {
+			t.Errorf("text ×%v: menu at %v, outside the visible %v", scale, tl.menuBox, tl.view)
 		}
 	}
 }

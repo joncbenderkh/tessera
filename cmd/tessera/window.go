@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"image"
+	"math"
 	"strings"
 	"sync"
 
@@ -13,6 +14,7 @@ import (
 	"gioui.org/layout"
 	"gioui.org/op"
 	"gioui.org/op/paint"
+	"gioui.org/unit"
 
 	"github.com/joncbenderkh/tessera/internal/config"
 	"github.com/joncbenderkh/tessera/internal/pluginhost"
@@ -95,6 +97,16 @@ func themeOnReload(shown, was, now, saving bool) bool {
 	return now
 }
 
+// minWidth and minHeight are the smallest window, in dp; larger text
+// needs a taller one.
+const minWidth, minHeight unit.Dp = 360, 240
+
+// minWindowHeight is the smallest window height, in dp, that leaves
+// room for the header and a tile of the smallest size, px tall in all.
+func minWindowHeight(gtx layout.Context, px int) unit.Dp {
+	return max(minHeight, unit.Dp(math.Ceil(float64(px)/float64(gtx.Metric.PxPerDp))))
+}
+
 // run draws the window until it is closed: the header, the grid of
 // cfg's panels below it, and the toast and dialog over both. Each
 // reload replaces cfg; one that failed keeps the last good one.
@@ -109,6 +121,8 @@ func run(window *app.Window, plugins *pluginhost.Manager, cfg config.Config, rel
 	fileDark := dark // the theme config.yaml held at the latest reload
 	th := theme.New(dark, shaper)
 
+	shortest := minHeight // the window's least height, which large text raises
+	mode := app.Windowed
 	var (
 		ops    op.Ops
 		header ui.Header
@@ -118,6 +132,13 @@ func run(window *app.Window, plugins *pluginhost.Manager, cfg config.Config, rel
 	)
 	for {
 		switch e := window.Event().(type) {
+		case app.ConfigEvent:
+			// Wayland drops a minimum size set while the window is not
+			// windowed, so it is set again on the way back.
+			if e.Config.Mode == app.Windowed && mode != app.Windowed {
+				window.Option(app.MinSize(minWidth, shortest))
+			}
+			mode = e.Config.Mode
 		case app.DestroyEvent:
 			saver.wait()
 			return e.Err
@@ -165,6 +186,10 @@ func run(window *app.Window, plugins *pluginhost.Manager, cfg config.Config, rel
 			paint.Fill(gtx.Ops, th.Bg)
 			states := plugins.States()
 			head := header.Layout(behind, th, ui.StatusOf(states))
+			if h := minWindowHeight(gtx, head.Size.Y+grid.MinHeight(gtx, th)); h != shortest {
+				shortest = h
+				window.Option(app.MinSize(minWidth, shortest))
+			}
 			content := behind
 			content.Constraints = layout.Exact(image.Pt(gtx.Constraints.Max.X, max(gtx.Constraints.Max.Y-head.Size.Y, 0)))
 			st := op.Offset(image.Pt(0, head.Size.Y)).Push(gtx.Ops)

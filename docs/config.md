@@ -61,7 +61,7 @@ panels:
 | `version` | Schema version. Must be `1`. |
 | `theme` | `dark` or `light`. Defaults to `dark`. The header's theme toggle sets it. |
 | `grid.columns` | Number of grid columns, from 1 to 24. |
-| `grid.row_height` | Height of one grid row in dp (logical pixels), from 150 to 2000. Large text makes rows taller where a panel's head and buttons need it. |
+| `grid.row_height` | Height of one grid row in dp (logical pixels), from 150 to 2000. Large text makes rows taller where a panel's head and its buttons or menu need it, and the window keeps room for one such row. |
 | `panels[].id` | Unique name for this panel, read as written (`017` stays `017`). One plugin can back several panels. |
 | `panels[].plugin` | Name of the plugin that provides the panel: lowercase letters, digits, and hyphens, starting with a letter or digit, at most 64 characters, and not a Windows device name such as `con` or `com1`. Read as written, like `id`. |
 | `panels[].enabled` | `false` hides the panel. Defaults to `true`. |

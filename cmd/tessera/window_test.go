@@ -9,6 +9,9 @@ import (
 	"path/filepath"
 	"testing"
 
+	"gioui.org/layout"
+	"gioui.org/unit"
+
 	"github.com/joncbenderkh/tessera/internal/config"
 )
 
@@ -209,6 +212,18 @@ func TestReloadError(t *testing.T) {
 	} {
 		if got := reloadError("config.yaml", tt.err, brief).Error(); got != tt.want {
 			t.Errorf("reloadError(%v) = %q, want %q", tt.err, got, tt.want)
+		}
+	}
+}
+
+func TestMinWindowHeight(t *testing.T) {
+	gtx := layout.Context{Metric: unit.Metric{PxPerDp: 2, PxPerSp: 2}}
+	for _, tt := range []struct {
+		px   int
+		want unit.Dp
+	}{{100, minHeight}, {1000, 500}, {1001, 501}} {
+		if got := minWindowHeight(gtx, tt.px); got != tt.want {
+			t.Errorf("minWindowHeight(%d px) = %v, want %v", tt.px, got, tt.want)
 		}
 	}
 }
