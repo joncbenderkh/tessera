@@ -4,6 +4,7 @@ package main
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -177,5 +178,37 @@ func TestThemeSaverPending(t *testing.T) {
 	s.wait()
 	if s.pending() {
 		t.Error("pending after the write")
+	}
+}
+
+func TestBrief(t *testing.T) {
+	for _, tt := range []struct {
+		err  error
+		want string
+	}{
+		{errors.New("grid.columns must be from 1 to 24"), "grid.columns must be from 1 to 24"},
+		{errors.Join(errors.New("panel a does not fit"), errors.New("panel b does not fit"), errors.New("panel c does not fit")),
+			"panel a does not fit (and 2 more; see the log)"},
+		{fmt.Errorf("parsing: %w", errors.Join(errors.New("one"))), "one"},
+		{errors.New("[3:1] unexpected key\n>  3 | x: 1\n       ^"), "[3:1] unexpected key (see the log)"},
+	} {
+		if got := brief(tt.err); got != tt.want {
+			t.Errorf("brief(%q) = %q, want %q", tt.err, got, tt.want)
+		}
+	}
+}
+
+func TestReloadError(t *testing.T) {
+	for _, tt := range []struct {
+		err  error
+		want string
+	}{
+		{errors.New("grid.columns must be from 1 to 24"), "config.yaml not applied: grid.columns must be from 1 to 24"},
+		{&config.WatchError{Err: errors.New("fsnotify: queue or buffer overflow")},
+			"changes to config.yaml may be missed: fsnotify: queue or buffer overflow"},
+	} {
+		if got := reloadError("config.yaml", tt.err, brief).Error(); got != tt.want {
+			t.Errorf("reloadError(%v) = %q, want %q", tt.err, got, tt.want)
+		}
 	}
 }

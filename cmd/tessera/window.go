@@ -4,6 +4,7 @@ package main
 
 import (
 	"errors"
+	"fmt"
 	"image"
 	"strings"
 	"sync"
@@ -45,6 +46,41 @@ func queue(reloads chan reload, c config.Config, err error) {
 		r.err = err
 	}
 	reloads <- r
+}
+
+// reloadToast is the kind of toast that reports a problem with the
+// config file.
+const reloadToast = "reload"
+
+// reloadError says what err from Watch means for the config file name,
+// with detail giving its text: an edit was not applied, or changes may
+// be missed.
+func reloadError(name string, err error, detail func(error) string) error {
+	if werr := (*config.WatchError)(nil); errors.As(err, &werr) {
+		return fmt.Errorf("changes to %s may be missed: %s", name, detail(werr.Err))
+	}
+	return fmt.Errorf("%s not applied: %s", name, detail(err))
+}
+
+// brief is err's first problem, on one line, and how many more there
+// are: a toast has no room for the list Validate gives, one per line,
+// nor for a YAML error's excerpt of the file. The log has them in full.
+func brief(err error) string {
+	first, more := err, 0
+	var joined interface{ Unwrap() []error }
+	if errors.As(err, &joined) {
+		if errs := joined.Unwrap(); len(errs) > 0 {
+			first, more = errs[0], len(errs)-1
+		}
+	}
+	line, _, cut := strings.Cut(first.Error(), "\n")
+	switch {
+	case more > 0:
+		return fmt.Sprintf("%s (and %d more; see the log)", line, more)
+	case cut:
+		return line + " (see the log)"
+	}
+	return line
 }
 
 // themeOnReload is the theme to show, dark or not, after a reload
@@ -94,8 +130,12 @@ func run(window *app.Window, plugins *pluginhost.Manager, cfg config.Config, rel
 			}
 			select {
 			case r := <-reloads:
+				// Only the latest problem with the file shows, and none
+				// once it is fixed.
 				if r.err != nil {
-					toast.Show(r.err.Error())
+					toast.Put(reloadToast, r.err.Error())
+				} else {
+					toast.Drop(reloadToast)
 				}
 				if !r.valid {
 					break

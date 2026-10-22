@@ -65,7 +65,8 @@ func main() {
 		name := filepath.Base(*configPath)
 		err := config.Watch(context.Background(), *configPath, read, func(c config.Config, err error) {
 			if err != nil {
-				err = fmt.Errorf("%s not applied: %w", name, err)
+				log.Print(reloadError(*configPath, err, error.Error))
+				err = reloadError(name, err, brief)
 			}
 			// Queued first, so a frame that shows the new plugins' states
 			// lays out the new config.
