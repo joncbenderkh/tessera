@@ -531,3 +531,24 @@ func TestTilePopoversStayInViewSideways(t *testing.T) {
 		}
 	}
 }
+
+// Tiles out of sight are not laid out until they scroll into view.
+func TestGridSkipsTilesOutOfSight(t *testing.T) {
+	cfg := gridConfig([]config.Panel{panel("log", 0, 0, 1, 8), panel("clock", 0, 8, 1, 1)})
+	states := live("log", "clock")
+	var r input.Router
+	var g Grid
+	size := image.Pt(1440, 400)
+	gtx := context(&r, size, time.Now())
+	g.Layout(gtx, testTheme, cfg, states)
+	r.Frame(gtx.Ops)
+	if g.tiles["clock"].headSize != (image.Point{}) {
+		t.Fatalf("the tile below the window was laid out")
+	}
+	r.Queue(pointer.Event{Kind: pointer.Scroll, Source: pointer.Mouse, Position: f32.Pt(400, 200), Scroll: f32.Pt(0, 1e5)})
+	gtx = context(&r, size, time.Now())
+	g.Layout(gtx, testTheme, cfg, states)
+	if g.tiles["clock"].headSize == (image.Point{}) {
+		t.Errorf("the tile scrolled into view was not laid out")
+	}
+}

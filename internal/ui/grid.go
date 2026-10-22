@@ -116,6 +116,26 @@ type Grid struct {
 	scroll gesture.Scroll
 	offset int                        // px scrolled down
 	placed map[string]image.Rectangle // each tile's bounds, for tests
+	sizes  tileSizes                  // minTile's last result
+}
+
+// tileSizes caches minTile for a text size and head.
+type tileSizes struct {
+	metric     unit.Metric
+	th         *theme.Theme
+	narrow, ok bool
+	least      image.Point
+	stacked    int
+}
+
+// minTile is minTile, measured again only when the text size, the
+// theme or the head changes.
+func (g *Grid) minTile(gtx layout.Context, th *theme.Theme, narrow bool) (image.Point, int) {
+	if s := g.sizes; !s.ok || s.metric != gtx.Metric || s.th != th || s.narrow != narrow {
+		least, stacked := minTile(gtx, th, narrow)
+		g.sizes = tileSizes{metric: gtx.Metric, th: th, narrow: narrow, ok: true, least: least, stacked: stacked}
+	}
+	return g.sizes.least, g.sizes.stacked
 }
 
 // ActionKind is what the user asked for from a tile.
@@ -167,7 +187,7 @@ func (g *Grid) Layout(gtx layout.Context, th *theme.Theme, cfg config.Config, st
 	content := max(min(area.X-2*pad, gtx.Dp(maxContent)), 0)
 	// Large text takes fewer columns and taller rows: a tile never gets
 	// too small for a failed panel's buttons.
-	least, stacked := minTile(gtx, th, width <= Narrow)
+	least, stacked := g.minTile(gtx, th, width <= Narrow)
 	gap := gtx.Dp(gridGap)
 	columns := max(min(Columns(width, cfg.Grid.Columns), (content+gap)/(least.X+gap)), 1)
 	cells := Arrange(cfg.Panels, cfg.Grid.Columns, columns)
@@ -220,6 +240,12 @@ func (g *Grid) Layout(gtx layout.Context, th *theme.Theme, cfg config.Config, st
 		}
 		r.Max = r.Min.Add(image.Pt(c.W*colW+(c.W-1)*gap, c.H*rowH+(c.H-1)*gap))
 		g.placed[c.ID] = r
+		// Tiles out of sight are not laid out: a grid can be far taller
+		// than the window. One that was open closes.
+		if !r.Overlaps(image.Rectangle{Max: area}) {
+			t.open = false
+			continue
+		}
 		t.view = image.Rectangle{Max: area}.Sub(r.Min)
 		tgtx := gtx
 		tgtx.Constraints = layout.Exact(r.Size())
