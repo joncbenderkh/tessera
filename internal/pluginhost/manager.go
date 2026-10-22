@@ -168,9 +168,9 @@ type panel struct {
 	PanelState
 	ctx     context.Context // done once Close begins or Apply drops the panel
 	stop    context.CancelFunc
-	cfg     config.Panel // under mu
+	cfg     config.Panel  // under mu
 	changed chan struct{} // Apply changed cfg's settings or size; buffered, coalesced
-	inst    *Instance // the live one, if any; under mu; read by tests
+	inst    *Instance     // the live one, if any; under mu; read by tests
 	logs    *ring
 	restart chan struct{}                      // a manual Restart; buffered, coalesced
 	events  chan *tesserav1.HandleEventRequest // queued by HandleEvent while Live or Stale
