@@ -186,6 +186,13 @@ func (s *server) HandleEvent(ctx context.Context, req *tesserav1.HandleEventRequ
 		return nil, ctx.Err()
 	case "unavailable-event":
 		return nil, status.Error(codes.Unavailable, "source down")
+	case "slow-events":
+		time.Sleep(150 * time.Millisecond)
+		if sc := req.GetScroll(); sc != nil {
+			fmt.Fprintf(os.Stderr, "scroll %s %d\n", sc.GetWidgetId(), sc.GetFirstVisible())
+		} else {
+			fmt.Fprintf(os.Stderr, "activate %s\n", id)
+		}
 	case "polled-events":
 		s.mu.Lock()
 		s.seen = append(s.seen, id)

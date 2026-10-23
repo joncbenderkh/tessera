@@ -232,7 +232,7 @@ func (w *live) run() (end, error) {
 			}
 		case req := <-pn.events:
 			resumed()
-			stop, err := w.handle(req)
+			stop, err := w.handle(m.latest(pn, req))
 			if stop != nil {
 				return *stop, nil
 			}

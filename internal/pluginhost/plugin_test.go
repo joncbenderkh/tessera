@@ -221,6 +221,8 @@ func (testPlugin) GRPCClient(context.Context, *plugin.GRPCBroker, *grpc.ClientCo
 //   - events: Watch answers each event with a view "got <action id>".
 //   - hangs-event: HandleEvent never answers.
 //   - unavailable-event: HandleEvent fails with UNAVAILABLE.
+//   - slow-events: HandleEvent takes 150 ms, then reports the event on
+//     stderr.
 //   - rejects-later: rejects the settings of each Configure after the
 //     first.
 //   - hangs-configure-later: each Configure after the first never
