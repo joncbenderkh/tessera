@@ -17,6 +17,7 @@ import (
 	"github.com/joncbenderkh/tessera/internal/config"
 	"github.com/joncbenderkh/tessera/internal/pluginhost"
 	"github.com/joncbenderkh/tessera/internal/ui/theme"
+	tesserav1 "github.com/joncbenderkh/tessera/proto/tessera/v1"
 )
 
 // Cell is a panel's place on the grid, in cells.
@@ -160,6 +161,8 @@ const (
 	ActionRestart
 	// ActionLogs is the error tile's Logs.
 	ActionLogs
+	// ActionEvent is input for the panel's plugin, in Event.
+	ActionEvent
 )
 
 // Action is a request from panel Panel's tile, which the host carries
@@ -167,6 +170,7 @@ const (
 type Action struct {
 	Kind  ActionKind
 	Panel string
+	Event *tesserav1.HandleEventRequest // for ActionEvent
 }
 
 const (
@@ -176,6 +180,22 @@ const (
 	// further, to fit a failed panel's buttons (minTile).
 	minColumn unit.Dp = 200
 )
+
+// Unselect moves panel's highlight from the row or item with action id,
+// for an activation its plugin did not get, back to the one before.
+func (g *Grid) Unselect(panel, id string) {
+	if t := g.tiles[panel]; t != nil && t.content.selected == id {
+		t.content.selected = t.content.previous
+	}
+}
+
+// Unsent makes panel's view send the visible range of its widget id
+// again on the next frame, for one its plugin's queue refused.
+func (g *Grid) Unsent(panel, id string) {
+	if t := g.tiles[panel]; t != nil {
+		delete(t.content.sent, "id:"+id)
+	}
+}
 
 // contentPadding is the padding around the grid at a window width.
 func contentPadding(width unit.Dp) unit.Dp {
@@ -261,8 +281,12 @@ func (g *Grid) Layout(gtx layout.Context, th *theme.Theme, cfg config.Config, st
 		tgtx.Constraints = layout.Exact(r.Size())
 		st := op.Offset(r.Min).Push(gtx.Ops)
 		wasOpen := t.open
-		for _, k := range t.Layout(tgtx, th, s, width <= Narrow) {
+		kinds, events := t.Layout(tgtx, th, s, width <= Narrow)
+		for _, k := range kinds {
 			actions = append(actions, Action{Kind: k, Panel: c.ID})
+		}
+		for _, e := range events {
+			actions = append(actions, Action{Kind: ActionEvent, Panel: c.ID, Event: e})
 		}
 		st.Pop()
 		if t.open && !wasOpen {

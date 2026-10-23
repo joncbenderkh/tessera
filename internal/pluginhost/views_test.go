@@ -4,8 +4,10 @@ package pluginhost
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -350,5 +352,84 @@ func TestViewCodecTellsRefusedFromMalformed(t *testing.T) {
 	c.Unmarshal(mem.BufferSlice{mem.SliceBuffer(deep)}, &tesserav1.WatchResponse{})
 	if c.malformed() != nil || c.refusal() == nil {
 		t.Errorf("over the depth limit: got malformed %v, refusal %v", c.malformed(), c.refusal())
+	}
+}
+
+func scrollTo(widget string, first uint32) *tesserav1.HandleEventRequest {
+	return &tesserav1.HandleEventRequest{Event: &tesserav1.HandleEventRequest_Scroll{
+		Scroll: &tesserav1.ScrollEvent{WidgetId: widget, FirstVisible: first, VisibleCount: 5},
+	}}
+}
+
+// A slow plugin gets the latest range of a widget scrolled while it was
+// busy, in the place of the first one queued, however many came.
+func TestScrollEventsCoalesce(t *testing.T) {
+	dir := install(t, "slow-events")
+	logger, _ := newLogger()
+	m := StartWith(panels("slow-events"), dir, logger, fast)
+	defer m.Close()
+	waitFor(t, m, "p0", "live", is(Live))
+	if err := m.HandleEvent("p0", activate("a")); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(50 * time.Millisecond) // the plugin is busy with it
+	for i := range uint32(2 * maxEvents) {
+		if err := m.HandleEvent("p0", scrollTo("procs", i+1)); err != nil {
+			t.Fatalf("scroll %d: %v", i+1, err)
+		}
+	}
+	if err := m.HandleEvent("p0", activate("b")); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"activate a", fmt.Sprintf("scroll procs %d", 2*maxEvents), "activate b"}
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		var got []string
+		for _, l := range m.Logs("p0") {
+			for _, w := range []string{"activate ", "scroll "} {
+				if i := strings.Index(l, w); i >= 0 {
+					got = append(got, l[i:])
+				}
+			}
+		}
+		if slices.Equal(got, want) {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("plugin got %q, want %q", got, want)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+// A scroll waiting when the plugin restarts goes with the queue, and
+// later scrolls of that widget reach the new launch.
+func TestScrollQueueClearedOnRestart(t *testing.T) {
+	dir := install(t, "slow-events")
+	logger, _ := newLogger()
+	m := StartWith(panels("slow-events"), dir, logger, fast)
+	defer m.Close()
+	waitFor(t, m, "p0", "live", is(Live))
+	if err := m.HandleEvent("p0", activate("a")); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(50 * time.Millisecond) // the plugin is busy with it
+	if err := m.HandleEvent("p0", scrollTo("procs", 1)); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Restart("p0"); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, m, "p0", "starting", is(Starting))
+	waitFor(t, m, "p0", "live again", is(Live))
+	if err := m.HandleEvent("p0", scrollTo("procs", 2)); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for countLines(m.Logs("p0"), "scroll procs 2") == 0 {
+		if time.Now().After(deadline) {
+			t.Fatalf("the scroll after the restart never arrived:\n%s", strings.Join(m.Logs("p0"), "\n"))
+		}
+		time.Sleep(20 * time.Millisecond)
 	}
 }

@@ -13,6 +13,8 @@ import (
 	"gioui.org/unit"
 
 	"github.com/joncbenderkh/tessera/internal/config"
+	"github.com/joncbenderkh/tessera/internal/pluginhost"
+	tesserav1 "github.com/joncbenderkh/tessera/proto/tessera/v1"
 )
 
 func TestSaveThemeKeepsTheFile(t *testing.T) {
@@ -224,6 +226,30 @@ func TestMinWindowHeight(t *testing.T) {
 	}{{100, minHeight}, {1000, 500}, {1001, 501}} {
 		if got := minWindowHeight(gtx, tt.px); got != tt.want {
 			t.Errorf("minWindowHeight(%d px) = %v, want %v", tt.px, got, tt.want)
+		}
+	}
+}
+
+func TestEventOutcome(t *testing.T) {
+	scroll := &tesserav1.HandleEventRequest{Event: &tesserav1.HandleEventRequest_Scroll{Scroll: &tesserav1.ScrollEvent{WidgetId: "w"}}}
+	activate := &tesserav1.HandleEventRequest{Event: &tesserav1.HandleEventRequest_Activate{Activate: &tesserav1.ActivateEvent{ActionId: "x"}}}
+	other := errors.New("no enabled panel")
+	for _, tt := range []struct {
+		name string
+		ev   *tesserav1.HandleEventRequest
+		err  error
+		want outcome
+	}{
+		{"sent", scroll, nil, outcome{}},
+		{"busy scroll", scroll, pluginhost.ErrBusy, outcome{resend: true}},
+		{"scroll not live", scroll, pluginhost.ErrNotLive, outcome{}},
+		{"busy activation", activate, pluginhost.ErrBusy, outcome{unselect: true, toast: "Panel busy; try again"}},
+		{"activation not live", activate, pluginhost.ErrNotLive, outcome{unselect: true}},
+		{"activation failed", activate, other, outcome{unselect: true, logged: other}},
+		{"scroll failed", scroll, other, outcome{logged: other}},
+	} {
+		if got := eventOutcome(tt.ev, tt.err); got != tt.want {
+			t.Errorf("%s: %+v, want %+v", tt.name, got, tt.want)
 		}
 	}
 }

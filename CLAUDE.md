@@ -78,8 +78,8 @@ dialogs). Edit mode must be able to re-enable any disabled panel.
   config.
 - `internal/ui`: the host-owned UI drawn with Gio: the window header,
   the grid and its tiles (placement in `Arrange`, the menu, and the
-  starting and error bodies), the button, and the toast and dialog
-  primitives. `internal/ui/theme`
+  starting and error bodies), the plugins' views in them (`view*.go`),
+  the button, and the toast and dialog primitives. `internal/ui/theme`
   holds the design tokens (dark and light palettes, spacing, radius, and
   type scales) taken from `docs/design`.
 - `internal/pluginhost`: finding, launching, describing, configuring,
@@ -168,8 +168,11 @@ and dialog primitives (#9). The grid lays the enabled panels out,
 compacted upward and flowed into fewer columns in narrow windows, as
 tiles with a title, the plugin on hover, an options menu whose items
 are stubs until #15 and #16, and a body for starting and failed
-panels, with Restart and Logs; config changes apply live (#10). Tile
-bodies stay empty until views are rendered (#11); the SDK is #18.
+panels, with Restart and Logs; config changes apply live (#10). A
+live tile draws its plugin's view: every widget of view schema v1, in
+`internal/ui/view*.go`, with tables and lists that scroll, send
+activate and scroll events, and keep the row last activated (#11).
+The SDK is #18.
 
 ## Git workflow
 

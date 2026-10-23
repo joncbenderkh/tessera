@@ -160,7 +160,9 @@ host                                    plugin
 
 Configure and HandleEvent run concurrently with the open Watch, so a
 plugin guards the state they share. The host makes these unary calls one
-at a time and in order, so events never overtake each other. A call that
+at a time and in order, so events never overtake each other, with one
+exception: a scroll event still waiting takes the newest range for its
+widget, which can then arrive before events queued after it. A call that
 misses its deadline counts as a hang: the host restarts the plugin
 before making another call, so a timed-out handler never overlaps the
 next one. A Watch stream that ends without the host cancelling it, other
@@ -287,6 +289,30 @@ owns all styling: plugins choose a `Tone` (muted, accent, ok, warn, error)
 or a step on the type and spacing scales, never a color, font, or pixel
 size. Numbers are formatted by the plugin, which knows its units and
 locale.
+
+How the host draws a view:
+- A view taller than its tile is cut off at the tile's edge, except
+  tables and lists, which scroll within the space they get. A table or
+  list with an `id` keeps its scroll position across views and sends a
+  `ScrollEvent` whenever its visible range changes, including the
+  first time a plugin's view draws it and when it is empty. A scroll
+  event still waiting for a busy plugin is replaced by the newer range
+  for the same widget, so the plugin gets the latest one; one the queue
+  has no room for is sent again shortly. An activation that does not
+  reach the plugin gives the highlight back to the row or item before
+  it; one the queue has no room for also shows a "Panel busy" toast.
+- A loading widget is a static placeholder in its shape. A loading
+  `Stack` keeps its layout and draws each widget in it as a
+  placeholder.
+- A gauge whose `max - min` is too large for a double is drawn as
+  missing, and a sparkline whose range is draws its line at mid-height.
+- A stat narrower than 200 dp uses a smaller value size. A stat's or
+  gauge's caption with no tone is muted.
+- Digits in stat and gauge values and in end-aligned table cells are
+  equally wide, so a changing value keeps its width.
+- The row or item last activated stays highlighted, by its
+  `action_id`, until another one is activated; the plugin never sees
+  this.
 
 The vocabulary is deliberately small. `docs/design/widget-vocabulary.html`
 shows each widget as the renderer should draw it. A new widget or field is
