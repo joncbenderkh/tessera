@@ -38,7 +38,9 @@ const (
 // Configure again whenever the panel's settings or size change, and
 // HandleEvent when the user interacts with the panel. These later calls
 // run concurrently with the open Watch, so a plugin guards shared state,
-// but the host makes them one at a time and in order. To fill the panel
+// but the host makes them one at a time and in order (a waiting scroll
+// event takes the newest range for its widget, which can then arrive
+// before events queued after it). To fill the panel
 // picker, the host may also launch a plugin, call only Describe, and shut
 // it down.
 type PanelServiceClient interface {
@@ -153,7 +155,9 @@ func (c *panelServiceClient) HandleEvent(ctx context.Context, in *HandleEventReq
 // Configure again whenever the panel's settings or size change, and
 // HandleEvent when the user interacts with the panel. These later calls
 // run concurrently with the open Watch, so a plugin guards shared state,
-// but the host makes them one at a time and in order. To fill the panel
+// but the host makes them one at a time and in order (a waiting scroll
+// event takes the newest range for its widget, which can then arrive
+// before events queued after it). To fill the panel
 // picker, the host may also launch a plugin, call only Describe, and shut
 // it down.
 type PanelServiceServer interface {
