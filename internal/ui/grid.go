@@ -181,6 +181,22 @@ const (
 	minColumn unit.Dp = 200
 )
 
+// Unselect moves panel's highlight from the row or item with action id,
+// for an activation its plugin did not get, back to the one before.
+func (g *Grid) Unselect(panel, id string) {
+	if t := g.tiles[panel]; t != nil && t.content.selected == id {
+		t.content.selected = t.content.previous
+	}
+}
+
+// Unsent makes panel's view send the visible range of its widget id
+// again on the next frame, for one its plugin's queue refused.
+func (g *Grid) Unsent(panel, id string) {
+	if t := g.tiles[panel]; t != nil {
+		delete(t.content.sent, "id:"+id)
+	}
+}
+
 // contentPadding is the padding around the grid at a window width.
 func contentPadding(width unit.Dp) unit.Dp {
 	switch {

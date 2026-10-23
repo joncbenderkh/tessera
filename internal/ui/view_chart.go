@@ -69,7 +69,8 @@ func readGauge(g *tesserav1.Gauge) gaugeReading {
 		r.max = g.GetMax()
 	}
 	r.value[1] = g.GetUnit()
-	if !finite(g.GetValue()) || !finite(r.min) || !finite(r.max) || r.max <= r.min {
+	// A range too wide for a float64 counts as missing too.
+	if !finite(g.GetValue()) || !finite(r.min) || !finite(r.max) || r.max <= r.min || !finite(r.max-r.min) {
 		r.tone = gaugeMissing
 		r.value[0] = "—"
 		return r
@@ -109,9 +110,26 @@ func readGauge(g *tesserav1.Gauge) gaugeReading {
 }
 
 // formatNumber is x as the host shows a number it formats itself: at
-// most one decimal, none if it would be zero.
+// most one decimal, none if it would be zero; two significant digits
+// below 1, with an exponent below 0.0001; and four significant digits
+// with an exponent for a huge one.
 func formatNumber(x float64) string {
-	return strconv.FormatFloat(math.Round(x*10)/10, 'f', -1, 64)
+	if math.Abs(x) >= 1e15 {
+		return strconv.FormatFloat(x, 'g', 4, 64)
+	}
+	if x != 0 && math.Abs(x) < 1e-4 {
+		return strconv.FormatFloat(x, 'g', 2, 64)
+	}
+	if math.Abs(x) < 1 {
+		// Small values keep their first digits: 0.05 is not 0.1.
+		x, _ = strconv.ParseFloat(strconv.FormatFloat(x, 'g', 2, 64), 64)
+	} else {
+		x = math.Round(x*10) / 10
+	}
+	if x == 0 {
+		x = 0 // not "-0"
+	}
+	return strconv.FormatFloat(x, 'f', -1, 64)
 }
 
 func (r gaugeReading) color(th *theme.Theme, t gaugeTone) color.NRGBA {
@@ -183,13 +201,30 @@ func dot(gtx layout.Context, p f32.Point, r float32, c color.NRGBA) {
 	paint.FillShape(gtx.Ops, c, clip.Ellipse(box).Op(gtx.Ops))
 }
 
+// dialLimits draws the min and max labels under the arc's ends.
+func dialLimits(gtx layout.Context, th *theme.Theme, u float32, limits [2]string) {
+	gtx.Constraints.Min = image.Point{}
+	for i, l := range limits {
+		if l == "" {
+			continue
+		}
+		lbl := recordLabel(gtx, th, l, theme.TextMin, th.Muted, theme.Mono)
+		cx := u * dialLimitX
+		if i == 1 {
+			cx = u * (dialW - dialLimitX)
+		}
+		lbl.at(gtx, image.Pt(int(cx)-lbl.dims.Size.X/2, int(u*dialLimitY)-(lbl.dims.Size.Y-lbl.dims.Baseline)))
+	}
+}
+
 // gaugeTrack is a loading gauge: the bare track, with two short bars
-// where the value goes.
-func gaugeTrack(gtx layout.Context, th *theme.Theme) layout.Dimensions {
+// where the value goes, and its limits, as the mockup's.
+func gaugeTrack(gtx layout.Context, th *theme.Theme, g *tesserav1.Gauge) layout.Dimensions {
 	u := dialScale(gtx, 0)
 	x := (gtx.Constraints.Max.X - int(u*dialW)) / 2
 	defer op.Offset(image.Pt(max(x, 0), 0)).Push(gtx.Ops).Pop()
 	strokeArc(gtx, u, 0, 1, th.Border)
+	dialLimits(gtx, th, u, readGauge(g).limits)
 	for _, b := range [][3]float32{{43.5, 76.5, 49.5}, {50.25, 69.75, 62.25}} {
 		var p clip.Path
 		p.Begin(gtx.Ops)
@@ -247,17 +282,7 @@ func (v *viewState) gauge(gtx layout.Context, th *theme.Theme, g *tesserav1.Gaug
 		return v.valueWithUnit(gtx, th, r.value[0], theme.TextStat, r.value[1], theme.TextSmall)
 	})
 	value.at(gtx, image.Pt((dw-value.dims.Size.X)/2, int(u*dialValueY)-(value.dims.Size.Y-value.dims.Baseline)))
-	for i, l := range r.limits {
-		if l == "" {
-			continue
-		}
-		lbl := recordLabel(tgtx, th, l, theme.TextMin, th.Muted, theme.Mono)
-		cx := u * dialLimitX
-		if i == 1 {
-			cx = u * (dialW - dialLimitX)
-		}
-		lbl.at(gtx, image.Pt(int(cx)-lbl.dims.Size.X/2, int(u*dialLimitY)-(lbl.dims.Size.Y-lbl.dims.Baseline)))
-	}
+	dialLimits(tgtx, th, u, r.limits)
 	off.Pop()
 
 	y := dh
@@ -275,7 +300,7 @@ const sparkHeight unit.Dp = 39
 // sparkPoints maps samples onto a w by h chart: x evenly spaced, y from
 // lo at the bottom to hi at the top, clamped. A non-finite sample ends
 // a run; each run is a separate line. An empty range draws the line at
-// mid-height.
+// mid-height, as does one too wide for a float64.
 func sparkPoints(samples []float64, lo, hi float64, w, h float32) [][]f32.Point {
 	var runs [][]f32.Point
 	var run []f32.Point
@@ -291,7 +316,7 @@ func sparkPoints(samples []float64, lo, hi float64, w, h float32) [][]f32.Point 
 			x = w * float32(i) / float32(len(samples)-1)
 		}
 		y := h / 2
-		if hi > lo {
+		if hi > lo && finite(hi-lo) {
 			f := (math.Min(math.Max(s, lo), hi) - lo) / (hi - lo)
 			y = h * float32(1-f)
 		}
@@ -350,8 +375,12 @@ func (v *viewState) sparkline(gtx layout.Context, th *theme.Theme, s *tesserav1.
 		sem := clip.Rect{Max: image.Pt(width, h)}.Push(gtx.Ops)
 		semantic.DescriptionOp(describeSpark(s)).Add(gtx.Ops)
 		sem.Pop()
-		fw, fh := float32(width), float32(h)
 		stroke := float32(gtx.Metric.PxPerDp) * 1.5
+		// The plot is inset by a dot's radius, so a dot or line at an
+		// edge is not cut off there.
+		in := 2 * stroke
+		defer op.Affine(f32.AffineId().Offset(f32.Pt(in, in))).Push(gtx.Ops).Pop()
+		fw, fh := float32(width)-2*in, float32(h)-2*in
 		for _, run := range sparkPoints(s.GetSamples(), lo, hi, fw, fh) {
 			if len(run) == 1 {
 				dot(gtx, run[0], 2*stroke, line)
@@ -379,10 +408,21 @@ func (v *viewState) sparkline(gtx layout.Context, th *theme.Theme, s *tesserav1.
 	if s.GetStartLabel() != "" || s.GetEndLabel() != "" {
 		gaps = append(gaps, gtx.Dp(theme.Space4))
 		parts = append(parts, record(tgtx, func(gtx layout.Context) layout.Dimensions {
-			start := recordLabel(gtx, th, s.GetStartLabel(), theme.TextMin, th.Muted, theme.Mono)
-			end := recordLabel(gtx, th, s.GetEndLabel(), theme.TextMin, th.Muted, theme.Mono)
+			captions := func(gtx layout.Context) (recorded, recorded) {
+				return recordLabel(gtx, th, s.GetStartLabel(), theme.TextMin, th.Muted, theme.Mono),
+					recordLabel(gtx, th, s.GetEndLabel(), theme.TextMin, th.Muted, theme.Mono)
+			}
+			start, end := captions(gtx)
+			// Captions that do not both fit get half the width each,
+			// cut off there, so the end one stays at the right edge.
+			gap := gtx.Dp(theme.Space8)
+			if start.dims.Size.X+gap+end.dims.Size.X > width {
+				half := gtx
+				half.Constraints.Max.X = max((width-gap)/2, 0)
+				start, end = captions(half)
+			}
 			start.at(gtx, image.Point{})
-			end.at(gtx, image.Pt(max(width-end.dims.Size.X, start.dims.Size.X), 0))
+			end.at(gtx, image.Pt(width-end.dims.Size.X, 0))
 			return layout.Dimensions{Size: image.Pt(width, max(start.dims.Size.Y, end.dims.Size.Y))}
 		}))
 	}
@@ -392,13 +432,15 @@ func (v *viewState) sparkline(gtx layout.Context, th *theme.Theme, s *tesserav1.
 // describeSpark is what a screen reader says for a sparkline.
 func describeSpark(s *tesserav1.Sparkline) string {
 	var latest string
+	n := 0
 	for _, x := range s.GetSamples() {
 		if finite(x) {
 			latest = formatNumber(x)
+			n++
 		}
 	}
-	d := fmt.Sprintf("%d samples", len(s.GetSamples()))
-	if s.GetStartLabel() != "" || s.GetEndLabel() != "" {
+	d := fmt.Sprintf("%d samples", n)
+	if s.GetStartLabel() != "" && s.GetEndLabel() != "" {
 		d += fmt.Sprintf(" from %s to %s", s.GetStartLabel(), s.GetEndLabel())
 	}
 	if latest != "" {

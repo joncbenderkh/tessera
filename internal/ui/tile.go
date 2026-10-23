@@ -38,6 +38,7 @@ var menuItems = [...]struct {
 // view, or why it has none.
 type tile struct {
 	content  viewState
+	launch   *tesserav1.DescribeResponse // the launch content is for: each answers Describe anew
 	head     gesture.Hover
 	menu     Button
 	items    [len(menuItems)]Button
@@ -179,20 +180,23 @@ func (t *tile) Layout(gtx layout.Context, th *theme.Theme, s pluginhost.PanelSta
 	padX := gtx.Dp(theme.Space16)
 	body.Constraints = layout.Constraints{Max: image.Pt(max(size.X-2*padX, 0), max(size.Y-headH-padX, 0))}
 	st := op.Offset(image.Pt(padX, headH)).Push(gtx.Ops)
-	switch kind {
-	case kindStarting:
+	if kind == kindStarting || kind == kindFailing || s.View == nil || s.Info != t.launch {
+		// A new launch starts afresh: its first view's ranges are sent.
+		// Its Info tells it apart even with no frame drawn in between.
+		t.content = viewState{}
+		t.launch = s.Info
+	}
+	switch {
+	case kind == kindStarting:
 		label(th, "Starting "+s.Plugin+"…", theme.TextMin, th.Muted, theme.Mono).Layout(body)
-	case kindFailing:
+	case kind == kindFailing:
 		t.errorBody(body, th, s, narrow)
 		t.buttons = t.buttons.Add(image.Pt(padX, headH))
-	default:
-		switch {
-		case s.View != nil:
-			events = t.content.Layout(body, th, s.View)
-		case s.ViewErr != nil:
-			// A view over a limit: none is shown until a restart.
-			wrapped(th, s.ViewErr.Error(), theme.TextMin, th.Muted, theme.Mono).Layout(body)
-		}
+	case s.View != nil:
+		events = t.content.Layout(body, th, s.View)
+	case s.ViewErr != nil:
+		// A view over a limit: none is shown until a restart.
+		wrapped(th, s.ViewErr.Error(), theme.TextMin, th.Muted, theme.Mono).Layout(body)
 	}
 	st.Pop()
 	return actions, events

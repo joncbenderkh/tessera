@@ -6,13 +6,20 @@ import (
 	"image"
 	"image/color"
 	"strconv"
+	"unicode/utf8"
 
+	"gioui.org/f32"
 	"gioui.org/font"
+	"gioui.org/io/semantic"
 	"gioui.org/layout"
+	"gioui.org/op"
 	"gioui.org/op/clip"
+	"gioui.org/op/paint"
+	"gioui.org/text"
 	"gioui.org/unit"
 	"gioui.org/widget"
 	"gioui.org/widget/material"
+	"golang.org/x/image/math/fixed"
 
 	"github.com/joncbenderkh/tessera/internal/ui/theme"
 	tesserav1 "github.com/joncbenderkh/tessera/proto/tessera/v1"
@@ -22,10 +29,12 @@ import (
 // from one view to the next: scroll positions, row clickables, the row
 // last activated, and the visible ranges reported to the plugin.
 type viewState struct {
-	lists    map[string]*layout.List      // by widget id, or "#n" for the nth unnamed table or list
+	lists    map[string]*layout.List      // by "id:" and the widget id, or "#n" for the nth unnamed table or list
 	rows     map[string]*widget.Clickable // by action_id
 	sent     map[string][2]int            // by widget id: the visible range last reported
+	loading  bool                         // inside a loading stack: everything is a placeholder
 	selected string                       // the action_id last activated
+	previous string                       // the one before it, for an activation the plugin did not get
 	digits   map[digitKey]int             // the widest digit's advance, by face and size
 
 	// For the view being drawn.
@@ -54,7 +63,7 @@ func (v *viewState) Layout(gtx layout.Context, th *theme.Theme, view *tesserav1.
 	v.keys = map[*tesserav1.Widget]string{}
 	v.used = map[string]bool{}
 	v.events = nil
-	v.index(view.GetBody(), new(int))
+	v.index(view.GetBody(), new(counts))
 
 	defer clip.Rect{Max: gtx.Constraints.Max}.Push(gtx.Ops).Pop()
 	gtx.Constraints.Min = image.Point{}
@@ -78,7 +87,7 @@ func (v *viewState) Layout(gtx layout.Context, th *theme.Theme, view *tesserav1.
 // first widget with an id, and the first row or item with an action_id,
 // keep it; later ones have none. Each table and list gets the key its
 // scroll position is kept by.
-func (v *viewState) index(w *tesserav1.Widget, unnamed *int) {
+func (v *viewState) index(w *tesserav1.Widget, n *counts) {
 	if w == nil {
 		return
 	}
@@ -106,19 +115,30 @@ func (v *viewState) index(w *tesserav1.Widget, unnamed *int) {
 		}
 	case *tesserav1.Widget_Stack:
 		for _, it := range k.Stack.GetItems() {
-			v.index(it.GetWidget(), unnamed)
+			v.index(it.GetWidget(), n)
 		}
 		return
 	default:
 		return
 	}
-	if v.id(w) != "" {
-		v.keys[w] = v.id(w)
-	} else {
-		*unnamed++
-		v.keys[w] = "#" + strconv.Itoa(*unnamed)
+	// Ids and places have their own prefixes, so a plugin's id never
+	// names an unnamed widget's state.
+	// A widget whose id an earlier one took has its own count, so it
+	// does not renumber the unnamed widgets after it.
+	switch {
+	case v.id(w) != "":
+		v.keys[w] = "id:" + v.id(w)
+	case w.GetId() != "":
+		n.dups++
+		v.keys[w] = "dup#" + strconv.Itoa(n.dups)
+	default:
+		n.unnamed++
+		v.keys[w] = "#" + strconv.Itoa(n.unnamed)
 	}
 }
+
+// counts numbers the tables and lists without an id of their own.
+type counts struct{ unnamed, dups int }
 
 // id is w's id, if no widget before it has it.
 func (v *viewState) id(w *tesserav1.Widget) string {
@@ -145,7 +165,18 @@ func (v *viewState) widget(gtx layout.Context, th *theme.Theme, w *tesserav1.Wid
 	// Each widget takes its natural size; a weighted stack item gets
 	// its share from the stack, whatever the child takes.
 	gtx.Constraints.Min = image.Point{}
-	if w.GetLoading() {
+	// A loading stack draws each of its descendants as its placeholder,
+	// in the stack's layout.
+	if loading := w.GetLoading() || v.loading; loading && w.GetStack() != nil {
+		was := v.loading
+		v.loading = true
+		defer func() { v.loading = was }()
+	} else if loading {
+		// A table or list keeps its scroll position through a loading
+		// view.
+		if k, ok := v.keys[w]; ok {
+			v.used[k] = true
+		}
 		return skeleton(gtx, th, w)
 	}
 	switch k := w.GetKind().(type) {
@@ -243,17 +274,21 @@ func (v *viewState) stat(gtx layout.Context, th *theme.Theme, s *tesserav1.Stat)
 // and smaller, on the same baseline.
 func (v *viewState) valueWithUnit(gtx layout.Context, th *theme.Theme, value string, size unit.Sp, unitText string, unitSize unit.Sp) layout.Dimensions {
 	face := font.Font{Typeface: theme.Body.Typeface, Weight: font.Medium}
-	val := record(gtx, func(gtx layout.Context) layout.Dimensions {
-		return v.tabular(gtx, th, value, size, th.Fg, face)
-	})
 	if unitText == "" {
-		val.at(gtx, image.Point{})
-		return val.dims
+		return v.tabular(gtx, th, value, size, th.Fg, face)
 	}
+	// The unit is measured first, so a value too wide is the one cut
+	// off: a number without its unit would read as another number. A
+	// unit takes at most half the width, so the value keeps some too.
 	gap := gtx.Dp(3)
 	ugtx := gtx
-	ugtx.Constraints.Max.X = max(gtx.Constraints.Max.X-val.dims.Size.X-gap, 0)
+	ugtx.Constraints.Max.X = max((gtx.Constraints.Max.X-gap)/2, 0)
 	u := recordLabel(ugtx, th, unitText, unitSize, th.Muted, theme.Body)
+	vgtx := gtx
+	vgtx.Constraints.Max.X = max(gtx.Constraints.Max.X-u.dims.Size.X-gap, 0)
+	val := record(vgtx, func(gtx layout.Context) layout.Dimensions {
+		return v.tabular(gtx, th, value, size, th.Fg, face)
+	})
 	// Baselines, from the top.
 	vb, ub := val.dims.Size.Y-val.dims.Baseline, u.dims.Size.Y-u.dims.Baseline
 	top := max(vb, ub)
@@ -282,39 +317,60 @@ func column(gtx layout.Context, parts []recorded, gaps []int) layout.Dimensions 
 	return layout.Dimensions{Size: image.Pt(w, y)}
 }
 
+// maxTabular is the most of a value tabular shapes: more could not fit
+// in any tile, and a plugin's huge value must not cost a frame.
+const maxTabular = 1024
+
 // tabular draws s on one line with every ASCII digit in a cell as wide
 // as the widest digit, so a value that changes keeps its width: Gio
-// cannot turn on a font's tabular figures.
+// cannot turn on a font's tabular figures. It shapes s once and moves
+// the digit glyphs into their cells, so s is one label for a screen
+// reader. A value too wide is cut off with an ellipsis, as a label is,
+// at the width it has as plain text.
 func (v *viewState) tabular(gtx layout.Context, th *theme.Theme, s string, size unit.Sp, c color.NRGBA, f font.Font) layout.Dimensions {
 	gtx.Constraints.Min = image.Point{}
-	cell := v.digitWidth(gtx, th, size, f)
-	x, h, base := 0, 0, 0
-	place := func(r recorded, w int) {
-		if x+w > gtx.Constraints.Max.X {
-			return
+	if len(s) > maxTabular {
+		cut := maxTabular
+		for cut > 0 && !utf8.RuneStart(s[cut]) {
+			cut--
 		}
-		r.at(gtx, image.Pt(x+(w-r.dims.Size.X)/2, 0))
-		x += w
-		h, base = max(h, r.dims.Size.Y), max(base, r.dims.Baseline)
+		s = s[:cut]
 	}
-	run := 0
-	for i := 0; i <= len(s); i++ {
-		if i < len(s) && !isDigit(s[i]) {
-			continue
+	cell := fixed.I(v.digitWidth(gtx, th, size, f))
+	th.Shaper.LayoutString(text.Parameters{
+		Font: f, PxPerEm: fixed.I(gtx.Sp(size)), MaxLines: 1, MaxWidth: 1 << 24, Locale: gtx.Locale,
+	}, s)
+	runes := []rune(s)
+	var glyphs []text.Glyph
+	var x, ascent, descent fixed.Int26_6
+	at := 0 // the first rune of the glyph's cluster
+	for g, ok := th.Shaper.NextGlyph(); ok; g, ok = th.Shaper.NextGlyph() {
+		if g.Flags&text.FlagClusterBreak != 0 && g.Runes == 1 && at < len(runes) && '0' <= runes[at] && runes[at] <= '9' {
+			g.X = x + (cell-g.Advance)/2
+			x += cell
+		} else {
+			g.X = x
+			x += g.Advance
 		}
-		if run < i { // the text before this digit
-			r := recordLabel(gtx, th, s[run:i], size, c, f)
-			place(r, r.dims.Size.X)
-		}
-		if i < len(s) {
-			place(recordLabel(gtx, th, s[i:i+1], size, c, f), cell)
-		}
-		run = i + 1
+		at += int(g.Runes)
+		ascent, descent = max(ascent, g.Ascent), max(descent, g.Descent)
+		glyphs = append(glyphs, g)
 	}
-	return layout.Dimensions{Size: image.Pt(x, h), Baseline: base}
+	width, top := x.Ceil(), ascent.Ceil()
+	if width > gtx.Constraints.Max.X {
+		return label(th, s, size, c, f).Layout(gtx)
+	}
+	height := top + descent.Ceil()
+	defer clip.Rect{Max: image.Pt(width, height)}.Push(gtx.Ops).Pop()
+	semantic.LabelOp(s).Add(gtx.Ops)
+	if len(glyphs) > 0 {
+		// Shape places the glyphs from the first one's position.
+		at := op.Affine(f32.AffineId().Offset(f32.Pt(float32(glyphs[0].X)/64, float32(top)))).Push(gtx.Ops)
+		paint.FillShape(gtx.Ops, c, clip.Outline{Path: th.Shaper.Shape(glyphs)}.Op())
+		at.Pop()
+	}
+	return layout.Dimensions{Size: image.Pt(width, height), Baseline: height - top}
 }
-
-func isDigit(b byte) bool { return '0' <= b && b <= '9' }
 
 // digitWidth is the advance of the widest digit in f at size.
 func (v *viewState) digitWidth(gtx layout.Context, th *theme.Theme, size unit.Sp, f font.Font) int {
@@ -453,16 +509,24 @@ func skeleton(gtx layout.Context, th *theme.Theme, w *tesserav1.Widget) layout.D
 	}
 	switch k := w.GetKind().(type) {
 	case *tesserav1.Widget_Text:
+		// As wide as the bar, not the space, so siblings in a row
+		// keep theirs.
 		h := gtx.Sp(textSize(k.Text.GetSize()))
 		bar(0, width*3/5, h)
-		return layout.Dimensions{Size: image.Pt(width, h)}
+		return layout.Dimensions{Size: image.Pt(width*3/5, h)}
 	case *tesserav1.Widget_Stat:
-		bar(0, width/3, gtx.Dp(8))
-		top := gtx.Dp(8) + gtx.Dp(theme.Space8)
-		bar(top, width*42/100, gtx.Dp(29))
-		return layout.Dimensions{Size: image.Pt(width, top+gtx.Dp(29))}
+		// The label and the value, at the sizes a stat draws them.
+		value := theme.TextValue
+		if widthDp(gtx) < compactStat {
+			value = theme.TextStat
+		}
+		lh, vh := gtx.Sp(theme.TextMin), gtx.Sp(value)
+		bar(0, width/3, lh)
+		top := lh + gtx.Dp(6)
+		bar(top, width*42/100, vh)
+		return layout.Dimensions{Size: image.Pt(width*42/100, top+vh)}
 	case *tesserav1.Widget_Gauge:
-		return gaugeTrack(gtx, th)
+		return gaugeTrack(gtx, th, k.Gauge)
 	case *tesserav1.Widget_Sparkline:
 		h, on, off := gtx.Dp(34), gtx.Dp(8), gtx.Dp(5)
 		faint := th.Border

@@ -7,6 +7,7 @@ import (
 	"image"
 	"math"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -19,6 +20,7 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	"github.com/joncbenderkh/tessera/internal/config"
+	"github.com/joncbenderkh/tessera/internal/pluginhost"
 	"github.com/joncbenderkh/tessera/internal/ui/theme"
 	tesserav1 "github.com/joncbenderkh/tessera/proto/tessera/v1"
 )
@@ -109,7 +111,7 @@ func TestViewWidgetsFit(t *testing.T) {
 				gtx := loose(&r, size)
 				gtx.Metric.PxPerSp = scale
 				v.Layout(gtx, testTheme, &tesserav1.View{}) // sets the maps up
-				v.index(w, new(int))
+				v.index(w, new(counts))
 				dims := v.widget(gtx, testTheme, w)
 				if dims.Size.X > size.X {
 					t.Errorf("%v at ×%v: widget %d is %d wide", size, scale, i, dims.Size.X)
@@ -336,7 +338,7 @@ func TestTableScrolls(t *testing.T) {
 		t.Fatalf("scrolling sent %v", moved)
 	}
 	viewFrame(&r, &v, proto.Clone(view).(*tesserav1.View), size)
-	if got := v.lists["procs"].Position.First; got != int(moved[0].GetFirstVisible()) {
+	if got := v.lists["id:procs"].Position.First; got != int(moved[0].GetFirstVisible()) {
 		t.Errorf("after a new view the first row is %d, want %d", got, moved[0].GetFirstVisible())
 	}
 }
@@ -364,4 +366,406 @@ func TestTileSendsViewEvents(t *testing.T) {
 	// drawing nothing.
 	states[0].View, states[0].ViewErr = nil, fmt.Errorf("view over the size limit")
 	frame(&r, &g, cfg, states, now)
+	if !hasLabel(&r, "view over the size limit") {
+		t.Error("the tile does not say why it has no view")
+	}
+}
+
+// hasLabel reports whether the last frame drew a label with text.
+func hasLabel(r *input.Router, text string) bool {
+	for _, n := range r.AppendSemantics(nil) {
+		if n.Desc.Label == text {
+			return true
+		}
+	}
+	return false
+}
+
+// A loading stack draws its children as placeholders, as view.proto
+// says; a loading table or list keeps its scroll position for the view
+// after it.
+func TestViewLoading(t *testing.T) {
+	var r input.Router
+	var v viewState
+	size := image.Pt(300, 300)
+	stack := &tesserav1.View{Body: &tesserav1.Widget{Loading: true, Kind: &tesserav1.Widget_Stack{Stack: &tesserav1.Stack{
+		Items: []*tesserav1.StackItem{{Widget: textW("still here")}},
+	}}}}
+	viewFrame(&r, &v, stack, size)
+	if hasLabel(&r, "still here") {
+		t.Error("a loading stack drew its child's content")
+	}
+	gtx := loose(&r, size)
+	if d := v.widget(gtx, testTheme, stack.Body); d.Size.Y == 0 {
+		t.Error("a loading stack drew no placeholder")
+	}
+
+	table := &tesserav1.Table{Columns: []*tesserav1.TableColumn{{Title: "Name"}}}
+	for i := range 50 {
+		table.Rows = append(table.Rows, &tesserav1.TableRow{Cells: []string{fmt.Sprint("row ", i)}})
+	}
+	view := &tesserav1.View{Body: &tesserav1.Widget{Id: "procs", Kind: &tesserav1.Widget_Table{Table: table}}}
+	viewFrame(&r, &v, view, size)
+	viewFrame(&r, &v, view, size, pointer.Event{Kind: pointer.Scroll, Source: pointer.Mouse, Position: f32.Pt(100, 150), Scroll: f32.Pt(0, 400)})
+	first := v.lists["id:procs"].Position.First
+	loading := proto.Clone(view).(*tesserav1.View)
+	loading.Body.Loading = true
+	viewFrame(&r, &v, loading, size)
+	if got := scrolls(viewFrame(&r, &v, view, size)); got != nil || v.lists["id:procs"].Position.First != first || first == 0 {
+		t.Errorf("after a loading view: first row %d, want %d; sent %v", v.lists["id:procs"].Position.First, first, got)
+	}
+}
+
+// A plugin's id never shares state with an unnamed list's place.
+func TestViewKeysApart(t *testing.T) {
+	var r input.Router
+	var v viewState
+	viewFrame(&r, &v, &tesserav1.View{Body: column2(listOf("#1", &tesserav1.ListItem{Title: "a"}), listOf("", &tesserav1.ListItem{Title: "b"}))}, image.Pt(300, 300))
+	if len(v.lists) != 2 {
+		t.Errorf("%d list states for two lists: %v", len(v.lists), v.keys)
+	}
+}
+
+func column2(a, b *tesserav1.Widget) *tesserav1.Widget {
+	return &tesserav1.Widget{Kind: &tesserav1.Widget_Stack{Stack: &tesserav1.Stack{Items: []*tesserav1.StackItem{{Widget: a}, {Widget: b}}}}}
+}
+
+// An empty list with an id reports that nothing is visible, once, and
+// again when it empties after having items.
+func TestEmptyListReportsRange(t *testing.T) {
+	var r input.Router
+	var v viewState
+	size := image.Pt(300, 300)
+	empty := &tesserav1.View{Body: listOf("events")}
+	got := scrolls(viewFrame(&r, &v, empty, size))
+	if len(got) != 1 || got[0].GetVisibleCount() != 0 {
+		t.Fatalf("an empty list sent %v", got)
+	}
+	if got := scrolls(viewFrame(&r, &v, empty, size)); got != nil {
+		t.Errorf("sent again: %v", got)
+	}
+	viewFrame(&r, &v, &tesserav1.View{Body: listOf("events", &tesserav1.ListItem{Title: "a"})}, size)
+	if got := scrolls(viewFrame(&r, &v, empty, size)); len(got) != 1 || got[0].GetVisibleCount() != 0 {
+		t.Errorf("emptying sent %v", got)
+	}
+}
+
+// A value too wide for its space is cut off as a label is, not drawn
+// with digits missing.
+func TestTabularOverflow(t *testing.T) {
+	var r input.Router
+	var v viewState
+	gtx := loose(&r, image.Pt(51, 100))
+	v.Layout(gtx, testTheme, &tesserav1.View{})
+	got := v.tabular(gtx, testTheme, "12345678", theme.TextStat, testTheme.Fg, theme.Body)
+	want := label(testTheme, "12345678", theme.TextStat, testTheme.Fg, theme.Body).Layout(gtx)
+	if got.Size != want.Size {
+		t.Errorf("overflowing value is %v, want the cut label's %v", got.Size, want.Size)
+	}
+}
+
+// Many columns in a narrow table each start inside it.
+func TestColumnBoundsNarrow(t *testing.T) {
+	var r input.Router
+	gtx := loose(&r, image.Pt(120, 100))
+	cols := make([]*tesserav1.TableColumn, 11)
+	for i, b := range columnBounds(gtx, cols, 120) {
+		if b[0] >= b[1] || b[1] > 120 {
+			t.Errorf("column %d at %v in 120 px", i, b)
+		}
+	}
+}
+
+func TestFormatNumber(t *testing.T) {
+	for x, want := range map[float64]string{
+		-0.04: "-0.04", 0.05: "0.05", 0.004: "0.004", 0.123: "0.12", math.Copysign(0, -1): "0",
+		3.2e-7: "3.2e-07", 1e-300: "1e-300",
+		12.345: "12.3", 1e308: "1e+308", -2.5e20: "-2.5e+20", 100: "100",
+	} {
+		if got := formatNumber(x); got != want {
+			t.Errorf("formatNumber(%v) = %q, want %q", x, got, want)
+		}
+	}
+}
+
+func TestHugeRanges(t *testing.T) {
+	if r := readGauge(&tesserav1.Gauge{Value: 1e308, Min: -1e308, Max: f(1e308), WarnAt: f(1e308)}); r.tone != gaugeMissing || len(r.ticks) != 0 {
+		t.Errorf("a range too wide for a float64: %+v", r)
+	}
+	for _, p := range sparkPoints([]float64{-1e308, 1e308, 0}, -1e308, 1e308, 100, 40)[0] {
+		if p.Y != 20 {
+			t.Errorf("point %v, want mid-height", p)
+		}
+	}
+}
+
+func TestDescribeSpark(t *testing.T) {
+	got := describeSpark(&tesserav1.Sparkline{Label: "Load", Samples: []float64{1, math.NaN(), 3}, StartLabel: "60s ago", Unit: "%"})
+	if want := "Load: 2 samples, latest 3 %"; got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+// A restarted plugin's first view sends its ranges again.
+func TestRestartResendsRanges(t *testing.T) {
+	cfg := gridConfig([]config.Panel{panel("p", 0, 0, 1, 2)})
+	states := live("p")
+	view := &tesserav1.View{Body: listOf("events", &tesserav1.ListItem{Title: "a"})}
+	var r input.Router
+	var g Grid
+	now := time.Now()
+	sent := func() int {
+		states[0].View = view
+		n := 0
+		for _, a := range frame(&r, &g, cfg, states, now) {
+			if a.Event.GetScroll() != nil {
+				n++
+			}
+		}
+		return n
+	}
+	if n := sent(); n != 1 {
+		t.Fatalf("first view sent %d ranges", n)
+	}
+	states[0].State, states[0].View = pluginhost.Starting, nil
+	frame(&r, &g, cfg, states, now)
+	states[0].State = pluginhost.Live
+	if n := sent(); n != 1 {
+		t.Errorf("after a restart, %d ranges sent, want 1", n)
+	}
+	// A launch that came and went between frames is told apart by its
+	// Describe answer.
+	states[0].Info = &tesserav1.DescribeResponse{Name: "p"}
+	if n := sent(); n != 1 {
+		t.Errorf("after an unseen restart, %d ranges sent, want 1", n)
+	}
+}
+
+// An activation the plugin did not get gives the highlight back to the
+// one before it.
+func TestUnselect(t *testing.T) {
+	cfg := gridConfig([]config.Panel{panel("cal", 0, 0, 1, 2)})
+	states := live("cal")
+	states[0].View = &tesserav1.View{Body: listOf("",
+		&tesserav1.ListItem{Title: "Review", ActionId: "ev:1"},
+		&tesserav1.ListItem{Title: "Focus", ActionId: "ev:2"},
+	)}
+	var r input.Router
+	var g Grid
+	now := time.Now()
+	frame(&r, &g, cfg, states, now)
+	rect := g.placed["cal"]
+	top := rect.Min.Y + g.tiles["cal"].headSize.Y
+	itemH := 2*12 + v0(&r).widget(loose(&r, rect.Size()), testTheme, textW("Review")).Size.Y
+	frame(&r, &g, cfg, states, now, click(image.Pt(rect.Min.X+60, top+itemH/2))...)
+	frame(&r, &g, cfg, states, now, click(image.Pt(rect.Min.X+60, top+itemH+itemH/2))...)
+	if g.tiles["cal"].content.selected != "ev:2" {
+		t.Fatalf("selected %q, want ev:2", g.tiles["cal"].content.selected)
+	}
+	g.Unselect("cal", "ev:1") // not the selected one: no change
+	g.Unselect("cal", "ev:2")
+	if got := g.tiles["cal"].content.selected; got != "ev:1" {
+		t.Errorf("selected %q after the failed activation, want ev:1", got)
+	}
+}
+
+// v0 is a view state ready for measuring.
+func v0(r *input.Router) *viewState {
+	var v viewState
+	v.Layout(loose(r, image.Pt(10, 10)), testTheme, &tesserav1.View{})
+	return &v
+}
+
+// A huge value costs no more than one that fits: measuring stops once
+// it is too wide.
+func TestTabularHugeValue(t *testing.T) {
+	var r input.Router
+	var v viewState
+	gtx := loose(&r, image.Pt(300, 100))
+	v.Layout(gtx, testTheme, &tesserav1.View{})
+	start := time.Now()
+	v.tabular(gtx, testTheme, strings.Repeat("7", 1_000_000), theme.TextStat, testTheme.Fg, theme.Body)
+	if d := time.Since(start); d > 200*time.Millisecond {
+		t.Errorf("a million digits took %v", d)
+	}
+}
+
+// In a narrow row, long leading text leaves the title room.
+func TestListItemLeadingCapped(t *testing.T) {
+	var r input.Router
+	var v viewState
+	viewFrame(&r, &v, &tesserav1.View{Body: listOf("", &tesserav1.ListItem{
+		Leading: "a very long leading text", Title: "Title", ActionId: "x",
+	})}, image.Pt(120, 200))
+	b, ok := labelBounds(&r, "Title")
+	if !ok || b.Dx() <= 0 || b.Max.X > 120 {
+		t.Errorf("the title is at %v (drawn %t), want inside the 120 px row", b, ok)
+	}
+}
+
+// labelBounds is where the last frame drew the label with text.
+func labelBounds(r *input.Router, text string) (image.Rectangle, bool) {
+	var walk func(ns []input.SemanticNode) (image.Rectangle, bool)
+	walk = func(ns []input.SemanticNode) (image.Rectangle, bool) {
+		for _, n := range ns {
+			if n.Desc.Label == text {
+				return n.Desc.Bounds, true
+			}
+			if b, ok := walk(n.Children); ok {
+				return b, ok
+			}
+		}
+		return image.Rectangle{}, false
+	}
+	return walk(r.AppendSemantics(nil))
+}
+
+// A range the plugin's queue refused is sent again on the next frame.
+func TestUnsentRangeResent(t *testing.T) {
+	cfg := gridConfig([]config.Panel{panel("p", 0, 0, 1, 2)})
+	states := live("p")
+	states[0].View = &tesserav1.View{Body: listOf("events", &tesserav1.ListItem{Title: "a"})}
+	var r input.Router
+	var g Grid
+	now := time.Now()
+	count := func() int {
+		n := 0
+		for _, a := range frame(&r, &g, cfg, states, now) {
+			if a.Event.GetScroll() != nil {
+				n++
+			}
+		}
+		return n
+	}
+	count()
+	if n := count(); n != 0 {
+		t.Fatalf("an unchanged range was sent again")
+	}
+	g.Unsent("p", "events")
+	if n := count(); n != 1 {
+		t.Errorf("after Unsent, %d ranges sent, want 1", n)
+	}
+}
+
+// A narrow stat cuts its value, not its unit.
+func TestStatKeepsUnit(t *testing.T) {
+	var r input.Router
+	stat := &tesserav1.Widget{Kind: &tesserav1.Widget_Stat{Stat: &tesserav1.Stat{Value: "1234", Unit: "MB/s"}}}
+	viewFrame(&r, new(viewState), &tesserav1.View{Body: stat}, image.Pt(60, 100))
+	// Semantic bounds span a label's constraints, so check where the
+	// unit starts against its own width.
+	unitW := recordLabel(loose(&r, image.Pt(60, 100)), testTheme, "MB/s", theme.TextBody, testTheme.Muted, theme.Body).dims.Size.X
+	if b, ok := labelBounds(&r, "MB/s"); !ok || b.Min.X+unitW > 60 {
+		t.Errorf("unit %d px wide starts at %v (drawn %t), want whole inside 60 px", unitW, b.Min, ok)
+	}
+}
+
+// A loading item in a row leaves its siblings their room.
+func TestLoadingSiblingVisible(t *testing.T) {
+	var r input.Router
+	loading := textW("CPU")
+	loading.Loading = true
+	row := &tesserav1.Widget{Kind: &tesserav1.Widget_Stack{Stack: &tesserav1.Stack{
+		Axis:  tesserav1.Axis_AXIS_HORIZONTAL,
+		Items: []*tesserav1.StackItem{{Widget: loading}, {Widget: textW("visible")}},
+	}}}
+	viewFrame(&r, new(viewState), &tesserav1.View{Body: row}, image.Pt(300, 100))
+	if b, ok := labelBounds(&r, "visible"); !ok || b.Dx() <= 0 || b.Max.X > 300 {
+		t.Errorf("sibling at %v (drawn %t)", b, ok)
+	}
+}
+
+// A list that lost its id to an earlier one does not take the place of
+// the unnamed list after it.
+func TestDuplicateIDKeepsUnnamedKeys(t *testing.T) {
+	var r input.Router
+	var v viewState
+	a := listOf("a", &tesserav1.ListItem{Title: "x"})
+	two := column2(a, listOf("", &tesserav1.ListItem{Title: "y"}))
+	viewFrame(&r, &v, &tesserav1.View{Body: two}, image.Pt(300, 300))
+	unnamed := v.keys[two.GetStack().GetItems()[1].GetWidget()]
+	three := &tesserav1.Widget{Kind: &tesserav1.Widget_Stack{Stack: &tesserav1.Stack{Items: []*tesserav1.StackItem{
+		{Widget: listOf("a", &tesserav1.ListItem{Title: "x"})},
+		{Widget: listOf("a", &tesserav1.ListItem{Title: "z"})},
+		{Widget: listOf("", &tesserav1.ListItem{Title: "y"})},
+	}}}}
+	viewFrame(&r, &v, &tesserav1.View{Body: three}, image.Pt(300, 300))
+	if got := v.keys[three.GetStack().GetItems()[2].GetWidget()]; got != unnamed {
+		t.Errorf("the unnamed list is %q, was %q", got, unnamed)
+	}
+}
+
+// Long captions under a sparkline share its width; the end one stays in
+// view.
+func TestSparkCaptionsShare(t *testing.T) {
+	var r input.Router
+	long := strings.Repeat("start ", 10)
+	spark := &tesserav1.Widget{Kind: &tesserav1.Widget_Sparkline{Sparkline: &tesserav1.Sparkline{
+		Samples: []float64{1, 2}, StartLabel: long, EndLabel: "now",
+	}}}
+	viewFrame(&r, new(viewState), &tesserav1.View{Body: spark}, image.Pt(120, 200))
+	nowW := recordLabel(loose(&r, image.Pt(120, 200)), testTheme, "now", theme.TextMin, testTheme.Muted, theme.Mono).dims.Size.X
+	if b, ok := labelBounds(&r, "now"); !ok || b.Min.X+nowW > 120 {
+		t.Errorf("end caption %d px wide starts at %v (drawn %t)", nowW, b.Min, ok)
+	}
+}
+
+// A value too wide in cells falls back to a label of the whole value,
+// which is cut off with an ellipsis only if it does not fit as plain
+// text either, and which a screen reader reads whole.
+func TestTabularFallback(t *testing.T) {
+	var r input.Router
+	var v viewState
+	gtx := loose(&r, image.Pt(60, 100))
+	v.Layout(gtx, testTheme, &tesserav1.View{})
+	v.digits[digitKey{theme.Body, theme.TextStat, gtx.Metric.PxPerSp}] = 18 // wider cells than the digits
+	d := v.tabular(gtx, testTheme, "11111111", theme.TextStat, testTheme.Fg, theme.Body)
+	r.Frame(gtx.Ops)
+	if !hasLabel(&r, "11111111") || d.Size.X > 60 {
+		t.Errorf("fallback %v wide, labelled whole %t", d.Size, hasLabel(&r, "11111111"))
+	}
+}
+
+// A value is one label, not one per digit.
+func TestStatValueIsOneLabel(t *testing.T) {
+	var r input.Router
+	stat := &tesserav1.Widget{Kind: &tesserav1.Widget_Stat{Stat: &tesserav1.Stat{Label: "CPU", Value: "12.5", Unit: "%"}}}
+	viewFrame(&r, new(viewState), &tesserav1.View{Body: stat}, image.Pt(300, 200))
+	if !hasLabel(&r, "12.5") || hasLabel(&r, "1") {
+		t.Error(`want the value labelled "12.5", not digit by digit`)
+	}
+}
+
+// A long unit leaves the value room.
+func TestStatLongUnit(t *testing.T) {
+	var r input.Router
+	stat := &tesserav1.Widget{Kind: &tesserav1.Widget_Stat{Stat: &tesserav1.Stat{Value: "1234", Unit: "requests per second"}}}
+	viewFrame(&r, new(viewState), &tesserav1.View{Body: stat}, image.Pt(120, 100))
+	unit, ok := labelBounds(&r, "requests per second")
+	if !ok || unit.Min.X < 40 {
+		t.Errorf("the unit starts at %v (drawn %t), leaving the value no room", unit.Min, ok)
+	}
+}
+
+// A loading gauge shows its limits, as the mockup's does.
+func TestLoadingGaugeLimits(t *testing.T) {
+	var r input.Router
+	g := &tesserav1.Widget{Loading: true, Kind: &tesserav1.Widget_Gauge{Gauge: &tesserav1.Gauge{}}}
+	viewFrame(&r, new(viewState), &tesserav1.View{Body: g}, image.Pt(300, 200))
+	if !hasLabel(&r, "0") || !hasLabel(&r, "100") {
+		t.Error("the loading gauge has no limits")
+	}
+}
+
+// A row's spoken label has the cells it shows, not extra ones.
+func TestRowLabelIgnoresExtraCells(t *testing.T) {
+	var r input.Router
+	table := &tesserav1.Table{
+		Columns: []*tesserav1.TableColumn{{Title: "Name"}, {Title: "CPU"}},
+		Rows:    []*tesserav1.TableRow{{Cells: []string{"A", "B", "C"}, ActionId: "x"}},
+	}
+	viewFrame(&r, new(viewState), &tesserav1.View{Body: &tesserav1.Widget{Kind: &tesserav1.Widget_Table{Table: table}}}, image.Pt(300, 200))
+	if !hasLabel(&r, "A, B") || hasLabel(&r, "A, B, C") {
+		t.Error(`want the row labelled "A, B"`)
+	}
 }

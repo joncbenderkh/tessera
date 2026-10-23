@@ -45,11 +45,17 @@ func (v *viewState) scrollList(w *tesserav1.Widget) *layout.List {
 // scrolled reports the visible range of w, laid out with l, to the
 // plugin when it has an id and the range changed since it last did.
 func (v *viewState) scrolled(w *tesserav1.Widget, l *layout.List) {
+	v.report(w, l.Position.First, l.Position.Count)
+}
+
+// report sends the visible range first and count of w, if it has an id
+// and the range changed since it was last sent.
+func (v *viewState) report(w *tesserav1.Widget, first, count int) {
 	id := v.id(w)
 	if id == "" {
 		return
 	}
-	r := [2]int{l.Position.First, l.Position.Count}
+	r := [2]int{first, count}
 	if last, ok := v.sent[v.keys[w]]; ok && last == r {
 		return
 	}
@@ -80,7 +86,7 @@ func (v *viewState) actionable(gtx layout.Context, th *theme.Theme, id, text str
 	}
 	c := v.clickable(id)
 	for c.Clicked(gtx) {
-		v.selected = id
+		v.previous, v.selected = v.selected, id
 		v.events = append(v.events, &tesserav1.HandleEventRequest{Event: &tesserav1.HandleEventRequest_Activate{
 			Activate: &tesserav1.ActivateEvent{ActionId: id},
 		}})
@@ -105,7 +111,9 @@ func columnBounds(gtx layout.Context, cols []*tesserav1.TableColumn, width int) 
 	if len(cols) == 0 {
 		return nil
 	}
-	gap := gtx.Dp(cellGap)
+	// The gaps take at most half the width, so many columns in a narrow
+	// table still each get some.
+	gap := min(gtx.Dp(cellGap), width/max(2*(len(cols)-1), 1))
 	total := 0
 	for _, c := range cols {
 		total += max(int(c.GetWeight()), 1)
@@ -171,6 +179,8 @@ func (v *viewState) table(gtx layout.Context, th *theme.Theme, w *tesserav1.Widg
 
 	rows := t.GetRows()
 	if len(rows) == 0 {
+		v.scrollList(w) // kept for when rows come back
+		v.report(w, 0, 0)
 		if t.GetEmptyText() == "" {
 			return layout.Dimensions{Size: image.Pt(width, headH)}
 		}
@@ -216,6 +226,7 @@ func sortArrow(gtx layout.Context, th *theme.Theme, c image.Point, up bool) {
 func (v *viewState) tableRow(gtx layout.Context, th *theme.Theme, r *tesserav1.TableRow, cols []*tesserav1.TableColumn, bounds [][2]int) layout.Dimensions {
 	width := gtx.Constraints.Max.X
 	cells := r.GetCells()
+	cells = cells[:min(len(cells), len(cols))] // extra cells are ignored
 	id := v.action(r.GetActionId(), r)
 	return v.actionable(gtx, th, id, strings.Join(cells, ", "), func(gtx layout.Context, lit bool) layout.Dimensions {
 		tgtx := gtx
@@ -259,6 +270,8 @@ func (v *viewState) list(gtx layout.Context, th *theme.Theme, w *tesserav1.Widge
 	width := gtx.Constraints.Max.X
 	items := li.GetItems()
 	if len(items) == 0 {
+		v.scrollList(w)
+		v.report(w, 0, 0)
 		if li.GetEmptyText() == "" {
 			return layout.Dimensions{}
 		}
@@ -285,17 +298,21 @@ func (v *viewState) listItem(gtx layout.Context, th *theme.Theme, it *tesserav1.
 		tgtx := gtx
 		tgtx.Constraints.Min = image.Point{}
 		pad := gtx.Dp(itemPadY)
-		x := 0
-		var lead recorded
-		if it.GetLeading() != "" {
-			lead = recordLabel(tgtx, th, it.GetLeading(), theme.TextMin, th.Muted, theme.Mono)
-			x = max(gtx.Dp(leadingW), lead.dims.Size.X) + gtx.Dp(leadingGap)
-		}
 		var chevron recorded
 		end := width
 		if id != "" {
 			chevron = recordLabel(tgtx, th, "›", theme.TextBody, th.Muted, theme.Body)
 			end -= chevron.dims.Size.X + gtx.Dp(theme.Space8)
+		}
+		// The leading text takes at most two fifths of what is left, so
+		// the title always has room; longer leading text is cut off.
+		x := 0
+		var lead recorded
+		if it.GetLeading() != "" {
+			lgtx := tgtx
+			lgtx.Constraints.Max.X = max(end*2/5, 0)
+			lead = recordLabel(lgtx, th, it.GetLeading(), theme.TextMin, th.Muted, theme.Mono)
+			x = min(max(gtx.Dp(leadingW), lead.dims.Size.X), lgtx.Constraints.Max.X) + gtx.Dp(leadingGap)
 		}
 		cgtx := tgtx
 		cgtx.Constraints.Max.X = max(end-x, 0)
