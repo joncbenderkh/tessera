@@ -5,12 +5,15 @@ package ui
 import (
 	"image"
 	"image/color"
+	"slices"
+	"sort"
 	"strconv"
 	"unicode/utf8"
 
 	"gioui.org/f32"
 	"gioui.org/font"
 	"gioui.org/io/semantic"
+	"gioui.org/io/system"
 	"gioui.org/layout"
 	"gioui.org/op"
 	"gioui.org/op/clip"
@@ -29,13 +32,14 @@ import (
 // from one view to the next: scroll positions, row clickables, the row
 // last activated, and the visible ranges reported to the plugin.
 type viewState struct {
-	lists    map[string]*layout.List      // by "id:" and the widget id, or "#n" for the nth unnamed table or list
-	rows     map[string]*widget.Clickable // by action_id
-	sent     map[string][2]int            // by widget id: the visible range last reported
-	loading  bool                         // inside a loading stack: everything is a placeholder
-	selected string                       // the action_id last activated
-	previous string                       // the one before it, for an activation the plugin did not get
-	digits   map[digitKey]int             // the widest digit's advance, by face and size
+	lists    map[string]*layout.List            // by "id:" and the widget id, or "#n" for the nth unnamed table or list
+	rows     map[string]*widget.Clickable       // by action_id
+	sent     map[string][2]int                  // by widget id: the visible range last reported
+	loading  bool                               // inside a loading stack: everything is a placeholder
+	selected string                             // the action_id last activated
+	previous string                             // the one before it, for an activation the plugin did not get
+	digits   map[digitKey]int                   // the widest digit's advance, by face and size
+	digitIDs map[digitKey]map[text.GlyphID]bool // the digits' glyphs, by face and size
 
 	// For the view being drawn.
 	owners map[string]any // each widget id and action_id, to its first owner
@@ -45,9 +49,10 @@ type viewState struct {
 }
 
 type digitKey struct {
-	font font.Font
-	size unit.Sp
-	px   float32 // PxPerSp, which the advance scales with
+	font   font.Font
+	size   unit.Sp
+	px     float32 // PxPerSp, which the advance scales with
+	locale system.Locale
 }
 
 // Layout draws view's body over gtx's constraints, clipped to them, and
@@ -58,6 +63,7 @@ func (v *viewState) Layout(gtx layout.Context, th *theme.Theme, view *tesserav1.
 		v.rows = map[string]*widget.Clickable{}
 		v.sent = map[string][2]int{}
 		v.digits = map[digitKey]int{}
+		v.digitIDs = map[digitKey]map[text.GlyphID]bool{}
 	}
 	v.owners = map[string]any{}
 	v.keys = map[*tesserav1.Widget]string{}
@@ -321,12 +327,13 @@ func column(gtx layout.Context, parts []recorded, gaps []int) layout.Dimensions 
 // in any tile, and a plugin's huge value must not cost a frame.
 const maxTabular = 1024
 
-// tabular draws s on one line with every ASCII digit in a cell as wide
+// tabular draws s on one line with every digit glyph in a cell as wide
 // as the widest digit, so a value that changes keeps its width: Gio
-// cannot turn on a font's tabular figures. It shapes s once and moves
-// the digit glyphs into their cells, so s is one label for a screen
-// reader. A value too wide is cut off with an ellipsis, as a label is,
-// at the width it has as plain text.
+// cannot turn on a font's tabular figures. It shapes s once and widens
+// the digits where the shaper put them, so right-to-left runs keep
+// their order and s is one label for a screen reader. A value too wide
+// is cut off with an ellipsis, as a label is, at the width it has as
+// plain text.
 func (v *viewState) tabular(gtx layout.Context, th *theme.Theme, s string, size unit.Sp, c color.NRGBA, f font.Font) layout.Dimensions {
 	gtx.Constraints.Min = image.Point{}
 	if len(s) > maxTabular {
@@ -334,29 +341,22 @@ func (v *viewState) tabular(gtx layout.Context, th *theme.Theme, s string, size 
 		for cut > 0 && !utf8.RuneStart(s[cut]) {
 			cut--
 		}
-		s = s[:cut]
+		// The ellipsis shows the cut even when what is left draws nothing.
+		s = s[:cut] + "…"
 	}
 	cell := fixed.I(v.digitWidth(gtx, th, size, f))
+	digits := v.digitGlyphs(gtx, th, size, f)
 	th.Shaper.LayoutString(text.Parameters{
 		Font: f, PxPerEm: fixed.I(gtx.Sp(size)), MaxLines: 1, MaxWidth: 1 << 24, Locale: gtx.Locale,
 	}, s)
-	runes := []rune(s)
 	var glyphs []text.Glyph
-	var x, ascent, descent fixed.Int26_6
-	at := 0 // the first rune of the glyph's cluster
+	var ascent, descent fixed.Int26_6
 	for g, ok := th.Shaper.NextGlyph(); ok; g, ok = th.Shaper.NextGlyph() {
-		if g.Flags&text.FlagClusterBreak != 0 && g.Runes == 1 && at < len(runes) && '0' <= runes[at] && runes[at] <= '9' {
-			g.X = x + (cell-g.Advance)/2
-			x += cell
-		} else {
-			g.X = x
-			x += g.Advance
-		}
-		at += int(g.Runes)
 		ascent, descent = max(ascent, g.Ascent), max(descent, g.Descent)
 		glyphs = append(glyphs, g)
 	}
-	width, top := x.Ceil(), ascent.Ceil()
+	left, w := inCells(glyphs, digits, cell)
+	width, top := w.Ceil(), ascent.Ceil()
 	if width > gtx.Constraints.Max.X {
 		return label(th, s, size, c, f).Layout(gtx)
 	}
@@ -364,17 +364,75 @@ func (v *viewState) tabular(gtx layout.Context, th *theme.Theme, s string, size 
 	defer clip.Rect{Max: image.Pt(width, height)}.Push(gtx.Ops).Pop()
 	semantic.LabelOp(s).Add(gtx.Ops)
 	if len(glyphs) > 0 {
-		// Shape places the glyphs from the first one's position.
-		at := op.Affine(f32.AffineId().Offset(f32.Pt(float32(glyphs[0].X)/64, float32(top)))).Push(gtx.Ops)
+		// Shape and Bitmaps place the glyphs from the first one's position.
+		at := op.Affine(f32.AffineId().Offset(f32.Pt(float32(glyphs[0].X-left)/64, float32(top)))).Push(gtx.Ops)
 		paint.FillShape(gtx.Ops, c, clip.Outline{Path: th.Shaper.Shape(glyphs)}.Op())
+		if call := th.Shaper.Bitmaps(glyphs); call != (op.CallOp{}) {
+			call.Add(gtx.Ops)
+		}
 		at.Pop()
 	}
 	return layout.Dimensions{Size: image.Pt(width, height), Baseline: height - top}
 }
 
+// inCells moves glyphs, as shaped, so each digit glyph sits centred in
+// a cell as wide as cell and the rest move over by what the cells left
+// of them add. It returns the leftmost glyph's x and the width.
+func inCells(glyphs []text.Glyph, digits map[text.GlyphID]bool, cell fixed.Int26_6) (left, width fixed.Int26_6) {
+	type widened struct{ x, end, by fixed.Int26_6 }
+	var cells []widened // each digit's shaped x, and how much its cell adds
+	var right fixed.Int26_6
+	for i, g := range glyphs {
+		if i == 0 || g.X < left {
+			left = g.X
+		}
+		right = max(right, g.X+g.Advance)
+		if digits[g.ID] {
+			cells = append(cells, widened{g.X, g.X + g.Advance, cell - g.Advance})
+		}
+	}
+	slices.SortFunc(cells, func(a, b widened) int { return int(a.x - b.x) })
+	// shift[i] is what the cells left of the ith digit add.
+	shift := make([]fixed.Int26_6, len(cells)+1)
+	for i, w := range cells {
+		shift[i+1] = shift[i] + w.by
+	}
+	for i := range glyphs {
+		g := &glyphs[i]
+		n := sort.Search(len(cells), func(j int) bool { return cells[j].x >= g.X })
+		by := shift[n]
+		switch {
+		case digits[g.ID]:
+			by += cells[n].by / 2
+		case g.Advance == 0 && n > 0 && cells[n-1].end == g.X:
+			// A mark on the digit before it moves with that digit.
+			by = shift[n-1] + cells[n-1].by/2
+		}
+		g.X += by
+	}
+	return left, right - left + shift[len(cells)]
+}
+
+// digitGlyphs is the set of glyphs f has for the digits 0 to 9 at size.
+func (v *viewState) digitGlyphs(gtx layout.Context, th *theme.Theme, size unit.Sp, f font.Font) map[text.GlyphID]bool {
+	k := digitKey{f, size, gtx.Metric.PxPerSp, gtx.Locale}
+	if ids, ok := v.digitIDs[k]; ok {
+		return ids
+	}
+	th.Shaper.LayoutString(text.Parameters{Font: f, PxPerEm: fixed.I(gtx.Sp(size)), MaxLines: 1, MaxWidth: 1 << 24, Locale: gtx.Locale}, "0123456789")
+	ids := map[text.GlyphID]bool{}
+	for g, ok := th.Shaper.NextGlyph(); ok; g, ok = th.Shaper.NextGlyph() {
+		if g.Runes == 1 && g.Advance > 0 {
+			ids[g.ID] = true
+		}
+	}
+	v.digitIDs[k] = ids
+	return ids
+}
+
 // digitWidth is the advance of the widest digit in f at size.
 func (v *viewState) digitWidth(gtx layout.Context, th *theme.Theme, size unit.Sp, f font.Font) int {
-	k := digitKey{f, size, gtx.Metric.PxPerSp}
+	k := digitKey{f, size, gtx.Metric.PxPerSp, gtx.Locale}
 	if w, ok := v.digits[k]; ok {
 		return w
 	}

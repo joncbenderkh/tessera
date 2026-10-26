@@ -17,6 +17,8 @@ import (
 	"gioui.org/io/key"
 	"gioui.org/io/pointer"
 	"gioui.org/layout"
+	"gioui.org/text"
+	"golang.org/x/image/math/fixed"
 	"google.golang.org/protobuf/proto"
 
 	"github.com/joncbenderkh/tessera/internal/config"
@@ -213,7 +215,7 @@ func TestTabularDigits(t *testing.T) {
 	}
 	// The test fonts' digits are equal already, so widen the cell to
 	// see each digit take one.
-	v.digits[digitKey{theme.Body, theme.TextValue, gtx.Metric.PxPerSp}] = 50
+	v.digits[digitKey{theme.Body, theme.TextValue, gtx.Metric.PxPerSp, gtx.Locale}] = 50
 	dot := recordLabel(gtx, testTheme, ".", theme.TextValue, testTheme.Fg, theme.Body).dims.Size.X
 	if got := width("11.1"); got != 3*50+dot {
 		t.Errorf("11.1 is %d wide, want three 50 px cells and a %d px point", got, dot)
@@ -710,6 +712,28 @@ func TestSparkCaptionsShare(t *testing.T) {
 	}
 }
 
+// Cells widen digits where the shaper put them: a right-to-left run
+// keeps its glyphs right to left, and what follows moves over.
+func TestTabularCellsKeepOrder(t *testing.T) {
+	const letter, digit = 1, 2
+	// "אב12" as shaped: the Hebrew run, its first letter rightmost, then
+	// the digits.
+	glyphs := []text.Glyph{
+		{ID: letter, X: fixed.I(15), Advance: fixed.I(15)},
+		{ID: letter, X: fixed.I(0), Advance: fixed.I(15)},
+		{ID: digit, X: fixed.I(30), Advance: fixed.I(10)},
+		{ID: digit, X: fixed.I(40), Advance: fixed.I(10)},
+	}
+	left, width := inCells(glyphs, map[text.GlyphID]bool{digit: true}, fixed.I(20))
+	var got []int
+	for _, g := range glyphs {
+		got = append(got, g.X.Round())
+	}
+	if want := []int{15, 0, 35, 55}; !slices.Equal(got, want) || left != 0 || width != fixed.I(70) {
+		t.Errorf("glyphs at %v, left %v, width %v; want %v, 0, 70", got, left.Round(), width.Round(), want)
+	}
+}
+
 // A value too wide in cells falls back to a label of the whole value,
 // which is cut off with an ellipsis only if it does not fit as plain
 // text either, and which a screen reader reads whole.
@@ -718,11 +742,46 @@ func TestTabularFallback(t *testing.T) {
 	var v viewState
 	gtx := loose(&r, image.Pt(60, 100))
 	v.Layout(gtx, testTheme, &tesserav1.View{})
-	v.digits[digitKey{theme.Body, theme.TextStat, gtx.Metric.PxPerSp}] = 18 // wider cells than the digits
+	v.digits[digitKey{theme.Body, theme.TextStat, gtx.Metric.PxPerSp, gtx.Locale}] = 18 // wider cells than the digits
 	d := v.tabular(gtx, testTheme, "11111111", theme.TextStat, testTheme.Fg, theme.Body)
 	r.Frame(gtx.Ops)
 	if !hasLabel(&r, "11111111") || d.Size.X > 60 {
 		t.Errorf("fallback %v wide, labelled whole %t", d.Size, hasLabel(&r, "11111111"))
+	}
+}
+
+// A mark on a digit moves with the digit as it is centred in its cell.
+func TestTabularCellsCarryMarks(t *testing.T) {
+	const digit, mark = 2, 3
+	// "1́2" as shaped: the mark sits at the end of the 1, with no advance.
+	glyphs := []text.Glyph{
+		{ID: digit, X: fixed.I(0), Advance: fixed.I(10)},
+		{ID: mark, X: fixed.I(10)},
+		{ID: digit, X: fixed.I(10), Advance: fixed.I(10)},
+	}
+	inCells(glyphs, map[text.GlyphID]bool{digit: true}, fixed.I(20))
+	var got []int
+	for _, g := range glyphs {
+		got = append(got, g.X.Round())
+	}
+	if want := []int{5, 15, 25}; !slices.Equal(got, want) {
+		t.Errorf("glyphs at %v, want %v", got, want)
+	}
+}
+
+// A value cut at the shaping limit ends in an ellipsis, even when what
+// is left of it draws nothing.
+func TestTabularCutShows(t *testing.T) {
+	var r input.Router
+	var v viewState
+	gtx := loose(&r, image.Pt(300, 100))
+	v.Layout(gtx, testTheme, &tesserav1.View{})
+	// Zero-width spaces, three bytes each, over the limit before the 42.
+	blank := strings.Repeat("\u200b", maxTabular/3+1)
+	v.tabular(gtx, testTheme, blank+"42", theme.TextStat, testTheme.Fg, theme.Body)
+	r.Frame(gtx.Ops)
+	if !hasLabel(&r, blank[:maxTabular/3*3]+"…") {
+		t.Error("a value cut at the limit does not end in an ellipsis")
 	}
 }
 
