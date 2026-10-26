@@ -7,6 +7,7 @@ import (
 	"image"
 	"image/color"
 	"math"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -300,12 +301,37 @@ const sparkHeight unit.Dp = 39
 // sparkPoints maps samples onto a w by h chart: x evenly spaced, y from
 // lo at the bottom to hi at the top, clamped. A non-finite sample ends
 // a run; each run is a separate line. An empty range draws the line at
-// mid-height, as does one too wide for a float64.
+// mid-height, as does one too wide for a float64. With more than two
+// samples a pixel column, each column of a run keeps only its highest
+// and lowest point, in order: the line looks the same, and costs what
+// the width does rather than what the samples do.
 func sparkPoints(samples []float64, lo, hi float64, w, h float32) [][]f32.Point {
+	thin := float32(len(samples)) > 2*w
+	type extreme struct {
+		p f32.Point
+		i int
+	}
 	var runs [][]f32.Point
 	var run []f32.Point
+	col := -1 // the column being thinned
+	var top, bottom extreme
+	flush := func() {
+		if col < 0 {
+			return
+		}
+		first, second := top, bottom
+		if bottom.i < top.i {
+			first, second = bottom, top
+		}
+		run = append(run, first.p)
+		if second.i != first.i {
+			run = append(run, second.p)
+		}
+		col = -1
+	}
 	for i, s := range samples {
 		if !finite(s) {
+			flush()
 			if len(run) > 0 {
 				runs, run = append(runs, run), nil
 			}
@@ -320,8 +346,20 @@ func sparkPoints(samples []float64, lo, hi float64, w, h float32) [][]f32.Point 
 			f := (math.Min(math.Max(s, lo), hi) - lo) / (hi - lo)
 			y = h * float32(1-f)
 		}
-		run = append(run, f32.Pt(x, y))
+		p := extreme{f32.Pt(x, y), i}
+		switch {
+		case !thin:
+			run = append(run, p.p)
+		case int(x) != col:
+			flush()
+			col, top, bottom = int(x), p, p
+		case y < top.p.Y:
+			top = p
+		case y > bottom.p.Y:
+			bottom = p
+		}
 	}
+	flush()
 	if len(run) > 0 {
 		runs = append(runs, run)
 	}
@@ -433,9 +471,11 @@ func (v *viewState) sparkline(gtx layout.Context, th *theme.Theme, s *tesserav1.
 func describeSpark(s *tesserav1.Sparkline) string {
 	var latest string
 	n := 0
-	for _, x := range s.GetSamples() {
+	for _, x := range slices.Backward(s.GetSamples()) {
 		if finite(x) {
-			latest = formatNumber(x)
+			if n == 0 {
+				latest = formatNumber(x)
+			}
 			n++
 		}
 	}

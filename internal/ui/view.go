@@ -41,11 +41,13 @@ type viewState struct {
 	digits   map[digitKey]int                   // the widest digit's advance, by face and size
 	digitIDs map[digitKey]map[text.GlyphID]bool // the digits' glyphs, by face and size
 
-	// For the view being drawn.
-	owners map[string]any // each widget id and action_id, to its first owner
-	keys   map[*tesserav1.Widget]string
-	used   map[string]bool // the lists and rows drawn
-	events []*tesserav1.HandleEventRequest
+	// For the view being drawn. A view is never changed once published,
+	// so owners and keys are built once per view, not every frame.
+	indexed *tesserav1.View
+	owners  map[string]any // each widget id and action_id, to its first owner
+	keys    map[*tesserav1.Widget]string
+	used    map[string]bool // the lists and rows drawn
+	events  []*tesserav1.HandleEventRequest
 }
 
 type digitKey struct {
@@ -65,11 +67,14 @@ func (v *viewState) Layout(gtx layout.Context, th *theme.Theme, view *tesserav1.
 		v.digits = map[digitKey]int{}
 		v.digitIDs = map[digitKey]map[text.GlyphID]bool{}
 	}
-	v.owners = map[string]any{}
-	v.keys = map[*tesserav1.Widget]string{}
+	if v.owners == nil || view != v.indexed {
+		v.owners = map[string]any{}
+		v.keys = map[*tesserav1.Widget]string{}
+		v.index(view.GetBody(), new(counts))
+		v.indexed = view
+	}
 	v.used = map[string]bool{}
 	v.events = nil
-	v.index(view.GetBody(), new(counts))
 
 	defer clip.Rect{Max: gtx.Constraints.Max}.Push(gtx.Ops).Pop()
 	gtx.Constraints.Min = image.Point{}
@@ -500,15 +505,23 @@ func (v *viewState) stack(gtx layout.Context, th *theme.Theme, s *tesserav1.Stac
 	crossMax := cross(gtx.Constraints.Max)
 
 	parts := make([]recorded, len(items))
+	shown := make([]bool, len(items)) // false for an item with no room
 	used, weights := 0, 0
 	for i, it := range items {
 		if w := it.GetWeight(); w > 0 {
 			weights += int(w)
 			continue
 		}
+		// It has what the items and gaps before it left.
+		room := main(gtx.Constraints.Max) - used - gap*i
+		if room <= 0 {
+			v.hidden(it.GetWidget())
+			continue
+		}
 		cgtx := gtx
-		cgtx.Constraints = layout.Constraints{Max: pt(max(avail-used, 0), crossMax)}
+		cgtx.Constraints = layout.Constraints{Max: pt(room, crossMax)}
 		parts[i] = record(cgtx, func(gtx layout.Context) layout.Dimensions { return v.widget(gtx, th, it.GetWidget()) })
+		shown[i] = true
 		used += main(parts[i].dims.Size)
 	}
 	rest, left := max(avail-used, 0), weights
@@ -519,6 +532,10 @@ func (v *viewState) stack(gtx layout.Context, th *theme.Theme, s *tesserav1.Stac
 		}
 		share := rest * w / max(left, 1)
 		rest, left = rest-share, left-w
+		if share == 0 {
+			v.hidden(it.GetWidget())
+			continue
+		}
 		cgtx := gtx
 		cgtx.Constraints = layout.Constraints{Min: pt(share, 0), Max: pt(share, crossMax)}
 		var child layout.Dimensions
@@ -529,6 +546,7 @@ func (v *viewState) stack(gtx layout.Context, th *theme.Theme, s *tesserav1.Stac
 		// It takes its whole share along the axis, and its own extent
 		// across it.
 		parts[i].dims.Size = pt(share, cross(child.Size))
+		shown[i] = true
 	}
 
 	size, at := 0, 0
@@ -536,11 +554,17 @@ func (v *viewState) stack(gtx layout.Context, th *theme.Theme, s *tesserav1.Stac
 		size = max(size, cross(p.dims.Size))
 	}
 	var dividers []int
+	first := true
 	for i, p := range parts {
-		if i > 0 {
+		// An item with no room takes no gap or divider either.
+		if !shown[i] {
+			continue
+		}
+		if !first {
 			dividers = append(dividers, at+(gap-line)/2)
 			at += gap
 		}
+		first = false
 		// A child that draws past its share, as a gauge at its least
 		// size can, is cut off there rather than over its neighbours.
 		cl := clip.Rect{Min: pt(at, 0), Max: pt(at+main(p.dims.Size), size)}.Push(gtx.Ops)
@@ -553,7 +577,21 @@ func (v *viewState) stack(gtx layout.Context, th *theme.Theme, s *tesserav1.Stac
 			fillRect(gtx, image.Rectangle{Min: pt(d, 0), Max: pt(d+line, size)}, th.Border)
 		}
 	}
-	return layout.Dimensions{Size: pt(at, size)}
+	return layout.Dimensions{Size: pt(min(at, main(gtx.Constraints.Max)), min(size, crossMax))}
+}
+
+// hidden keeps the state of a widget with no room to draw in, without
+// drawing it: its tables and lists keep their scroll positions and
+// report that none of their rows is visible.
+func (v *viewState) hidden(w *tesserav1.Widget) {
+	switch k := w.GetKind().(type) {
+	case *tesserav1.Widget_Table, *tesserav1.Widget_List:
+		v.report(w, v.scrollList(w).Position.First, 0)
+	case *tesserav1.Widget_Stack:
+		for _, it := range k.Stack.GetItems() {
+			v.hidden(it.GetWidget())
+		}
+	}
 }
 
 // skeleton is a loading widget's placeholder, in its shape: bars for

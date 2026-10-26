@@ -175,6 +175,30 @@ func TestReadGauge(t *testing.T) {
 	}
 }
 
+// Many samples a pixel column keep each column's highest and lowest
+// point, in order, and still break at a gap.
+func TestSparkPointsThin(t *testing.T) {
+	samples := make([]float64, 100001)
+	for i := range samples {
+		samples[i] = float64(i % 2) // 0, 1, 0, 1, ...
+	}
+	samples[50000] = math.NaN()
+	runs := sparkPoints(samples, 0, 1, 100, 40)
+	if len(runs) != 2 {
+		t.Fatalf("%d runs, want 2", len(runs))
+	}
+	for _, run := range runs {
+		if len(run) > 2*102 {
+			t.Errorf("%d points for 100 px", len(run))
+		}
+		for i := 0; i+1 < len(run); i += 2 {
+			if run[i].Y == run[i+1].Y {
+				t.Fatalf("column at x %v kept %v and %v, want its lowest and highest", run[i].X, run[i].Y, run[i+1].Y)
+			}
+		}
+	}
+}
+
 func TestSparkPoints(t *testing.T) {
 	runs := sparkPoints([]float64{0, 10, math.NaN(), 5, math.Inf(1), 20}, 0, 10, 100, 40)
 	if len(runs) != 3 || len(runs[0]) != 2 || len(runs[1]) != 1 || len(runs[2]) != 1 {
@@ -452,6 +476,31 @@ func TestEmptyListReportsRange(t *testing.T) {
 	}
 }
 
+// A table or list with no room for rows reports that none is visible.
+func TestNoRoomReportsNothingVisible(t *testing.T) {
+	table := &tesserav1.Widget{Id: "procs", Kind: &tesserav1.Widget_Table{Table: &tesserav1.Table{
+		Columns: []*tesserav1.TableColumn{{Title: "Name"}},
+		Rows:    []*tesserav1.TableRow{{Cells: []string{"a"}}},
+	}}}
+	for name, body := range map[string]*tesserav1.Widget{
+		"list":  listOf("events", &tesserav1.ListItem{Title: "a"}),
+		"table": table,
+	} {
+		// A line of text takes the little height there is; the weighted
+		// widget gets none.
+		stack := &tesserav1.Widget{Kind: &tesserav1.Widget_Stack{Stack: &tesserav1.Stack{Items: []*tesserav1.StackItem{
+			{Widget: &tesserav1.Widget{Kind: &tesserav1.Widget_Text{Text: &tesserav1.Text{Value: "head"}}}},
+			{Widget: body, Weight: 1},
+		}}}}
+		var r input.Router
+		var v viewState
+		got := scrolls(viewFrame(&r, &v, &tesserav1.View{Body: stack}, image.Pt(300, 10)))
+		if len(got) != 1 || got[0].GetVisibleCount() != 0 {
+			t.Errorf("%s with no room sent %v", name, got)
+		}
+	}
+}
+
 // A value too wide for its space is cut off as a label is, not drawn
 // with digits missing.
 func TestTabularOverflow(t *testing.T) {
@@ -712,6 +761,25 @@ func TestSparkCaptionsShare(t *testing.T) {
 	}
 }
 
+// A view is indexed once, not every frame it is drawn.
+func TestViewIndexedOnce(t *testing.T) {
+	var r input.Router
+	var v viewState
+	gtx := loose(&r, image.Pt(300, 200))
+	view := &tesserav1.View{}
+	v.Layout(gtx, testTheme, view)
+	marker := &tesserav1.Widget{}
+	v.keys[marker] = "marker"
+	v.Layout(gtx, testTheme, view)
+	if _, ok := v.keys[marker]; !ok {
+		t.Error("the same view was indexed again")
+	}
+	v.Layout(gtx, testTheme, &tesserav1.View{})
+	if _, ok := v.keys[marker]; ok {
+		t.Error("a new view kept the old index")
+	}
+}
+
 // Cells widen digits where the shaper put them: a right-to-left run
 // keeps its glyphs right to left, and what follows moves over.
 func TestTabularCellsKeepOrder(t *testing.T) {
@@ -766,6 +834,37 @@ func TestTabularCellsCarryMarks(t *testing.T) {
 	}
 	if want := []int{5, 15, 25}; !slices.Equal(got, want) {
 		t.Errorf("glyphs at %v, want %v", got, want)
+	}
+}
+
+// A stack draws only the items it has room for, however many it has.
+func TestStackSkipsItemsWithNoRoom(t *testing.T) {
+	var items []*tesserav1.StackItem
+	for i := range 50000 {
+		items = append(items, &tesserav1.StackItem{Widget: &tesserav1.Widget{Kind: &tesserav1.Widget_Text{Text: &tesserav1.Text{Value: fmt.Sprint("line ", i)}}}})
+	}
+	items = append(items, &tesserav1.StackItem{Widget: listOf("events", &tesserav1.ListItem{Title: "a"})})
+	view := &tesserav1.View{Body: &tesserav1.Widget{Kind: &tesserav1.Widget_Stack{Stack: &tesserav1.Stack{Items: items, Gap: tesserav1.Spacing_SPACING_NONE}}}}
+	var r input.Router
+	var v viewState
+	got := scrolls(viewFrame(&r, &v, view, image.Pt(300, 100)))
+	if !hasLabel(&r, "line 0") || hasLabel(&r, "line 49999") {
+		t.Errorf("first line drawn %t, last line drawn %t", hasLabel(&r, "line 0"), hasLabel(&r, "line 49999"))
+	}
+	if len(got) != 1 || got[0].GetVisibleCount() != 0 || v.lists["id:events"] == nil {
+		t.Errorf("the list out of room sent %v, kept state %t", got, v.lists["id:events"] != nil)
+	}
+	// The gaps of items out of room do not take the room of the first.
+	gapped := &tesserav1.View{Body: &tesserav1.Widget{Kind: &tesserav1.Widget_Stack{Stack: &tesserav1.Stack{Items: items}}}}
+	viewFrame(&r, &v, gapped, image.Pt(300, 100))
+	if !hasLabel(&r, "line 0") {
+		t.Error("a stack whose gaps outgrow it drew nothing")
+	}
+	// Items out of room add no gaps, and the stack stays within its
+	// space.
+	gtx := context(&r, image.Pt(300, 100), time.Now())
+	if d := v.widget(gtx, testTheme, gapped.GetBody()); d.Size.Y > 100 {
+		t.Errorf("the stack is %v tall in 100 px", d.Size.Y)
 	}
 }
 
