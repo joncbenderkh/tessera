@@ -222,7 +222,8 @@ func (testPlugin) GRPCClient(context.Context, *plugin.GRPCBroker, *grpc.ClientCo
 //   - hangs-event: HandleEvent never answers.
 //   - unavailable-event: HandleEvent fails with UNAVAILABLE.
 //   - slow-events: HandleEvent takes 150 ms, then reports the event on
-//     stderr.
+//     stderr; activating "gated" also waits for a file named gate in
+//     the plugins directory.
 //   - rejects-later: rejects the settings of each Configure after the
 //     first.
 //   - hangs-configure-later: each Configure after the first never

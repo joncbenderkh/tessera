@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -188,6 +189,9 @@ func (s *server) HandleEvent(ctx context.Context, req *tesserav1.HandleEventRequ
 		return nil, status.Error(codes.Unavailable, "source down")
 	case "slow-events":
 		time.Sleep(150 * time.Millisecond)
+		if id == "gated" {
+			waitForGate()
+		}
 		if sc := req.GetScroll(); sc != nil {
 			fmt.Fprintf(os.Stderr, "scroll %s %d\n", sc.GetWidgetId(), sc.GetFirstVisible())
 		} else {
@@ -205,4 +209,19 @@ func (s *server) HandleEvent(ctx context.Context, req *tesserav1.HandleEventRequ
 		s.events <- id
 	}
 	return &tesserav1.HandleEventResponse{}, nil
+}
+
+// waitForGate returns once a file named gate sits beside the plugin, or
+// after ten seconds.
+func waitForGate() {
+	self, err := os.Executable()
+	if err != nil {
+		return
+	}
+	gate := filepath.Join(filepath.Dir(self), "gate")
+	for deadline := time.Now().Add(10 * time.Second); time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
+		if _, err := os.Stat(gate); err == nil {
+			return
+		}
+	}
 }

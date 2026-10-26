@@ -366,10 +366,12 @@ func scrollTo(widget string, first uint32) *tesserav1.HandleEventRequest {
 func TestScrollEventsCoalesce(t *testing.T) {
 	dir := install(t, "slow-events")
 	logger, _ := newLogger()
-	m := StartWith(panels("slow-events"), dir, logger, fast)
+	opts := fast
+	opts.CallTimeout = 15 * time.Second // the plugin waits for the gate
+	m := StartWith(panels("slow-events"), dir, logger, opts)
 	defer m.Close()
 	waitFor(t, m, "p0", "live", is(Live))
-	if err := m.HandleEvent("p0", activate("a")); err != nil {
+	if err := m.HandleEvent("p0", activate("gated")); err != nil {
 		t.Fatal(err)
 	}
 	time.Sleep(50 * time.Millisecond) // the plugin is busy with it
@@ -381,7 +383,10 @@ func TestScrollEventsCoalesce(t *testing.T) {
 	if err := m.HandleEvent("p0", activate("b")); err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"activate a", fmt.Sprintf("scroll procs %d", 2*maxEvents), "activate b"}
+	if err := os.WriteFile(filepath.Join(dir, "gate"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"activate gated", fmt.Sprintf("scroll procs %d", 2*maxEvents), "activate b"}
 	deadline := time.Now().Add(5 * time.Second)
 	for {
 		var got []string
