@@ -295,19 +295,25 @@ How the host draws a view:
   tables and lists, which scroll within the space they get. A table or
   list with an `id` keeps its scroll position across views and sends a
   `ScrollEvent` whenever its visible range changes, including the
-  first time a plugin's view draws it and when it is empty. A scroll
+  first time a plugin's view draws it and when it is empty. One with
+  no `id`, or one whose `id` an earlier widget took, sends none and
+  keeps its position by its place among the others like it. A scroll
   event still waiting for a busy plugin is replaced by the newer range
   for the same widget, so the plugin gets the latest one; one the queue
-  has no room for is sent again shortly. An activation that does not
-  reach the plugin gives the highlight back to the row or item before
-  it; one the queue has no room for also shows a "Panel busy" toast.
+  has no room for is sent again shortly. An activation the host cannot
+  queue gives the highlight back to the row or item before it; one the
+  queue has no room for also shows a "Panel busy" toast. One queued
+  that then fails at the plugin keeps its highlight.
 - A loading widget is a static placeholder in its shape. A loading
   `Stack` keeps its layout and draws each widget in it as a
   placeholder.
 - A gauge whose `max - min` is too large for a double is drawn as
-  missing, and a sparkline whose range is draws its line at mid-height.
-- A stat narrower than 200 dp uses a smaller value size. A stat's or
-  gauge's caption with no tone is muted.
+  missing, and a sparkline whose range is too large draws its line at
+  mid-height.
+- A stat narrower than 200 dp uses a smaller value size. Stats in a
+  row should have equal weights: each item without a weight gets only
+  what the items before it left, so a row of them can mix sizes. A
+  stat's or gauge's caption with no tone is muted.
 - Digits in stat and gauge values and in end-aligned table cells are
   equally wide, so a changing value keeps its width.
 - The row or item last activated stays highlighted, by its

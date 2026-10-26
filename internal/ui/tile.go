@@ -195,7 +195,8 @@ func (t *tile) Layout(gtx layout.Context, th *theme.Theme, s pluginhost.PanelSta
 	case s.View != nil:
 		events = t.content.Layout(body, th, s.View)
 	case s.ViewErr != nil:
-		// A view over a limit: none is shown until a restart.
+		// A view over a limit, shown no more until a restart, or a polled
+		// panel's failed Render before its first view, until one works.
 		wrapped(th, s.ViewErr.Error(), theme.TextMin, th.Muted, theme.Mono).Layout(body)
 	}
 	st.Pop()
