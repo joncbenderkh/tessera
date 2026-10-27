@@ -36,6 +36,15 @@ const (
 // depth 1, and each StackItem.widget adds 1.
 const maxViewDepth = 16
 
+// maxViewWidgets is how many widgets a view may hold, View.body and
+// every StackItem.widget below it: the host lays each one out every
+// frame, even one that takes no space.
+const maxViewWidgets = 1024
+
+// maxTableColumns is how many columns a table may have: the host lays
+// each one out every frame, even one too narrow to show.
+const maxTableColumns = 64
+
 // minPoll and maxPoll clamp the poll interval a plugin asks for.
 const (
 	minPoll = 250 * time.Millisecond
@@ -411,9 +420,10 @@ func refused(name string, c *viewCodec) error {
 }
 
 // viewCodec is gRPC's proto codec for one Watch or Render call, which
-// refuses a response over maxViewBytes or a view nested deeper than
-// maxViewDepth, and records that it did: gRPC's errors for these read
-// like ones a plugin could send. It checks each response as it is
+// refuses a response over maxViewBytes, or a view nested deeper than
+// maxViewDepth, holding more than maxViewWidgets, or with a table of
+// more than maxTableColumns, and records that it did: gRPC's errors
+// for these read like ones a plugin could send. It checks each response as it is
 // decoded, so none escapes the check by being replaced unread.
 type viewCodec struct {
 	encoding.CodecV2
@@ -439,8 +449,15 @@ func (c *viewCodec) Unmarshal(data mem.BufferSlice, v any) error {
 		return c.fail(false, err)
 	}
 	if r, ok := v.(interface{ GetView() *tesserav1.View }); ok {
-		if d := widgetDepth(r.GetView().GetBody()); d > maxViewDepth {
+		d, n, cols := measure(r.GetView().GetBody())
+		if d > maxViewDepth {
 			return c.fail(true, fmt.Errorf("view nested %d deep, over the limit of %d", d, maxViewDepth))
+		}
+		if n > maxViewWidgets {
+			return c.fail(true, fmt.Errorf("view of %d widgets, over the limit of %d", n, maxViewWidgets))
+		}
+		if cols > maxTableColumns {
+			return c.fail(true, fmt.Errorf("view with a table of %d columns, over the limit of %d", cols, maxTableColumns))
 		}
 	}
 	return nil
@@ -470,15 +487,18 @@ func (c *viewCodec) refusal() error {
 	return c.refused
 }
 
-func widgetDepth(w *tesserav1.Widget) int {
+// measure returns how deeply w's widgets nest, how many there are, and
+// the most columns any of its tables has.
+func measure(w *tesserav1.Widget) (depth, count, columns int) {
 	if w == nil {
-		return 0
+		return 0, 0, 0
 	}
-	deepest := 0
+	columns = len(w.GetTable().GetColumns())
 	for _, item := range w.GetStack().GetItems() {
-		deepest = max(deepest, widgetDepth(item.GetWidget()))
+		d, n, c := measure(item.GetWidget())
+		depth, count, columns = max(depth, d), count+n, max(columns, c)
 	}
-	return 1 + deepest
+	return 1 + depth, 1 + count, columns
 }
 
 // stream reads a Watch stream in the background and keeps only its

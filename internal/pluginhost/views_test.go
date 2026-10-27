@@ -353,6 +353,41 @@ func TestViewCodecTellsRefusedFromMalformed(t *testing.T) {
 	if c.malformed() != nil || c.refusal() == nil {
 		t.Errorf("over the depth limit: got malformed %v, refusal %v", c.malformed(), c.refusal())
 	}
+	for _, n := range []int{maxViewWidgets, maxViewWidgets + 1} {
+		stack := &tesserav1.Stack{}
+		for range n - 1 {
+			stack.Items = append(stack.Items, &tesserav1.StackItem{Widget: &tesserav1.Widget{}})
+		}
+		wide, err := proto.Marshal(&tesserav1.WatchResponse{Content: &tesserav1.WatchResponse_View{View: &tesserav1.View{
+			Body: &tesserav1.Widget{Kind: &tesserav1.Widget_Stack{Stack: stack}},
+		}}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		c = newViewCodec()
+		c.Unmarshal(mem.BufferSlice{mem.SliceBuffer(wide)}, &tesserav1.WatchResponse{})
+		if over := n > maxViewWidgets; c.malformed() != nil || (c.refusal() != nil) != over {
+			t.Errorf("%d widgets: got malformed %v, refusal %v", n, c.malformed(), c.refusal())
+		}
+	}
+	for _, n := range []int{maxTableColumns, maxTableColumns + 1} {
+		table := &tesserav1.Table{Columns: make([]*tesserav1.TableColumn, n)}
+		for i := range table.Columns {
+			table.Columns[i] = &tesserav1.TableColumn{}
+		}
+		inner := &tesserav1.Widget{Kind: &tesserav1.Widget_Table{Table: table}}
+		wide, err := proto.Marshal(&tesserav1.WatchResponse{Content: &tesserav1.WatchResponse_View{View: &tesserav1.View{
+			Body: &tesserav1.Widget{Kind: &tesserav1.Widget_Stack{Stack: &tesserav1.Stack{Items: []*tesserav1.StackItem{{Widget: inner}}}}},
+		}}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		c = newViewCodec()
+		c.Unmarshal(mem.BufferSlice{mem.SliceBuffer(wide)}, &tesserav1.WatchResponse{})
+		if over := n > maxTableColumns; c.malformed() != nil || (c.refusal() != nil) != over {
+			t.Errorf("a table of %d columns: got malformed %v, refusal %v", n, c.malformed(), c.refusal())
+		}
+	}
 }
 
 func scrollTo(widget string, first uint32) *tesserav1.HandleEventRequest {
