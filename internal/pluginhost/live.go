@@ -28,22 +28,22 @@ import (
 // it to recvCap, to bound what it reads at all: gRPC's error for a
 // response over that is like one the plugin sent.
 const (
-	maxViewBytes = 4 << 20
+	maxViewBytes = tesserav1.MaxViewBytes
 	recvCap      = 4 * maxViewBytes
 )
 
 // maxViewDepth is how deeply a view's widgets may nest: View.body is
 // depth 1, and each StackItem.widget adds 1.
-const maxViewDepth = 16
+const maxViewDepth = tesserav1.MaxViewDepth
 
 // maxViewWidgets is how many widgets a view may hold, View.body and
 // every StackItem.widget below it: the host lays each one out every
 // frame, even one that takes no space.
-const maxViewWidgets = 1024
+const maxViewWidgets = tesserav1.MaxViewWidgets
 
 // maxTableColumns is how many columns a table may have: the host lays
 // each one out every frame, even one too narrow to show.
-const maxTableColumns = 64
+const maxTableColumns = tesserav1.MaxTableColumns
 
 // minPoll and maxPoll clamp the poll interval a plugin asks for.
 const (
@@ -449,7 +449,7 @@ func (c *viewCodec) Unmarshal(data mem.BufferSlice, v any) error {
 		return c.fail(false, err)
 	}
 	if r, ok := v.(interface{ GetView() *tesserav1.View }); ok {
-		d, n, cols := measure(r.GetView().GetBody())
+		d, n, cols := tesserav1.Measure(r.GetView().GetBody())
 		if d > maxViewDepth {
 			return c.fail(true, fmt.Errorf("view nested %d deep, over the limit of %d", d, maxViewDepth))
 		}
@@ -485,20 +485,6 @@ func (c *viewCodec) refusal() error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.refused
-}
-
-// measure returns how deeply w's widgets nest, how many there are, and
-// the most columns any of its tables has.
-func measure(w *tesserav1.Widget) (depth, count, columns int) {
-	if w == nil {
-		return 0, 0, 0
-	}
-	columns = len(w.GetTable().GetColumns())
-	for _, item := range w.GetStack().GetItems() {
-		d, n, c := measure(item.GetWidget())
-		depth, count, columns = max(depth, d), count+n, max(columns, c)
-	}
-	return 1 + depth, 1 + count, columns
 }
 
 // stream reads a Watch stream in the background and keeps only its
