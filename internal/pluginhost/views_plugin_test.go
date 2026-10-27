@@ -188,6 +188,7 @@ func (s *server) HandleEvent(ctx context.Context, req *tesserav1.HandleEventRequ
 	case "unavailable-event":
 		return nil, status.Error(codes.Unavailable, "source down")
 	case "slow-events":
+		fmt.Fprintln(os.Stderr, "handling an event")
 		time.Sleep(150 * time.Millisecond)
 		if id == "gated" {
 			waitForGate()
