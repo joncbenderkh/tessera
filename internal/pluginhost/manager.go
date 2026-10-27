@@ -176,7 +176,10 @@ type panel struct {
 	logs    *ring
 	restart chan struct{}                      // a manual Restart; buffered, coalesced
 	events  chan *tesserav1.HandleEventRequest // queued by HandleEvent while Live or Stale
-	told    bool                               // Logs already name this failure; supervisor only
+	// scrolls is the latest range for each scroll event still queued,
+	// by widget id, which is sent in its place; under mu.
+	scrolls map[string]*tesserav1.HandleEventRequest
+	told    bool // Logs already name this failure; supervisor only
 
 	outMu  sync.Mutex
 	outGen int // bumped by fence as each launch ends
@@ -286,6 +289,7 @@ func (m *Manager) newPanel(p config.Panel) *panel {
 		logs:       newRing(logLines),
 		restart:    make(chan struct{}, 1),
 		events:     make(chan *tesserav1.HandleEventRequest, maxEvents),
+		scrolls:    map[string]*tesserav1.HandleEventRequest{},
 	}
 }
 
@@ -319,6 +323,7 @@ func (m *Manager) supervise(pn *panel) {
 			for len(pn.events) > 0 { // meant for the last launch's view
 				<-pn.events
 			}
+			clear(pn.scrolls)
 			s.State, s.Info, s.Err, s.ExitStatus = Starting, nil, nil, ""
 			s.Failures, s.RestartAt = failures, time.Time{}
 			s.View, s.Updated, s.Polled, s.ViewErr = nil, time.Time{}, false, nil
@@ -559,7 +564,8 @@ var ErrClosed = errors.New("the plugin host is closed")
 var ErrNotLive = errors.New("the panel is not live")
 
 // ErrBusy is HandleEvent's answer when maxEvents events are already
-// waiting for the panel's plugin.
+// waiting for the panel's plugin, unless the event is a scroll of a
+// widget that already has one waiting, which takes that one's place.
 var ErrBusy = errors.New("too many events are waiting for the plugin")
 
 // maxEvents is how many events may wait for a panel's plugin.
@@ -740,9 +746,11 @@ func (m *Manager) Restart(id string) error {
 }
 
 // HandleEvent queues req, a user input event, for panel id's plugin,
-// which gets the panel's events one at a time and in order. Events
-// still waiting when the plugin fails or restarts are dropped: they
-// were meant for its last view.
+// which gets the panel's events one at a time and in order. A scroll
+// event for a widget that already has one waiting replaces that one's
+// range, in its place, so a slow plugin still gets the latest range.
+// Events still waiting when the plugin fails or restarts are dropped:
+// they were meant for its last view.
 func (m *Manager) HandleEvent(id string, req *tesserav1.HandleEventRequest) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -756,14 +764,40 @@ func (m *Manager) HandleEvent(id string, req *tesserav1.HandleEventRequest) erro
 		if pn.State != Live && pn.State != Stale {
 			return ErrNotLive
 		}
+		scroll := req.GetScroll()
+		if scroll != nil {
+			if _, queued := pn.scrolls[scroll.GetWidgetId()]; queued {
+				pn.scrolls[scroll.GetWidgetId()] = req
+				return nil
+			}
+		}
 		select {
 		case pn.events <- req:
+			if scroll != nil {
+				pn.scrolls[scroll.GetWidgetId()] = req
+			}
 			return nil
 		default:
 			return ErrBusy
 		}
 	}
 	return fmt.Errorf("no enabled panel %q", id)
+}
+
+// latest is the event to send for req, just taken from pn's queue: for
+// a scroll, the latest range HandleEvent got for its widget.
+func (m *Manager) latest(pn *panel, req *tesserav1.HandleEventRequest) *tesserav1.HandleEventRequest {
+	s := req.GetScroll()
+	if s == nil {
+		return req
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if last, ok := pn.scrolls[s.GetWidgetId()]; ok {
+		delete(pn.scrolls, s.GetWidgetId())
+		return last
+	}
+	return req
 }
 
 // Logs returns panel id's recent output and lifecycle events, oldest

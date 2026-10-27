@@ -38,7 +38,9 @@ const (
 // Configure again whenever the panel's settings or size change, and
 // HandleEvent when the user interacts with the panel. These later calls
 // run concurrently with the open Watch, so a plugin guards shared state,
-// but the host makes them one at a time and in order. To fill the panel
+// but the host makes them one at a time and in order (a waiting scroll
+// event takes the newest range for its widget, which can then arrive
+// before events queued after it). To fill the panel
 // picker, the host may also launch a plugin, call only Describe, and shut
 // it down.
 type PanelServiceClient interface {
@@ -62,9 +64,9 @@ type PanelServiceClient interface {
 	// that ends without the host cancelling it is a protocol failure,
 	// with two exceptions: a plugin that cannot push returns UNIMPLEMENTED
 	// before its first response, and the host polls Render instead; and a
-	// view over the size or depth limit in docs/protocol.md ends the
-	// stream, and the host shows an error tile without restarting the
-	// plugin.
+	// view over a limit in docs/protocol.md (size, depth, widgets or
+	// table columns) ends the stream, and the host shows an error tile
+	// without restarting the plugin.
 	Watch(ctx context.Context, in *WatchRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[WatchResponse], error)
 	// Render returns the current view. It is the polling fallback for
 	// plugins that do not implement Watch.
@@ -153,7 +155,9 @@ func (c *panelServiceClient) HandleEvent(ctx context.Context, in *HandleEventReq
 // Configure again whenever the panel's settings or size change, and
 // HandleEvent when the user interacts with the panel. These later calls
 // run concurrently with the open Watch, so a plugin guards shared state,
-// but the host makes them one at a time and in order. To fill the panel
+// but the host makes them one at a time and in order (a waiting scroll
+// event takes the newest range for its widget, which can then arrive
+// before events queued after it). To fill the panel
 // picker, the host may also launch a plugin, call only Describe, and shut
 // it down.
 type PanelServiceServer interface {
@@ -177,9 +181,9 @@ type PanelServiceServer interface {
 	// that ends without the host cancelling it is a protocol failure,
 	// with two exceptions: a plugin that cannot push returns UNIMPLEMENTED
 	// before its first response, and the host polls Render instead; and a
-	// view over the size or depth limit in docs/protocol.md ends the
-	// stream, and the host shows an error tile without restarting the
-	// plugin.
+	// view over a limit in docs/protocol.md (size, depth, widgets or
+	// table columns) ends the stream, and the host shows an error tile
+	// without restarting the plugin.
 	Watch(*WatchRequest, grpc.ServerStreamingServer[WatchResponse]) error
 	// Render returns the current view. It is the polling fallback for
 	// plugins that do not implement Watch.

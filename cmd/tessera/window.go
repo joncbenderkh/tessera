@@ -6,9 +6,11 @@ import (
 	"errors"
 	"fmt"
 	"image"
+	"log"
 	"math"
 	"strings"
 	"sync"
+	"time"
 
 	"gioui.org/app"
 	"gioui.org/layout"
@@ -20,6 +22,7 @@ import (
 	"github.com/joncbenderkh/tessera/internal/pluginhost"
 	"github.com/joncbenderkh/tessera/internal/ui"
 	"github.com/joncbenderkh/tessera/internal/ui/theme"
+	tesserav1 "github.com/joncbenderkh/tessera/proto/tessera/v1"
 )
 
 // reload is the latest valid config Watch read since the window last
@@ -196,7 +199,11 @@ func run(window *app.Window, plugins *pluginhost.Manager, cfg config.Config, rel
 			_, actions := grid.Layout(content, th, cfg, states)
 			st.Pop()
 			for _, a := range actions {
-				act(a, plugins, states, &toast, &dialog)
+				if act(a, plugins, states, &grid, &toast, &dialog) {
+					// A scroll range the plugin's queue refused goes
+					// again in a moment.
+					gtx.Execute(op.InvalidateCmd{At: gtx.Now.Add(scrollRetry)})
+				}
 			}
 			// Deferred after the tiles' popovers, which are deferred too, so
 			// the toast and the dialog stay on top of them.
@@ -209,8 +216,47 @@ func run(window *app.Window, plugins *pluginhost.Manager, cfg config.Config, rel
 	}
 }
 
-// act carries out what the user asked for from a tile.
-func act(a ui.Action, plugins *pluginhost.Manager, states []pluginhost.PanelState, toast *ui.Toaster, dialog *ui.Dialog) {
+// outcome is what the host does about an event its plugin did not get.
+type outcome struct {
+	resend   bool   // a scroll range to send again shortly
+	unselect bool   // an activation not to show as done
+	toast    string // what to tell the user
+	logged   error  // what to log
+}
+
+// eventOutcome is the outcome of sending ev, which HandleEvent answered
+// with err. A busy plugin gets a scroll range again soon; an activation
+// it did not get loses its highlight, and the user hears so if the
+// plugin was busy. A panel that is not live is about to get a new view,
+// so only other errors are logged.
+func eventOutcome(ev *tesserav1.HandleEventRequest, err error) outcome {
+	if err == nil {
+		return outcome{}
+	}
+	busy := errors.Is(err, pluginhost.ErrBusy)
+	var o outcome
+	switch {
+	case ev.GetScroll() != nil:
+		o.resend = busy
+	case ev.GetActivate() != nil:
+		o.unselect = true
+		if busy {
+			o.toast = "Panel busy; try again"
+		}
+	}
+	if !busy && !errors.Is(err, pluginhost.ErrNotLive) {
+		o.logged = err
+	}
+	return o
+}
+
+// scrollRetry is how soon a scroll range refused by a busy plugin's
+// queue is sent again.
+const scrollRetry = 100 * time.Millisecond
+
+// act carries out what the user asked for from a tile, and reports
+// whether a frame soon should send a refused scroll range again.
+func act(a ui.Action, plugins *pluginhost.Manager, states []pluginhost.PanelState, grid *ui.Grid, toast *ui.Toaster, dialog *ui.Dialog) bool {
 	switch a.Kind {
 	case ui.ActionConfigure:
 		toast.Show("Configuring panels is not available yet")
@@ -223,6 +269,21 @@ func act(a ui.Action, plugins *pluginhost.Manager, states []pluginhost.PanelStat
 		case err != nil:
 			toast.Show("Not restarted: " + err.Error())
 		}
+	case ui.ActionEvent:
+		o := eventOutcome(a.Event, plugins.HandleEvent(a.Panel, a.Event))
+		if o.resend {
+			grid.Unsent(a.Panel, a.Event.GetScroll().GetWidgetId())
+		}
+		if o.unselect {
+			grid.Unselect(a.Panel, a.Event)
+		}
+		if o.toast != "" {
+			toast.Show(o.toast)
+		}
+		if o.logged != nil {
+			log.Printf("panel %s: event not sent: %v", a.Panel, o.logged)
+		}
+		return o.resend
 	case ui.ActionLogs:
 		plugin := a.Panel
 		for _, s := range states {
@@ -232,6 +293,7 @@ func act(a ui.Action, plugins *pluginhost.Manager, states []pluginhost.PanelStat
 		}
 		dialog.Open("Logs: "+a.Panel, "Plugin "+plugin+", newest last", strings.Join(plugins.Logs(a.Panel), "\n"))
 	}
+	return false
 }
 
 // themeSaver writes the theme to the config file in the background. It

@@ -4,8 +4,10 @@ package pluginhost
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -350,5 +352,188 @@ func TestViewCodecTellsRefusedFromMalformed(t *testing.T) {
 	c.Unmarshal(mem.BufferSlice{mem.SliceBuffer(deep)}, &tesserav1.WatchResponse{})
 	if c.malformed() != nil || c.refusal() == nil {
 		t.Errorf("over the depth limit: got malformed %v, refusal %v", c.malformed(), c.refusal())
+	}
+	for _, n := range []int{maxViewWidgets, maxViewWidgets + 1} {
+		stack := &tesserav1.Stack{}
+		for range n - 1 {
+			stack.Items = append(stack.Items, &tesserav1.StackItem{Widget: &tesserav1.Widget{}})
+		}
+		wide, err := proto.Marshal(&tesserav1.WatchResponse{Content: &tesserav1.WatchResponse_View{View: &tesserav1.View{
+			Body: &tesserav1.Widget{Kind: &tesserav1.Widget_Stack{Stack: stack}},
+		}}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		c = newViewCodec()
+		c.Unmarshal(mem.BufferSlice{mem.SliceBuffer(wide)}, &tesserav1.WatchResponse{})
+		if over := n > maxViewWidgets; c.malformed() != nil || (c.refusal() != nil) != over {
+			t.Errorf("%d widgets: got malformed %v, refusal %v", n, c.malformed(), c.refusal())
+		}
+	}
+	for _, n := range []int{maxTableColumns, maxTableColumns + 1} {
+		table := &tesserav1.Table{Columns: make([]*tesserav1.TableColumn, n)}
+		for i := range table.Columns {
+			table.Columns[i] = &tesserav1.TableColumn{}
+		}
+		inner := &tesserav1.Widget{Kind: &tesserav1.Widget_Table{Table: table}}
+		wide, err := proto.Marshal(&tesserav1.WatchResponse{Content: &tesserav1.WatchResponse_View{View: &tesserav1.View{
+			Body: &tesserav1.Widget{Kind: &tesserav1.Widget_Stack{Stack: &tesserav1.Stack{Items: []*tesserav1.StackItem{{Widget: inner}}}}},
+		}}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		c = newViewCodec()
+		c.Unmarshal(mem.BufferSlice{mem.SliceBuffer(wide)}, &tesserav1.WatchResponse{})
+		if over := n > maxTableColumns; c.malformed() != nil || (c.refusal() != nil) != over {
+			t.Errorf("a table of %d columns: got malformed %v, refusal %v", n, c.malformed(), c.refusal())
+		}
+	}
+}
+
+// waitLogged waits until panel id's logs have a line containing text.
+func waitLogged(t *testing.T, m *Manager, id, text string) {
+	t.Helper()
+	for deadline := time.Now().Add(10 * time.Second); ; time.Sleep(10 * time.Millisecond) {
+		if strings.Contains(strings.Join(m.Logs(id), "\n"), text) {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("panel %s never logged %q", id, text)
+		}
+	}
+}
+
+func scrollTo(widget string, first uint32) *tesserav1.HandleEventRequest {
+	return &tesserav1.HandleEventRequest{Event: &tesserav1.HandleEventRequest_Scroll{
+		Scroll: &tesserav1.ScrollEvent{WidgetId: widget, FirstVisible: first, VisibleCount: 5},
+	}}
+}
+
+// A slow plugin gets the latest range of a widget scrolled while it was
+// busy, in the place of the first one queued, however many came.
+func TestScrollEventsCoalesce(t *testing.T) {
+	dir := install(t, "slow-events")
+	logger, _ := newLogger()
+	opts := fast
+	opts.CallTimeout = 15 * time.Second // the plugin waits for the gate
+	m := StartWith(panels("slow-events"), dir, logger, opts)
+	defer m.Close()
+	waitFor(t, m, "p0", "live", is(Live))
+	if err := m.HandleEvent("p0", activate("gated")); err != nil {
+		t.Fatal(err)
+	}
+	waitLogged(t, m, "p0", "handling an event") // the plugin is busy with it
+	for i := range uint32(2 * maxEvents) {
+		if err := m.HandleEvent("p0", scrollTo("procs", i+1)); err != nil {
+			t.Fatalf("scroll %d: %v", i+1, err)
+		}
+	}
+	if err := m.HandleEvent("p0", activate("b")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "gate"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"activate gated", fmt.Sprintf("scroll procs %d", 2*maxEvents), "activate b"}
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		var got []string
+		for _, l := range m.Logs("p0") {
+			for _, w := range []string{"activate ", "scroll "} {
+				if i := strings.Index(l, w); i >= 0 {
+					got = append(got, l[i:])
+				}
+			}
+		}
+		if slices.Equal(got, want) {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("plugin got %q, want %q", got, want)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+// With the queue full, a scroll of a widget that already has one
+// waiting still replaces it, while any other event is refused.
+func TestFullQueueTakesOnlyWaitingScrolls(t *testing.T) {
+	dir := install(t, "slow-events")
+	logger, _ := newLogger()
+	opts := fast
+	opts.CallTimeout = 15 * time.Second // the plugin waits for the gate
+	m := StartWith(panels("slow-events"), dir, logger, opts)
+	defer m.Close()
+	waitFor(t, m, "p0", "live", is(Live))
+	if err := m.HandleEvent("p0", activate("gated")); err != nil {
+		t.Fatal(err)
+	}
+	waitLogged(t, m, "p0", "handling an event") // the plugin is busy with it
+	if err := m.HandleEvent("p0", scrollTo("procs", 1)); err != nil {
+		t.Fatal(err)
+	}
+	for i := range maxEvents - 1 {
+		if err := m.HandleEvent("p0", activate(fmt.Sprint("a", i))); err != nil {
+			t.Fatalf("activation %d: %v", i, err)
+		}
+	}
+	if err := m.HandleEvent("p0", scrollTo("other", 1)); !errors.Is(err, ErrBusy) {
+		t.Errorf("a new widget's scroll with the queue full: %v, want ErrBusy", err)
+	}
+	if err := m.HandleEvent("p0", activate("late")); !errors.Is(err, ErrBusy) {
+		t.Errorf("an activation with the queue full: %v, want ErrBusy", err)
+	}
+	if err := m.HandleEvent("p0", scrollTo("procs", 2)); err != nil {
+		t.Errorf("a waiting widget's scroll with the queue full: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "gate"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	last := fmt.Sprint("activate a", maxEvents-2)
+	deadline := time.Now().Add(20 * time.Second) // maxEvents events, 150 ms each
+	for {
+		logs := strings.Join(m.Logs("p0"), "\n")
+		if strings.Contains(logs, last) {
+			if strings.Contains(logs, "scroll procs 1") || !strings.Contains(logs, "scroll procs 2") {
+				t.Fatalf("the plugin did not get only the newer range:\n%s", logs)
+			}
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the plugin never got %q:\n%s", last, logs)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+// A scroll waiting when the plugin restarts goes with the queue, and
+// later scrolls of that widget reach the new launch.
+func TestScrollQueueClearedOnRestart(t *testing.T) {
+	dir := install(t, "slow-events")
+	logger, _ := newLogger()
+	m := StartWith(panels("slow-events"), dir, logger, fast)
+	defer m.Close()
+	waitFor(t, m, "p0", "live", is(Live))
+	if err := m.HandleEvent("p0", activate("a")); err != nil {
+		t.Fatal(err)
+	}
+	waitLogged(t, m, "p0", "handling an event") // the plugin is busy with it
+	if err := m.HandleEvent("p0", scrollTo("procs", 1)); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Restart("p0"); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, m, "p0", "starting", is(Starting))
+	waitFor(t, m, "p0", "live again", is(Live))
+	if err := m.HandleEvent("p0", scrollTo("procs", 2)); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for countLines(m.Logs("p0"), "scroll procs 2") == 0 {
+		if time.Now().After(deadline) {
+			t.Fatalf("the scroll after the restart never arrived:\n%s", strings.Join(m.Logs("p0"), "\n"))
+		}
+		time.Sleep(20 * time.Millisecond)
 	}
 }

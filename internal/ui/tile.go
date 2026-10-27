@@ -21,6 +21,7 @@ import (
 
 	"github.com/joncbenderkh/tessera/internal/pluginhost"
 	"github.com/joncbenderkh/tessera/internal/ui/theme"
+	tesserav1 "github.com/joncbenderkh/tessera/proto/tessera/v1"
 )
 
 // Menu items, in the order the tile menu lists them.
@@ -33,9 +34,11 @@ var menuItems = [...]struct {
 }
 
 // tile is one panel's frame: its head, with the title, the plugin on
-// hover, and the options menu, and a body for its state. A live panel's
-// body is empty until views are rendered (#11).
+// hover, and the options menu, and a body for its state: a live panel's
+// view, or why it has none.
 type tile struct {
+	content  viewState
+	launch   *tesserav1.DescribeResponse // the launch content is for: each answers Describe anew
 	head     gesture.Hover
 	menu     Button
 	items    [len(menuItems)]Button
@@ -108,9 +111,10 @@ func pluginInfo(s pluginhost.PanelState) string {
 }
 
 // Layout draws the tile over exactly gtx's constraints and returns the
-// actions the user chose.
-func (t *tile) Layout(gtx layout.Context, th *theme.Theme, s pluginhost.PanelState, narrow bool) []ActionKind {
+// actions the user chose and the input for the plugin.
+func (t *tile) Layout(gtx layout.Context, th *theme.Theme, s pluginhost.PanelState, narrow bool) ([]ActionKind, []*tesserav1.HandleEventRequest) {
 	var actions []ActionKind
+	var events []*tesserav1.HandleEventRequest
 	if !gtx.Enabled() {
 		// A dialog is open. The menu's backdrop would draw over it and
 		// take its clicks, and a disabled gtx never sees them close it.
@@ -176,15 +180,27 @@ func (t *tile) Layout(gtx layout.Context, th *theme.Theme, s pluginhost.PanelSta
 	padX := gtx.Dp(theme.Space16)
 	body.Constraints = layout.Constraints{Max: image.Pt(max(size.X-2*padX, 0), max(size.Y-headH-padX, 0))}
 	st := op.Offset(image.Pt(padX, headH)).Push(gtx.Ops)
-	switch kind {
-	case kindStarting:
+	if kind == kindStarting || kind == kindFailing || s.View == nil || s.Info != t.launch {
+		// A new launch starts afresh: its first view's ranges are sent.
+		// Its Info tells it apart even with no frame drawn in between.
+		t.content = viewState{}
+		t.launch = s.Info
+	}
+	switch {
+	case kind == kindStarting:
 		label(th, "Starting "+s.Plugin+"…", theme.TextMin, th.Muted, theme.Mono).Layout(body)
-	case kindFailing:
+	case kind == kindFailing:
 		t.errorBody(body, th, s, narrow)
 		t.buttons = t.buttons.Add(image.Pt(padX, headH))
+	case s.View != nil:
+		events = t.content.Layout(body, th, s.View)
+	case s.ViewErr != nil:
+		// A view over a limit, shown no more until a restart, or a polled
+		// panel's failed Render before its first view, until one works.
+		wrapped(th, s.ViewErr.Error(), theme.TextMin, th.Muted, theme.Mono).Layout(body)
 	}
 	st.Pop()
-	return actions
+	return actions, events
 }
 
 // layoutHead draws the head and returns its height. The plugin popover

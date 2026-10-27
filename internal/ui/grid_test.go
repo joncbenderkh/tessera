@@ -256,9 +256,9 @@ func TestTileMenu(t *testing.T) {
 		action []Action
 	}{
 		{"configure", func(menu image.Point) []event.Event { return click(menu.Add(image.Pt(-40, 34))) }, false,
-			[]Action{{ActionConfigure, "clock"}}},
+			[]Action{{Kind: ActionConfigure, Panel: "clock"}}},
 		{"disable", func(menu image.Point) []event.Event { return click(menu.Add(image.Pt(-40, 66))) }, false,
-			[]Action{{ActionDisable, "clock"}}},
+			[]Action{{Kind: ActionDisable, Panel: "clock"}}},
 		{"escape", func(image.Point) []event.Event {
 			return []event.Event{key.Event{Name: key.NameEscape, State: key.Press}}
 		}, false, nil},
@@ -347,7 +347,7 @@ func TestTileMenuStaysInView(t *testing.T) {
 	last := image.Pt(box.Min.X+20, box.Max.Y-6-8) // inside the last item
 	actions := layout(click(last)...)
 	actions = append(actions, layout()...)
-	if !slices.Equal(actions, []Action{{ActionDisable, "clock"}}) {
+	if !slices.Equal(actions, []Action{{Kind: ActionDisable, Panel: "clock"}}) {
 		t.Errorf("actions %v, want Disable panel", actions)
 	}
 }
@@ -369,11 +369,11 @@ func TestErrorTileActions(t *testing.T) {
 	// 15 dp gap, inside the body's 16 dp padding.
 	y := rect.Min.Y + 44 + 32 + 12 + 16
 	restart := image.Pt(rect.Min.X+16+47+20, y)
-	if got := frame(&r, &g, cfg, states, now, click(restart)...); !slices.Equal(got, []Action{{ActionRestart, "weather"}}) {
+	if got := frame(&r, &g, cfg, states, now, click(restart)...); !slices.Equal(got, []Action{{Kind: ActionRestart, Panel: "weather"}}) {
 		t.Errorf("Restart: actions %v", got)
 	}
 	logs := image.Pt(rect.Min.X+16+47+80, y)
-	if got := frame(&r, &g, cfg, states, now, click(logs)...); !slices.Equal(got, []Action{{ActionLogs, "weather"}}) {
+	if got := frame(&r, &g, cfg, states, now, click(logs)...); !slices.Equal(got, []Action{{Kind: ActionLogs, Panel: "weather"}}) {
 		t.Errorf("Logs: actions %v", got)
 	}
 }

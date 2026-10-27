@@ -159,9 +159,10 @@ message Sparkline {
 
 // Align is horizontal alignment within a table column.
 enum Align {
-  // Align to the start (left in left-to-right text).
+  // Align to the left, in every locale.
   ALIGN_UNSPECIFIED = 0;
-  // Align to the end, for numbers.
+  // Align to the right, for numbers, in every locale: the end of a
+  // left-to-right line.
   ALIGN_END = 1;
 }
 
@@ -178,7 +179,7 @@ enum SortOrder {
 // Table shows rows and columns. The plugin sorts the rows; the host only
 // draws the sort indicator.
 message Table {
-  // The columns, in display order.
+  // The columns, in display order; at most 64.
   repeated TableColumn columns = 1;
   // The rows, in display order.
   repeated TableRow rows = 2;
@@ -241,7 +242,7 @@ message ListItem {
 enum Axis {
   // Top to bottom.
   AXIS_UNSPECIFIED = 0;
-  // Start to end (left to right in left-to-right text).
+  // Left to right, in every locale.
   AXIS_HORIZONTAL = 1;
 }
 
@@ -281,6 +282,8 @@ message StackItem {
   Widget widget = 1;
   // Zero gives the child its natural size along the axis. A positive
   // weight shares the remaining space with the other weighted children
-  // in proportion.
+  // in proportion. Across a row, a sparkline, table or list has no
+  // natural width and takes all the width left, so it needs a weight
+  // to sit beside other children; a gauge's natural width is its dial.
   uint32 weight = 2;
 }

@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-// Package ui draws the host-owned parts of the window: the header, and
-// the toast and dialog primitives for transient host UI.
+// Package ui draws the window: the header, the grid of tiles with the
+// plugins' views in them, and the toast and dialog primitives for
+// transient host UI.
 package ui
 
 import (
@@ -41,7 +42,7 @@ func (r recorded) at(gtx layout.Context, p image.Point) {
 // label is a single-line label in the given face, size, and colour.
 func label(th *theme.Theme, text string, size unit.Sp, c color.NRGBA, f font.Font) material.LabelStyle {
 	return material.LabelStyle{
-		Text: text, TextSize: size, Color: c, Font: f,
+		Text: cut(text, maxText), TextSize: size, Color: c, Font: f,
 		MaxLines: 1, Shaper: th.Shaper,
 	}
 }
