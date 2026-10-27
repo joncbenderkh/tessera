@@ -36,8 +36,9 @@ type viewState struct {
 	rows     map[string]*widget.Clickable       // by action_id
 	sent     map[string][2]int                  // by widget id: the visible range last reported
 	loading  bool                               // inside a loading stack: everything is a placeholder
+	narrow   bool                               // at natural width in a row: a gauge takes its dial's width, not all there is
 	selected string                             // the action_id last activated
-	previous string                             // the one before it, for an activation the plugin did not get
+	history  []activation                       // the selection before this frame's activations, then each of them, for those the plugin does not get
 	digits   map[digitKey]int                   // the widest digit's advance, by face and size
 	digitIDs map[digitKey]map[text.GlyphID]bool // the digits' glyphs, by face and size
 
@@ -48,6 +49,13 @@ type viewState struct {
 	keys    map[*tesserav1.Widget]string
 	used    map[string]bool // the lists and rows drawn
 	events  []*tesserav1.HandleEventRequest
+}
+
+// activation is a row or item activated, and the event that told the
+// plugin; the selection from before a frame has no event.
+type activation struct {
+	id    string
+	event *tesserav1.HandleEventRequest
 }
 
 type digitKey struct {
@@ -75,6 +83,7 @@ func (v *viewState) Layout(gtx layout.Context, th *theme.Theme, view *tesserav1.
 	}
 	v.used = map[string]bool{}
 	v.events = nil
+	v.history = v.history[:0]
 
 	defer clip.Rect{Max: gtx.Constraints.Max}.Push(gtx.Ops).Pop()
 	gtx.Constraints.Min = image.Point{}
@@ -188,7 +197,7 @@ func (v *viewState) widget(gtx layout.Context, th *theme.Theme, w *tesserav1.Wid
 		if k, ok := v.keys[w]; ok {
 			v.used[k] = true
 		}
-		return skeleton(gtx, th, w)
+		return v.skeleton(gtx, th, w)
 	}
 	switch k := w.GetKind().(type) {
 	case *tesserav1.Widget_Text:
@@ -245,7 +254,7 @@ func (v *viewState) text(gtx layout.Context, th *theme.Theme, t *tesserav1.Text)
 		f = theme.Mono
 	}
 	return material.LabelStyle{
-		Text: t.GetValue(), TextSize: textSize(t.GetSize()), Color: viewTone(th, t.GetTone(), th.Fg),
+		Text: cut(t.GetValue(), maxText), TextSize: textSize(t.GetSize()), Color: viewTone(th, t.GetTone(), th.Fg),
 		Font: f, Shaper: th.Shaper,
 	}.Layout(gtx)
 }
@@ -311,7 +320,7 @@ func (v *viewState) valueWithUnit(gtx layout.Context, th *theme.Theme, value str
 
 // wrapped is a label that wraps to the width it gets.
 func wrapped(th *theme.Theme, text string, size unit.Sp, c color.NRGBA, f font.Font) material.LabelStyle {
-	return material.LabelStyle{Text: text, TextSize: size, Color: c, Font: f, Shaper: th.Shaper}
+	return material.LabelStyle{Text: cut(text, maxText), TextSize: size, Color: c, Font: f, Shaper: th.Shaper}
 }
 
 // column places parts top to bottom, gaps[i] apart before parts[i+1].
@@ -332,6 +341,23 @@ func column(gtx layout.Context, parts []recorded, gaps []int) layout.Dimensions 
 // in any tile, and a plugin's huge value must not cost a frame.
 const maxTabular = 1024
 
+// maxText is the most of any other text a label shapes, for the same
+// reasons.
+const maxText = 16 << 10
+
+// cut returns s, or its first n bytes or fewer, on a rune boundary, and
+// an ellipsis. The ellipsis shows the cut even when what is left draws
+// nothing.
+func cut(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	for n > 0 && !utf8.RuneStart(s[n]) {
+		n--
+	}
+	return s[:n] + "…"
+}
+
 // tabular draws s on one line with every digit glyph in a cell as wide
 // as the widest digit, so a value that changes keeps its width: Gio
 // cannot turn on a font's tabular figures. It shapes s once and widens
@@ -341,14 +367,7 @@ const maxTabular = 1024
 // plain text.
 func (v *viewState) tabular(gtx layout.Context, th *theme.Theme, s string, size unit.Sp, c color.NRGBA, f font.Font) layout.Dimensions {
 	gtx.Constraints.Min = image.Point{}
-	if len(s) > maxTabular {
-		cut := maxTabular
-		for cut > 0 && !utf8.RuneStart(s[cut]) {
-			cut--
-		}
-		// The ellipsis shows the cut even when what is left draws nothing.
-		s = s[:cut] + "…"
-	}
+	s = cut(s, maxTabular)
 	cell := fixed.I(v.digitWidth(gtx, th, size, f))
 	digits := v.digitGlyphs(gtx, th, size, f)
 	th.Shaper.LayoutString(text.Parameters{
@@ -468,6 +487,13 @@ func spacing(s tesserav1.Spacing) unit.Dp {
 	return theme.Space12
 }
 
+// setNarrow sets v.narrow, and returns what puts it back.
+func (v *viewState) setNarrow(narrow bool) (restore func()) {
+	was := v.narrow
+	v.narrow = narrow
+	return func() { v.narrow = was }
+}
+
 // stack lays its items out along its axis: weight 0 at natural size,
 // the weighted ones sharing what is left in proportion, with the gap
 // between them and a divider centred in each gap if asked for.
@@ -501,38 +527,72 @@ func (v *viewState) stack(gtx layout.Context, th *theme.Theme, s *tesserav1.Stac
 	if s.GetDividers() {
 		gap = max(gap, line)
 	}
-	avail := main(gtx.Constraints.Max) - gap*(len(items)-1)
 	crossMax := cross(gtx.Constraints.Max)
 
 	parts := make([]recorded, len(items))
 	shown := make([]bool, len(items)) // false for an item with no room
-	used, weights := 0, 0
+	used, drawn := 0, 0
 	for i, it := range items {
-		if w := it.GetWeight(); w > 0 {
-			weights += int(w)
+		if it.GetWeight() > 0 {
 			continue
 		}
-		// It has what the items and gaps before it left.
-		room := main(gtx.Constraints.Max) - used - gap*i
+		// It has what the natural items before it and their gaps left;
+		// the weighted ones share whatever remains after.
+		room := main(gtx.Constraints.Max) - used - gap*drawn
 		if room <= 0 {
 			v.hidden(it.GetWidget())
 			continue
 		}
 		cgtx := gtx
 		cgtx.Constraints = layout.Constraints{Max: pt(room, crossMax)}
-		parts[i] = record(cgtx, func(gtx layout.Context) layout.Dimensions { return v.widget(gtx, th, it.GetWidget()) })
+		parts[i] = record(cgtx, func(gtx layout.Context) layout.Dimensions {
+			defer v.setNarrow(v.narrow || horizontal)()
+			return v.widget(gtx, th, it.GetWidget())
+		})
+		if main(parts[i].dims.Size) == 0 {
+			continue // nothing, such as an unset widget: no gap or divider either
+		}
 		shown[i] = true
 		used += main(parts[i].dims.Size)
+		drawn++
 	}
-	rest, left := max(avail-used, 0), weights
+	// The weighted items share what the others and the gaps between the
+	// items that show leave. One whose share rounds to nothing does not
+	// show, so the shares are worked out again without it and its gap.
+	shares := make([]int, len(items)) // -1 for one left out
+	divide := func() (dropped bool) {
+		n, left := 0, 0
+		for i, it := range items {
+			if shown[i] || it.GetWeight() > 0 && shares[i] >= 0 {
+				n++
+			}
+			if it.GetWeight() > 0 && shares[i] >= 0 {
+				left += int(it.GetWeight())
+			}
+		}
+		rest := max(main(gtx.Constraints.Max)-used-gap*max(n-1, 0), 0)
+		for i, it := range items {
+			w := int(it.GetWeight())
+			if w == 0 || shares[i] < 0 {
+				continue
+			}
+			shares[i] = rest * w / left
+			rest, left = rest-shares[i], left-w
+			if shares[i] == 0 {
+				shares[i], dropped = -1, true
+			}
+		}
+		return dropped
+	}
+	if divide() {
+		divide()
+	}
 	for i, it := range items {
-		w := int(it.GetWeight())
-		if w == 0 {
+		if it.GetWeight() == 0 {
 			continue
 		}
-		share := rest * w / max(left, 1)
-		rest, left = rest-share, left-w
-		if share == 0 {
+		share := shares[i]
+		if share <= 0 {
 			v.hidden(it.GetWidget())
 			continue
 		}
@@ -540,6 +600,7 @@ func (v *viewState) stack(gtx layout.Context, th *theme.Theme, s *tesserav1.Stac
 		cgtx.Constraints = layout.Constraints{Min: pt(share, 0), Max: pt(share, crossMax)}
 		var child layout.Dimensions
 		parts[i] = record(cgtx, func(gtx layout.Context) layout.Dimensions {
+			defer v.setNarrow(v.narrow && !horizontal)()
 			child = v.widget(gtx, th, it.GetWidget())
 			return child
 		})
@@ -597,7 +658,7 @@ func (v *viewState) hidden(w *tesserav1.Widget) {
 // skeleton is a loading widget's placeholder, in its shape: bars for
 // text and stats, the bare track for a gauge, a dashed band for a
 // sparkline, and placeholder rows for tables and lists. It is static.
-func skeleton(gtx layout.Context, th *theme.Theme, w *tesserav1.Widget) layout.Dimensions {
+func (v *viewState) skeleton(gtx layout.Context, th *theme.Theme, w *tesserav1.Widget) layout.Dimensions {
 	width := gtx.Constraints.Max.X
 	bar := func(y, w, h int) {
 		paint := clip.UniformRRect(image.Rect(0, y, w, y+h), gtx.Dp(2))
@@ -622,7 +683,7 @@ func skeleton(gtx layout.Context, th *theme.Theme, w *tesserav1.Widget) layout.D
 		bar(top, width*42/100, vh)
 		return layout.Dimensions{Size: image.Pt(width*42/100, top+vh)}
 	case *tesserav1.Widget_Gauge:
-		return gaugeTrack(gtx, th, k.Gauge)
+		return v.gaugeTrack(gtx, th, k.Gauge)
 	case *tesserav1.Widget_Sparkline:
 		h, on, off := gtx.Dp(34), gtx.Dp(8), gtx.Dp(5)
 		faint := th.Border

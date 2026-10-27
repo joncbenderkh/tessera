@@ -181,11 +181,21 @@ const (
 	minColumn unit.Dp = 200
 )
 
-// Unselect moves panel's highlight from the row or item with action id,
-// for an activation its plugin did not get, back to the one before.
-func (g *Grid) Unselect(panel, id string) {
-	if t := g.tiles[panel]; t != nil && t.content.selected == id {
-		t.content.selected = t.content.previous
+// Unselect takes back the activation that sent event in panel's latest
+// frame, one its plugin did not get, and highlights the last activation
+// left, or the one from before the frame.
+func (g *Grid) Unselect(panel string, event *tesserav1.HandleEventRequest) {
+	t := g.tiles[panel]
+	if t == nil {
+		return
+	}
+	h := t.content.history
+	for i := len(h) - 1; i > 0; i-- {
+		if h[i].event == event {
+			t.content.history = slices.Delete(h, i, i+1)
+			t.content.selected = t.content.history[len(t.content.history)-1].id
+			return
+		}
 	}
 }
 

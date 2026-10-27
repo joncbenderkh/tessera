@@ -42,10 +42,16 @@ func (v *viewState) scrollList(w *tesserav1.Widget) *layout.List {
 	return l
 }
 
-// scrolled reports the visible range of w, laid out with l, to the
-// plugin when it has an id and the range changed since it last did.
-func (v *viewState) scrolled(w *tesserav1.Widget, l *layout.List) {
-	v.report(w, l.Position.First, l.Position.Count)
+// scrolled reports the visible range of w, laid out with l in dims, to
+// the plugin when it has an id and the range changed since it last did.
+// With no height nothing shows, though l still counts a row it is
+// scrolled into.
+func (v *viewState) scrolled(w *tesserav1.Widget, l *layout.List, dims layout.Dimensions) {
+	count := l.Position.Count
+	if dims.Size.Y <= 0 {
+		count = 0
+	}
+	v.report(w, l.Position.First, count)
 }
 
 // report sends the visible range first and count of w, if it has an id
@@ -86,15 +92,23 @@ func (v *viewState) actionable(gtx layout.Context, th *theme.Theme, id, text str
 	}
 	c := v.clickable(id)
 	for c.Clicked(gtx) {
-		v.previous, v.selected = v.selected, id
-		v.events = append(v.events, &tesserav1.HandleEventRequest{Event: &tesserav1.HandleEventRequest_Activate{
+		if len(v.history) == 0 {
+			v.history = append(v.history, activation{id: v.selected})
+		}
+		e := &tesserav1.HandleEventRequest{Event: &tesserav1.HandleEventRequest_Activate{
 			Activate: &tesserav1.ActivateEvent{ActionId: id},
-		}})
+		}}
+		v.history = append(v.history, activation{id, e})
+		v.selected = id
+		// A row drawn before this one this frame may still show the
+		// old selection.
+		gtx.Execute(op.InvalidateCmd{})
+		v.events = append(v.events, e)
 	}
 	focused := gtx.Focused(c)
 	dims := c.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
 		semantic.Button.Add(gtx.Ops)
-		semantic.LabelOp(text).Add(gtx.Ops)
+		semantic.LabelOp(cut(text, maxText)).Add(gtx.Ops)
 		semantic.SelectedOp(v.selected == id).Add(gtx.Ops)
 		return draw(gtx, c.Hovered() || focused || v.selected == id)
 	})
@@ -149,6 +163,10 @@ func (v *viewState) table(gtx layout.Context, th *theme.Theme, w *tesserav1.Widg
 	headH := gtx.Dp(tableHeadH)
 	var titles []recorded
 	for i, c := range cols {
+		if bounds[i][1] <= bounds[i][0] {
+			titles = append(titles, recorded{}) // no room to show it
+			continue
+		}
 		cgtx := tgtx
 		cgtx.Constraints.Max.X = bounds[i][1] - bounds[i][0]
 		if i == sorted {
@@ -159,6 +177,9 @@ func (v *viewState) table(gtx layout.Context, th *theme.Theme, w *tesserav1.Widg
 		headH = max(headH, r.dims.Size.Y+gtx.Dp(theme.Space8))
 	}
 	for i, r := range titles {
+		if bounds[i][1] <= bounds[i][0] {
+			continue
+		}
 		x := bounds[i][0]
 		end := cols[i].GetAlign() == tesserav1.Align_ALIGN_END
 		arrow := gtx.Dp(theme.Space12)
@@ -168,10 +189,13 @@ func (v *viewState) table(gtx layout.Context, th *theme.Theme, w *tesserav1.Widg
 				x -= arrow
 			}
 		}
+		// Cut to its column, as the cells are, arrow included.
+		col := clip.Rect{Min: image.Pt(bounds[i][0], 0), Max: image.Pt(bounds[i][1], headH)}.Push(gtx.Ops)
 		r.at(gtx, image.Pt(x, (headH-r.dims.Size.Y)/2))
 		if i == sorted {
 			sortArrow(gtx, th, image.Pt(x+r.dims.Size.X+arrow/2, headH/2), t.GetSortOrder() == tesserav1.SortOrder_SORT_ORDER_ASCENDING)
 		}
+		col.Pop()
 	}
 	if len(cols) > 0 {
 		fillRect(gtx, image.Rect(0, headH-line, width, headH), th.Border)
@@ -199,7 +223,7 @@ func (v *viewState) table(gtx layout.Context, th *theme.Theme, w *tesserav1.Widg
 	})
 	off.Pop()
 	st.Pop()
-	v.scrolled(w, l)
+	v.scrolled(w, l, dims)
 	return layout.Dimensions{Size: image.Pt(width, headH+dims.Size.Y)}
 }
 
@@ -228,7 +252,7 @@ func (v *viewState) tableRow(gtx layout.Context, th *theme.Theme, r *tesserav1.T
 	cells := r.GetCells()
 	cells = cells[:min(len(cells), len(cols))] // extra cells are ignored
 	id := v.action(r.GetActionId(), r)
-	return v.actionable(gtx, th, id, strings.Join(cells, ", "), func(gtx layout.Context, lit bool) layout.Dimensions {
+	return v.actionable(gtx, th, id, rowLabel(cells, bounds), func(gtx layout.Context, lit bool) layout.Dimensions {
 		tgtx := gtx
 		tgtx.Constraints.Min = image.Point{}
 		var texts []recorded
@@ -236,6 +260,10 @@ func (v *viewState) tableRow(gtx layout.Context, th *theme.Theme, r *tesserav1.T
 		for i := range cols {
 			if i >= len(cells) {
 				break
+			}
+			if bounds[i][1] <= bounds[i][0] {
+				texts = append(texts, recorded{}) // no room to show it
+				continue
 			}
 			cgtx := tgtx
 			cgtx.Constraints.Max.X = bounds[i][1] - bounds[i][0]
@@ -254,6 +282,9 @@ func (v *viewState) tableRow(gtx layout.Context, th *theme.Theme, r *tesserav1.T
 			fillRect(gtx, image.Rect(0, 0, width, h), th.Hover)
 		}
 		for i, t := range texts {
+			if bounds[i][1] <= bounds[i][0] {
+				continue
+			}
 			x := bounds[i][0]
 			if cols[i].GetAlign() == tesserav1.Align_ALIGN_END {
 				x = bounds[i][1] - t.dims.Size.X
@@ -263,6 +294,25 @@ func (v *viewState) tableRow(gtx layout.Context, th *theme.Theme, r *tesserav1.T
 		fillRect(gtx, image.Rect(0, h-gtx.Dp(1), width, h), th.Border)
 		return layout.Dimensions{Size: image.Pt(width, h)}
 	})
+}
+
+// rowLabel is a row's label for a screen reader: the cells of the
+// columns that show, cut as any text is.
+func rowLabel(cells []string, bounds [][2]int) string {
+	var b strings.Builder
+	for i, c := range cells {
+		if bounds[i][1] <= bounds[i][0] {
+			continue
+		}
+		if b.Len() > 0 {
+			b.WriteString(", ")
+		}
+		b.WriteString(cut(c, maxText))
+		if b.Len() > maxText {
+			break
+		}
+	}
+	return cut(b.String(), maxText)
 }
 
 // list draws the items in a list that scrolls when they do not fit.
@@ -285,7 +335,7 @@ func (v *viewState) list(gtx layout.Context, th *theme.Theme, w *tesserav1.Widge
 	dims := l.Layout(lgtx, len(items), func(gtx layout.Context, i int) layout.Dimensions {
 		return v.listItem(gtx, th, items[i], width)
 	})
-	v.scrolled(w, l)
+	v.scrolled(w, l, dims)
 	return layout.Dimensions{Size: image.Pt(width, dims.Size.Y)}
 }
 

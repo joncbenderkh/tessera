@@ -275,7 +275,7 @@ func act(a ui.Action, plugins *pluginhost.Manager, states []pluginhost.PanelStat
 			grid.Unsent(a.Panel, a.Event.GetScroll().GetWidgetId())
 		}
 		if o.unselect {
-			grid.Unselect(a.Panel, a.Event.GetActivate().GetActionId())
+			grid.Unselect(a.Panel, a.Event)
 		}
 		if o.toast != "" {
 			toast.Show(o.toast)

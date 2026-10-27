@@ -220,9 +220,13 @@ func dialLimits(gtx layout.Context, th *theme.Theme, u float32, limits [2]string
 
 // gaugeTrack is a loading gauge: the bare track, with two short bars
 // where the value goes, and its limits, as the mockup's.
-func gaugeTrack(gtx layout.Context, th *theme.Theme, g *tesserav1.Gauge) layout.Dimensions {
+func (v *viewState) gaugeTrack(gtx layout.Context, th *theme.Theme, g *tesserav1.Gauge) layout.Dimensions {
 	u := dialScale(gtx, 0)
-	x := (gtx.Constraints.Max.X - int(u*dialW)) / 2
+	width := gtx.Constraints.Max.X
+	if v.narrow {
+		width = min(int(u*dialW), width)
+	}
+	x := (width - int(u*dialW)) / 2
 	defer op.Offset(image.Pt(max(x, 0), 0)).Push(gtx.Ops).Pop()
 	strokeArc(gtx, u, 0, 1, th.Border)
 	dialLimits(gtx, th, u, readGauge(g).limits)
@@ -235,7 +239,7 @@ func gaugeTrack(gtx layout.Context, th *theme.Theme, g *tesserav1.Gauge) layout.
 		dot(gtx, f32.Pt(u*b[0], u*b[2]), u*dialStroke/2, th.Border)
 		dot(gtx, f32.Pt(u*b[1], u*b[2]), u*dialStroke/2, th.Border)
 	}
-	return layout.Dimensions{Size: image.Pt(gtx.Constraints.Max.X, int(u*dialH))}
+	return layout.Dimensions{Size: image.Pt(width, int(u*dialH))}
 }
 
 // gauge draws the dial, centred, with the label and caption under it.
@@ -258,6 +262,13 @@ func (v *viewState) gauge(gtx layout.Context, th *theme.Theme, g *tesserav1.Gaug
 	}
 	u := dialScale(gtx, rest)
 	dw, dh := int(u*dialW), int(u*dialH)
+	if v.narrow {
+		natural := dw
+		for _, b := range below {
+			natural = max(natural, b.dims.Size.X)
+		}
+		width = min(natural, width)
+	}
 	area := image.Rectangle{Max: image.Pt(width, dh)}
 	sem := clip.Rect(area).Push(gtx.Ops)
 	semantic.DescriptionOp(r.describe(g)).Add(gtx.Ops)
@@ -279,10 +290,15 @@ func (v *viewState) gauge(gtx layout.Context, th *theme.Theme, g *tesserav1.Gaug
 	}
 	// The value and unit, centred on their baseline; the limits under
 	// the arc's ends.
-	value := record(tgtx, func(gtx layout.Context) layout.Dimensions {
+	// It has the part of the dial that shows, so one too wide is cut
+	// with an ellipsis rather than at the edges.
+	vw := min(width, dw)
+	vgtx := tgtx
+	vgtx.Constraints.Max.X = vw
+	value := record(vgtx, func(gtx layout.Context) layout.Dimensions {
 		return v.valueWithUnit(gtx, th, r.value[0], theme.TextStat, r.value[1], theme.TextSmall)
 	})
-	value.at(gtx, image.Pt((dw-value.dims.Size.X)/2, int(u*dialValueY)-(value.dims.Size.Y-value.dims.Baseline)))
+	value.at(gtx, image.Pt((vw-value.dims.Size.X)/2, int(u*dialValueY)-(value.dims.Size.Y-value.dims.Baseline)))
 	dialLimits(tgtx, th, u, r.limits)
 	off.Pop()
 

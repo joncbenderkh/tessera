@@ -369,6 +369,158 @@ func TestTableScrolls(t *testing.T) {
 	}
 }
 
+// A table scrolled partway into a row and then left room for only its
+// header reports no rows visible.
+func TestTableHeaderOnlyShowsNoRows(t *testing.T) {
+	table := &tesserav1.Table{Columns: []*tesserav1.TableColumn{{Title: "Name"}}}
+	for i := range 50 {
+		table.Rows = append(table.Rows, &tesserav1.TableRow{Cells: []string{fmt.Sprint("row ", i)}})
+	}
+	view := &tesserav1.View{Body: &tesserav1.Widget{Id: "procs", Kind: &tesserav1.Widget_Table{Table: table}}}
+	var r input.Router
+	var v viewState
+	size := image.Pt(300, 300)
+	viewFrame(&r, &v, view, size)
+	wheel := pointer.Event{Kind: pointer.Scroll, Source: pointer.Mouse, Position: f32.Pt(100, 150), Scroll: f32.Pt(0, 13)}
+	viewFrame(&r, &v, view, size, wheel)
+	got := scrolls(viewFrame(&r, &v, view, image.Pt(300, int(tableHeadH))))
+	if len(got) != 1 || got[0].GetVisibleCount() != 0 {
+		t.Errorf("with room for only the header, sent %v, want no rows visible", got)
+	}
+}
+
+// A weighted item whose share rounds to nothing takes no gap either:
+// the items that show fill the stack.
+func TestStackDroppedItemTakesNoGap(t *testing.T) {
+	var r input.Router
+	stack := &tesserav1.Widget{Kind: &tesserav1.Widget_Stack{Stack: &tesserav1.Stack{
+		Axis: tesserav1.Axis_AXIS_HORIZONTAL,
+		Items: []*tesserav1.StackItem{
+			{Weight: 1000, Widget: textW("a")}, {Weight: 1, Widget: textW("b")}, {Weight: 1000, Widget: textW("c")},
+		},
+	}}}
+	if got := v0(&r).widget(loose(&r, image.Pt(300, 100)), testTheme, stack).Size.X; got != 300 {
+		t.Errorf("the items fill %d px of 300", got)
+	}
+}
+
+// Weighted items too many to get room leave the natural ones theirs.
+func TestStackWeightedItemsLeaveNaturalRoom(t *testing.T) {
+	var items []*tesserav1.StackItem
+	for range 10 {
+		items = append(items, &tesserav1.StackItem{Weight: 1, Widget: &tesserav1.Widget{}})
+	}
+	items = append(items, &tesserav1.StackItem{Widget: textW("end")})
+	view := &tesserav1.View{Body: &tesserav1.Widget{Kind: &tesserav1.Widget_Stack{Stack: &tesserav1.Stack{Items: items}}}}
+	var r input.Router
+	var v viewState
+	viewFrame(&r, &v, view, image.Pt(300, 100))
+	if !hasLabel(&r, "end") {
+		t.Error("the natural item is hidden")
+	}
+}
+
+// A gauge at natural width in a row takes its dial's width, so the
+// items after it keep their room; elsewhere it fills the width, centred.
+func TestGaugeInRowLeavesRoom(t *testing.T) {
+	gauge := &tesserav1.Widget{Kind: &tesserav1.Widget_Gauge{Gauge: &tesserav1.Gauge{Value: 5}}}
+	for _, loading := range []bool{false, true} {
+		row := &tesserav1.Widget{Loading: loading, Kind: &tesserav1.Widget_Stack{Stack: &tesserav1.Stack{
+			Axis:  tesserav1.Axis_AXIS_HORIZONTAL,
+			Items: []*tesserav1.StackItem{{Widget: gauge}, {Widget: gauge}, {Widget: textW("after")}},
+		}}}
+		var r input.Router
+		size := v0(&r).widget(loose(&r, image.Pt(600, 300)), testTheme, row).Size.X
+		var alone input.Router
+		dial := v0(&alone).widget(loose(&alone, image.Pt(100, 300)), testTheme, gauge).Size.X
+		if size <= 2*dial || size >= 600 {
+			t.Errorf("loading %v: the row is %d px wide, want more than two %d px dials and less than 600", loading, size, dial)
+		}
+	}
+	var r input.Router
+	if got := v0(&r).widget(loose(&r, image.Pt(600, 300)), testTheme, gauge).Size.X; got != 600 {
+		t.Errorf("a gauge on its own is %d px wide, want 600", got)
+	}
+}
+
+// A gauge's value too wide for its dial in a row is cut to the dial,
+// not drawn past the gauge's edges.
+func TestGaugeValueStaysInRow(t *testing.T) {
+	long := "98,765,432,109,876.5"
+	gauge := &tesserav1.Widget{Kind: &tesserav1.Widget_Gauge{Gauge: &tesserav1.Gauge{Value: 5, Display: long}}}
+	row := &tesserav1.View{Body: &tesserav1.Widget{Kind: &tesserav1.Widget_Stack{Stack: &tesserav1.Stack{
+		Axis:  tesserav1.Axis_AXIS_HORIZONTAL,
+		Items: []*tesserav1.StackItem{{Widget: gauge}, {Widget: textW("after")}},
+	}}}}
+	var r input.Router
+	var v viewState
+	viewFrame(&r, &v, row, image.Pt(600, 300))
+	var value, after image.Rectangle
+	for _, n := range r.AppendSemantics(nil) {
+		switch n.Desc.Label {
+		case long:
+			value = n.Desc.Bounds
+		case "after":
+			after = n.Desc.Bounds
+		}
+	}
+	if value.Empty() || after.Empty() {
+		t.Fatalf("value at %v, the text after at %v", value, after)
+	}
+	if value.Min.X < 0 || value.Max.X > after.Min.X {
+		t.Errorf("the value spans %v, past the gauge before %v", value, after)
+	}
+}
+
+// An item with nothing to draw at natural size takes no gap or divider.
+func TestStackEmptyItemTakesNoGap(t *testing.T) {
+	stack := func(items ...*tesserav1.StackItem) *tesserav1.Widget {
+		return &tesserav1.Widget{Kind: &tesserav1.Widget_Stack{Stack: &tesserav1.Stack{Dividers: true, Items: items}}}
+	}
+	var r input.Router
+	want := v0(&r).widget(loose(&r, image.Pt(300, 300)), testTheme, stack(
+		&tesserav1.StackItem{Widget: textW("a")}, &tesserav1.StackItem{Widget: textW("b")},
+	)).Size.Y
+	got := v0(&r).widget(loose(&r, image.Pt(300, 300)), testTheme, stack(
+		&tesserav1.StackItem{Widget: textW("a")}, &tesserav1.StackItem{}, &tesserav1.StackItem{Widget: &tesserav1.Widget{}}, &tesserav1.StackItem{Widget: textW("b")},
+	)).Size.Y
+	if got != want {
+		t.Errorf("with empty items the stack is %d px tall, want %d", got, want)
+	}
+}
+
+// A row's label for a screen reader has the cells of the columns that
+// show, cut as any text is.
+func TestRowLabel(t *testing.T) {
+	bounds := [][2]int{{0, 100}, {100, 100}, {110, 200}}
+	if got := rowLabel([]string{"a", "hidden", "c"}, bounds); got != "a, c" {
+		t.Errorf("label %q, want %q", got, "a, c")
+	}
+	long := strings.Repeat("x", maxText)
+	if got := rowLabel([]string{long, "hidden", long}, bounds); got != long+"…" {
+		t.Errorf("a long row's label is %d bytes, want it cut at maxText", len(got))
+	}
+}
+
+// A column too narrow to get any width is not drawn, so a table with
+// a great many columns costs no more than the ones that show.
+func TestTableSkipsColumnsWithNoRoom(t *testing.T) {
+	table := &tesserav1.Table{
+		Columns: []*tesserav1.TableColumn{{Title: "Wide", Weight: 1000}, {Title: "Squeezed", Weight: 1}, {Title: "Last", Weight: 1000}},
+		Rows:    []*tesserav1.TableRow{{Cells: []string{"shown", "squeezed cell", "last"}}},
+	}
+	view := &tesserav1.View{Body: &tesserav1.Widget{Id: "t", Kind: &tesserav1.Widget_Table{Table: table}}}
+	var r input.Router
+	var v viewState
+	viewFrame(&r, &v, view, image.Pt(300, 300))
+	if !hasLabel(&r, "Wide") || !hasLabel(&r, "shown") || !hasLabel(&r, "last") {
+		t.Fatal("the wide columns are not drawn")
+	}
+	if hasLabel(&r, "Squeezed") || hasLabel(&r, "squeezed cell") {
+		t.Error("a column with no width was drawn")
+	}
+}
+
 // A live tile draws its view, and input from it reaches the host as an
 // event action.
 func TestTileSendsViewEvents(t *testing.T) {
@@ -608,15 +760,79 @@ func TestUnselect(t *testing.T) {
 	rect := g.placed["cal"]
 	top := rect.Min.Y + g.tiles["cal"].headSize.Y
 	itemH := 2*12 + v0(&r).widget(loose(&r, rect.Size()), testTheme, textW("Review")).Size.Y
-	frame(&r, &g, cfg, states, now, click(image.Pt(rect.Min.X+60, top+itemH/2))...)
-	frame(&r, &g, cfg, states, now, click(image.Pt(rect.Min.X+60, top+itemH+itemH/2))...)
+	first := click(image.Pt(rect.Min.X+60, top+itemH/2))
+	second := click(image.Pt(rect.Min.X+60, top+itemH+itemH/2))
+	a := frame(&r, &g, cfg, states, now, first...)
+	b := frame(&r, &g, cfg, states, now, second...)
 	if g.tiles["cal"].content.selected != "ev:2" {
 		t.Fatalf("selected %q, want ev:2", g.tiles["cal"].content.selected)
 	}
-	g.Unselect("cal", "ev:1") // not the selected one: no change
-	g.Unselect("cal", "ev:2")
+	g.Unselect("cal", a[0].Event) // from an earlier frame: no change
+	if got := g.tiles["cal"].content.selected; got != "ev:2" {
+		t.Errorf("selected %q after an old activation failed, want ev:2", got)
+	}
+	g.Unselect("cal", b[0].Event)
 	if got := g.tiles["cal"].content.selected; got != "ev:1" {
 		t.Errorf("selected %q after the failed activation, want ev:1", got)
+	}
+	// Two activations in one frame that both fail go back to the
+	// highlight from before it.
+	got := frame(&r, &g, cfg, states, now, append(second, second...)...)
+	if len(got) != 2 {
+		t.Fatalf("a double click sent %d actions, want 2", len(got))
+	}
+	g.Unselect("cal", got[0].Event)
+	g.Unselect("cal", got[1].Event)
+	if got := g.tiles["cal"].content.selected; got != "ev:1" {
+		t.Errorf("selected %q after both failed, want ev:1", got)
+	}
+	// A frame's activations go out row by row, in the order the rows
+	// are drawn, and the one that failed is taken back.
+	got = frame(&r, &g, cfg, states, now, slices.Concat(second, first, second)...)
+	var ids []string
+	for _, a := range got {
+		ids = append(ids, a.Event.GetActivate().GetActionId())
+	}
+	if want := []string{"ev:1", "ev:2", "ev:2"}; !slices.Equal(ids, want) {
+		t.Fatalf("three clicks sent %q, want %q", ids, want)
+	}
+	g.Unselect("cal", got[2].Event)
+	g.Unselect("cal", got[1].Event)
+	if got := g.tiles["cal"].content.selected; got != "ev:1" {
+		t.Errorf("selected %q after both ev:2 failed, want ev:1", got)
+	}
+}
+
+// A row drawn before the one activated in the same frame still shows
+// the old selection, so the frame asks for another.
+func TestSelectionRedraws(t *testing.T) {
+	cfg := gridConfig([]config.Panel{panel("cal", 0, 0, 1, 2)})
+	states := live("cal")
+	states[0].View = &tesserav1.View{Body: listOf("",
+		&tesserav1.ListItem{Title: "Review", ActionId: "ev:1"},
+		&tesserav1.ListItem{Title: "Focus", ActionId: "ev:2"},
+	)}
+	var r input.Router
+	var g Grid
+	now := time.Now()
+	frame(&r, &g, cfg, states, now)
+	rect := g.placed["cal"]
+	top := rect.Min.Y + g.tiles["cal"].headSize.Y
+	itemH := 2*12 + v0(&r).widget(loose(&r, rect.Size()), testTheme, textW("Review")).Size.Y
+	frame(&r, &g, cfg, states, now, click(image.Pt(rect.Min.X+60, top+itemH/2))...)
+	frame(&r, &g, cfg, states, now, click(image.Pt(rect.Min.X+60, top+itemH+itemH/2))...)
+	if _, ok := r.WakeupTime(); !ok {
+		t.Fatal("a changed selection asks for no new frame")
+	}
+	frame(&r, &g, cfg, states, now)
+	n := 0
+	for _, s := range r.AppendSemantics(nil) {
+		if s.Desc.Selected {
+			n++
+		}
+	}
+	if n != 1 {
+		t.Errorf("%d rows selected after the next frame, want 1", n)
 	}
 }
 
@@ -881,6 +1097,24 @@ func TestTabularCutShows(t *testing.T) {
 	r.Frame(gtx.Ops)
 	if !hasLabel(&r, blank[:maxTabular/3*3]+"…") {
 		t.Error("a value cut at the limit does not end in an ellipsis")
+	}
+}
+
+// Text over maxText is cut, so a plugin's huge text costs no more to
+// draw than text that fills the tile.
+func TestLongTextIsCut(t *testing.T) {
+	long := strings.Repeat("é", maxText) // two bytes each
+	want := long[:maxText] + "…"
+	for name, w := range map[string]*tesserav1.Widget{
+		"text":   {Kind: &tesserav1.Widget_Text{Text: &tesserav1.Text{Value: long}}},
+		"detail": listOf("", &tesserav1.ListItem{Title: "t", Detail: long}),
+		"label":  {Kind: &tesserav1.Widget_Stat{Stat: &tesserav1.Stat{Label: long, Value: "1"}}},
+	} {
+		var r input.Router
+		viewFrame(&r, new(viewState), &tesserav1.View{Body: w}, image.Pt(300, 300))
+		if !hasLabel(&r, want) {
+			t.Errorf("%s: long text is not cut at maxText", name)
+		}
 	}
 }
 

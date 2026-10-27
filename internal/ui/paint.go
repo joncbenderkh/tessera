@@ -42,7 +42,7 @@ func (r recorded) at(gtx layout.Context, p image.Point) {
 // label is a single-line label in the given face, size, and colour.
 func label(th *theme.Theme, text string, size unit.Sp, c color.NRGBA, f font.Font) material.LabelStyle {
 	return material.LabelStyle{
-		Text: text, TextSize: size, Color: c, Font: f,
+		Text: cut(text, maxText), TextSize: size, Color: c, Font: f,
 		MaxLines: 1, Shaper: th.Shaper,
 	}
 }
