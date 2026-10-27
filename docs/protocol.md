@@ -73,8 +73,8 @@ it: without it, any local process could connect to a plugin, read its
 view, and trigger its actions. That matters most for TCP, which every
 local user can reach, but it covers unix sockets as well.
 
-The host side is `internal/pluginhost`; the Go SDK that hides all of
-this is #18.
+The host side is `internal/pluginhost`; the Go SDK in `sdk/` hides
+all of this from a plugin (see [plugins.md](plugins.md)).
 
 ## Versions
 
