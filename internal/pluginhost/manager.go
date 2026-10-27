@@ -564,7 +564,8 @@ var ErrClosed = errors.New("the plugin host is closed")
 var ErrNotLive = errors.New("the panel is not live")
 
 // ErrBusy is HandleEvent's answer when maxEvents events are already
-// waiting for the panel's plugin.
+// waiting for the panel's plugin, unless the event is a scroll of a
+// widget that already has one waiting, which takes that one's place.
 var ErrBusy = errors.New("too many events are waiting for the plugin")
 
 // maxEvents is how many events may wait for a panel's plugin.

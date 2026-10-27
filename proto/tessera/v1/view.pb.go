@@ -149,9 +149,10 @@ func (TextSize) EnumDescriptor() ([]byte, []int) {
 type Align int32
 
 const (
-	// Align to the start (left in left-to-right text).
+	// Align to the left, in every locale.
 	Align_ALIGN_UNSPECIFIED Align = 0
-	// Align to the end, for numbers.
+	// Align to the right, for numbers, in every locale: the end of a
+	// left-to-right line.
 	Align_ALIGN_END Align = 1
 )
 
@@ -253,7 +254,7 @@ type Axis int32
 const (
 	// Top to bottom.
 	Axis_AXIS_UNSPECIFIED Axis = 0
-	// Start to end (left to right in left-to-right text).
+	// Left to right, in every locale.
 	Axis_AXIS_HORIZONTAL Axis = 1
 )
 
@@ -1014,7 +1015,7 @@ func (x *Sparkline) GetTone() Tone {
 // draws the sort indicator.
 type Table struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// The columns, in display order.
+	// The columns, in display order; at most 64.
 	Columns []*TableColumn `protobuf:"bytes,1,rep,name=columns,proto3" json:"columns,omitempty"`
 	// The rows, in display order.
 	Rows []*TableRow `protobuf:"bytes,2,rep,name=rows,proto3" json:"rows,omitempty"`
@@ -1431,7 +1432,9 @@ type StackItem struct {
 	Widget *Widget `protobuf:"bytes,1,opt,name=widget,proto3" json:"widget,omitempty"`
 	// Zero gives the child its natural size along the axis. A positive
 	// weight shares the remaining space with the other weighted children
-	// in proportion.
+	// in proportion. Across a row, a sparkline, table or list has no
+	// natural width and takes all the width left, so it needs a weight
+	// to sit beside other children; a gauge's natural width is its dial.
 	Weight        uint32 `protobuf:"varint,2,opt,name=weight,proto3" json:"weight,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache

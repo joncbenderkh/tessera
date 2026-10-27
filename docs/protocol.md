@@ -171,15 +171,21 @@ limit, is a protocol failure.
 
 Every view is complete: it replaces the previous one rather than
 patching it. Views are small, and this keeps plugins stateless about
-what the host has drawn. A response is at most 4 MiB encoded, gRPC's
-default receive limit, and widgets nest at most 16 deep (`View.body` is
-depth 1, and each `StackItem.widget` adds 1). A view over either limit
-fails its stream or Render call; the host shows an error tile naming the
-limit, does not restart the plugin, and reads no more views from it
-until it is restarted, by the user or by a change to the panel's
-settings or size. Until then only the health check and the deadline
-on each event show that it still answers, so a hang inside its own code
-goes unseen. A response over 16 MiB is not read at all, and counts as an
+what the host has drawn. Each view has these limits:
+
+- A response is at most 4 MiB encoded, gRPC's default receive limit.
+- Widgets nest at most 16 deep: `View.body` is depth 1, and each
+  `StackItem.widget` adds 1.
+- A view holds at most 1024 widgets: `View.body` and every
+  `StackItem.widget`. Table rows and list items are not widgets.
+- A table has at most 64 columns.
+
+A view over any of them fails its stream or Render call; the host
+shows an error tile naming the limit, does not restart the plugin, and
+reads no more views from it until it is restarted, by the user or by a
+change to the panel's settings or size. Until then only the health
+check and the deadline on each event show that it still answers, so a
+hang inside its own code goes unseen. A response over 16 MiB is not read at all, and counts as an
 error the plugin returned. The host keeps only each panel's latest view
 and redraws at most 30 times a second, so sending views faster gains a
 plugin nothing.
@@ -295,15 +301,19 @@ How the host draws a view:
   tables and lists, which scroll within the space they get. A table or
   list with an `id` keeps its scroll position across views and sends a
   `ScrollEvent` whenever its visible range changes, including the
-  first time a plugin's view draws it and when it is empty. One with
+  first time a plugin's view draws it and when it is empty. Visible
+  means inside the space the widget gets in its tile, even where the
+  window hides that part of the tile. One with
   no `id`, or one whose `id` an earlier widget took, sends none and
   keeps its position by its place among the others like it. A scroll
   event still waiting for a busy plugin is replaced by the newer range
   for the same widget, so the plugin gets the latest one; one the queue
-  has no room for is sent again shortly. An activation the host cannot
-  queue gives the highlight back to the row or item before it; one the
-  queue has no room for also shows a "Panel busy" toast. One queued
-  that then fails at the plugin keeps its highlight.
+  has no room for is sent again shortly while its tile shows, or when
+  it shows again. An activation the host cannot
+  queue gives the highlight back to the last row or item activated
+  before it that the host did queue; one the queue has no room for
+  also shows a "Panel busy" toast. One queued that then fails at the
+  plugin keeps its highlight.
 - A loading widget is a static placeholder in its shape. A loading
   `Stack` keeps its layout and draws each widget in it as a
   placeholder.
@@ -312,8 +322,17 @@ How the host draws a view:
   mid-height.
 - A stat narrower than 200 dp uses a smaller value size. Stats in a
   row should have equal weights: each item without a weight gets only
-  what the items before it left, so a row of them can mix sizes. A
-  stat's or gauge's caption with no tone is muted.
+  what the items without one before it left, so a row of them can mix
+  sizes. A stat's or gauge's caption with no tone is muted.
+- In a horizontal `Stack`, a gauge without a weight is as wide as its
+  dial, but a sparkline, table or list without one takes all the
+  width left, and the items after it get none. Give those a weight to
+  put them beside other items.
+- Views are laid out left to right in every locale: a horizontal
+  `Stack` places its first child on the left, table columns run from
+  the left, `ALIGN_UNSPECIFIED` is left-aligned and `ALIGN_END`
+  right-aligned. Text within a widget still follows its own
+  direction.
 - Digits in stat and gauge values and in end-aligned table cells are
   equally wide, so a changing value keeps its width.
 - The row or item last activated stays highlighted, by its

@@ -64,9 +64,9 @@ type PanelServiceClient interface {
 	// that ends without the host cancelling it is a protocol failure,
 	// with two exceptions: a plugin that cannot push returns UNIMPLEMENTED
 	// before its first response, and the host polls Render instead; and a
-	// view over the size or depth limit in docs/protocol.md ends the
-	// stream, and the host shows an error tile without restarting the
-	// plugin.
+	// view over a limit in docs/protocol.md (size, depth, widgets or
+	// table columns) ends the stream, and the host shows an error tile
+	// without restarting the plugin.
 	Watch(ctx context.Context, in *WatchRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[WatchResponse], error)
 	// Render returns the current view. It is the polling fallback for
 	// plugins that do not implement Watch.
@@ -181,9 +181,9 @@ type PanelServiceServer interface {
 	// that ends without the host cancelling it is a protocol failure,
 	// with two exceptions: a plugin that cannot push returns UNIMPLEMENTED
 	// before its first response, and the host polls Render instead; and a
-	// view over the size or depth limit in docs/protocol.md ends the
-	// stream, and the host shows an error tile without restarting the
-	// plugin.
+	// view over a limit in docs/protocol.md (size, depth, widgets or
+	// table columns) ends the stream, and the host shows an error tile
+	// without restarting the plugin.
 	Watch(*WatchRequest, grpc.ServerStreamingServer[WatchResponse]) error
 	// Render returns the current view. It is the polling fallback for
 	// plugins that do not implement Watch.
