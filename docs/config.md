@@ -25,7 +25,8 @@ link; if that file's directory is read-only, as in the Nix store, the
 change is reported as not saved and lasts only until tessera restarts.
 A layout change that is not saved, there or because the file changed
 during the save, also lasts only until the file changes again, as it
-does when tessera saves the next layout change.
+does when tessera saves the next layout change; if the file is not
+watched, until tessera restarts.
 Changes are noticed through such links too, including a linked
 `tessera` directory, and when a link is pointed elsewhere. An edit
 made to the file a link points to, and a link pointed elsewhere, can
@@ -110,8 +111,9 @@ freely is #36.
   and saved with the rows it shows, so `y` matches the window until a
   panel is disabled: the ones below it keep their `y` in the file.
   A drag reaches only the rows in view: the grid does not scroll by
-  itself, and a drag ends with no change if its panel scrolls out of
-  view. The arrow keys move a panel further.
+  itself, though the mouse wheel scrolls it during a drag, and a drag
+  ends with no change if its panel scrolls out of view, or on Escape.
+  The arrow keys move a panel further.
 - With a panel's head focused (click it, or Tab to it), the arrow keys
   move it a column sideways or past the next panel up or down, and
   Shift with the arrow keys makes it wider, narrower, taller, or
@@ -138,10 +140,10 @@ be moved and resized only in the file.
 
 A change is saved at once. One that could not be saved stays in the
 window, as [above](#configuration) says, and repeating it does not
-save it, since the window already shows it; the next change that is
-saved, or the next edit to the file, drops it. If the file was edited
-while the change was being saved, the window takes the file's layout
-as soon as it reads it.
+save it, since the window already shows it; while the file is
+watched, the next change that is saved, or the next edit to the file,
+drops it. If the file was edited while the change was being saved,
+the window takes the file's layout when it reads the edit.
 
 ### Settings
 
