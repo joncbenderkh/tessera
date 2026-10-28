@@ -292,12 +292,20 @@ func (t *tile) updateEdit(gtx layout.Context, edit editMode) {
 			filters = append(filters, key.Filter{Focus: &t.grip, Name: name, Optional: key.ModShift})
 		}
 	}
+	if t.drag != dragNone {
+		// The press focused the head.
+		filters = append(filters, key.Filter{Focus: &t.grip, Name: key.NameEscape})
+	}
 	for {
 		e, ok := gtx.Event(filters...)
 		if !ok {
 			break
 		}
 		if e, ok := e.(key.Event); ok && e.State == key.Press {
+			if e.Name == key.NameEscape {
+				t.drag = dragNone // its release then drops nothing
+				continue
+			}
 			kind := ActionStep
 			if e.Modifiers.Contain(key.ModShift) {
 				kind = ActionResize

@@ -137,6 +137,24 @@ func TestEditTouchDrag(t *testing.T) {
 	}
 }
 
+func TestEditEscapeEndsADrag(t *testing.T) {
+	var r input.Router
+	cfg := gridConfig([]config.Panel{panel("a", 0, 0, 1, 1), panel("b", 1, 0, 1, 1)})
+	g := editGrid(&r, cfg)
+	head := g.placed["a"].Min.Add(image.Pt(60, 22))
+	to := head.Add(image.Pt(2*349+100, 0))
+	ev := drag(head, to)
+	frame(&r, g, cfg, live("a", "b"), time.Now(), ev[:2]...)
+	frame(&r, g, cfg, live("a", "b"), time.Now(), key.Event{Name: key.NameEscape, State: key.Press})
+	if actions := frame(&r, g, cfg, live("a", "b"), time.Now(), ev[2]); len(actions) != 0 {
+		t.Errorf("drop after Escape: actions %v, want none", actions)
+	}
+	want := []Action{{Kind: ActionPlace, Panel: "a", Cell: cell("a", 2, 0, 1, 1)}}
+	if actions := frame(&r, g, cfg, live("a", "b"), time.Now(), drag(head, to)...); !slices.Equal(actions, want) {
+		t.Errorf("next drag: actions %v, want %v", actions, want)
+	}
+}
+
 func TestEditDragResizes(t *testing.T) {
 	var r input.Router
 	cfg := gridConfig([]config.Panel{panel("a", 0, 0, 1, 1)})
