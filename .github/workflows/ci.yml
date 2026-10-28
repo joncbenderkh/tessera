@@ -139,6 +139,7 @@ jobs:
   # The plugin host's process handling differs per OS (proc_*.go). The
   # host itself needs cgo and is built only on Linux above, so only the
   # pure-Go packages are tested here; internal/ui lays out without a GPU.
+  # The SDK is what plugins run on, on every OS a release ships.
   other-os:
     name: Pure-Go packages (${{ matrix.os }}, Go ${{ matrix.go }})
     runs-on: ${{ matrix.os }}
@@ -159,4 +160,4 @@ jobs:
         # -v lists skipped tests, which differ per OS. -race needs cgo.
         env:
           CGO_ENABLED: "1"
-        run: go test -v -race ./internal/pluginhost ./internal/config ./internal/ui/...
+        run: go test -v -race ./internal/pluginhost ./internal/config ./internal/ui/... ./sdk/...

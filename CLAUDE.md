@@ -93,9 +93,14 @@ dialogs). Edit mode must be able to re-enable any disabled panel.
 - `proto/`: the plugin protocol. The `.proto` files and the Go code
   generated from them live in `proto/tessera/v1` (Go package
   `tesserav1`); `buf.yaml` and `buf.gen.yaml` sit in `proto/`. The
-  protocol is described in `docs/protocol.md`.
+  protocol is described in `docs/protocol.md`. `limits.go` there is
+  hand-written: the view limits and `Measure`, shared by the host and
+  the SDK, which must follow `docs/protocol.md`.
 - `sdk/`: the Go helper library plugin authors import, which hides the
-  go-plugin/gRPC boilerplate.
+  go-plugin/gRPC boilerplate: `Serve` with a `Plugin` description, a
+  channel of views, callbacks for settings and events, and view
+  builders. `sdk/example/counter` is a complete plugin, tested end to end
+  through `internal/pluginhost`; the author guide is `docs/plugins.md`.
 - `plugins/<name>`: first-party panels, each its own `main` package.
 
 ## Commands
@@ -124,10 +129,10 @@ Use the local toolchain: `export PATH=/usr/local/go/bin:$PATH`.
   rules pinned in the workflow), a `go generate` drift check, and an
   SPDX header check. Pull requests must target `main`; CI fails on any
   other base. A separate job runs the `internal/pluginhost`,
-  `internal/config`, and `internal/ui` tests on macOS and Windows, on
-  both Go versions; the BSD variants of the plugin host's process code
-  are only vetted (`GOOS=freebsd go vet` and so on, in the stable Linux
-  job), never run. It does not run the host.
+  `internal/config`, `internal/ui`, and `sdk` tests on macOS and
+  Windows, on both Go versions; the BSD variants of the plugin host's
+  process code are only vetted (`GOOS=freebsd go vet` and so on, in the
+  stable Linux job), never run. It does not run the host.
 - Plugins and `sdk/` must also build with `CGO_ENABLED=0`.
 
 The host needs Gio's system packages. On Fedora: `wayland-devel`,
@@ -152,8 +157,8 @@ bare binary, not a signed `.app` bundle.
 
 ## Status
 
-The module and source skeleton exist (#4); `sdk/` and `plugins/` are
-placeholders. The backlog is tracked as GitHub issues. CI (#5), the
+The module and source skeleton exist (#4); `plugins/` is a
+placeholder. The backlog is tracked as GitHub issues. CI (#5), the
 release workflow (#6), the config file (#7), and plugin protocol v1
 (#8) are in place. The host launches, describes, and configures each
 enabled panel's plugin and shuts them all down on exit (#12), and
@@ -172,7 +177,8 @@ panels, with Restart and Logs; config changes apply live (#10). A
 live tile draws its plugin's view: every widget of view schema v1, in
 `internal/ui/view*.go`, with tables and lists that scroll, send
 activate and scroll events, and keep the row last activated (#11).
-The SDK is #18.
+The Go SDK serves a plugin from a description, a channel of views,
+and callbacks, with builders for every widget (#18).
 
 ## Git workflow
 
