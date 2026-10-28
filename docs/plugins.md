@@ -33,7 +33,7 @@ func main() {
 		}
 	}()
 	sdk.Serve(sdk.Plugin{
-		Name:        "clock",
+		Name:        "my-clock",
 		Version:     "0.1.0",
 		Description: "The time, to the second.",
 		Views:       views,
@@ -46,20 +46,20 @@ by renaming it into the plugins directory, so a panel never starts a
 half-written file:
 
 ```sh
-CGO_ENABLED=0 go build -o clock.new .
-mv clock.new ~/.local/share/tessera/plugins/clock
+CGO_ENABLED=0 go build -o my-clock.new .
+mv my-clock.new ~/.local/share/tessera/plugins/my-clock
 ```
 
 The plugins directory is `tessera/plugins` under the user data
 directory: `$XDG_DATA_HOME` (or `~/.local/share`) on Linux,
 `~/Library/Application Support` on macOS, and `%LOCALAPPDATA%` on
-Windows, where the file is `clock.exe`. Then add a panel to the config
+Windows, where the file is `my-clock.exe`. Then add a panel to the config
 (see [config.md](config.md)):
 
 ```yaml
 panels:
-  - id: clock
-    plugin: clock
+  - id: my-clock
+    plugin: my-clock
     x: 0
     y: 0
     w: 1
@@ -210,7 +210,7 @@ stderr, as the `log` package does by default.
 
 `sdk/example/counter/main_test.go` tests a plugin end to end: started by
 the host, the test binary serves the plugin, and the test launches a
-copy of itself through `internal/pluginhost` as the host does. That
-package is internal, so this works only inside the tessera module.
-Elsewhere, test the plugin's own logic, and check views with
-`View.Proto`.
+copy of itself through `internal/pluginhost` as the host does, with
+the helpers in `internal/plugintest`. Those packages are internal, so
+this works only inside the tessera module. Elsewhere, test the
+plugin's own logic, and check views with `View.Proto`.
