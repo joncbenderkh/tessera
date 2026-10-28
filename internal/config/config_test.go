@@ -4,6 +4,7 @@ package config
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"math"
 	"os"
@@ -496,7 +497,7 @@ func TestUpdate(t *testing.T) {
 	if err := Save(path, Default()); err != nil {
 		t.Fatal(err)
 	}
-	if err := Update(path, func(c *Config) { c.Theme = ThemeLight }); err != nil {
+	if err := Update(path, func(c *Config) error { c.Theme = ThemeLight; return nil }); err != nil {
 		t.Fatal(err)
 	}
 	got, err := Load(path)
@@ -508,6 +509,43 @@ func TestUpdate(t *testing.T) {
 	}
 }
 
+// A change that fails leaves the file as it was, and its error is
+// Update's.
+func TestUpdateChangeFails(t *testing.T) {
+	path := filepath.Join(t.TempDir(), FileName)
+	if err := Save(path, Default()); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	failed := errors.New("no such panel")
+	err = Update(path, func(c *Config) error { c.Theme = ThemeLight; return failed })
+	if err != failed {
+		t.Errorf("error %v, want %v", err, failed)
+	}
+	if after, err := os.ReadFile(path); err != nil || string(after) != string(before) {
+		t.Errorf("file changed to %q, %v", after, err)
+	}
+}
+
+// A change that leaves the config as it was does not rewrite the file,
+// which would drop its comments.
+func TestUpdateKeepsAnUnchangedFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), FileName)
+	commented := "# mine\nversion: 1\ngrid:\n  columns: 6\n  row_height: 180\npanels: []\n"
+	if err := os.WriteFile(path, []byte(commented), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := Update(path, func(*Config) error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if data, err := os.ReadFile(path); err != nil || string(data) != commented {
+		t.Errorf("file %q, %v, want it unchanged", data, err)
+	}
+}
+
 func TestUpdateLeavesAFileThatChanged(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, FileName)
@@ -515,12 +553,10 @@ func TestUpdateLeavesAFileThatChanged(t *testing.T) {
 		t.Fatal(err)
 	}
 	edited := "# edited\nversion: 1\ngrid:\n  columns: 6\n  row_height: 180\npanels: []\n"
-	err := Update(path, func(c *Config) {
+	err := Update(path, func(c *Config) error {
 		c.Theme = ThemeLight
 		// An editor saves the file while the update is under way.
-		if err := os.WriteFile(path, []byte(edited), 0o600); err != nil {
-			t.Fatal(err)
-		}
+		return os.WriteFile(path, []byte(edited), 0o600)
 	})
 	if err != ErrChanged {
 		t.Fatalf("error %v, want ErrChanged", err)
@@ -568,16 +604,14 @@ func TestUpdateSpotsAnEditWithinOneTick(t *testing.T) {
 		t.Fatal(err)
 	}
 	edited := bytes.Replace(original, []byte("version: 1"), []byte("version: 2"), 1)
-	err = Update(path, func(c *Config) {
+	err = Update(path, func(c *Config) error {
 		c.Theme = ThemeLight
 		// An editor saves the file in place, at the same size, within
 		// one tick of a coarse clock.
 		if err := os.WriteFile(path, edited, 0o600); err != nil {
-			t.Fatal(err)
+			return err
 		}
-		if err := os.Chtimes(path, before.ModTime(), before.ModTime()); err != nil {
-			t.Fatal(err)
-		}
+		return os.Chtimes(path, before.ModTime(), before.ModTime())
 	})
 	if err != ErrChanged {
 		t.Fatalf("error %v, want ErrChanged", err)

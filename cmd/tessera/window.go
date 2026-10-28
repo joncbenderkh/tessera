@@ -376,10 +376,11 @@ func (s *themeSaver) save(dark bool) {
 }
 
 func saveTheme(path string, dark bool) error {
-	return config.Update(path, func(c *config.Config) {
+	return config.Update(path, func(c *config.Config) error {
 		c.Theme = config.ThemeLight
 		if dark {
 			c.Theme = config.ThemeDark
 		}
+		return nil
 	})
 }

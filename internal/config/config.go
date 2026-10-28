@@ -12,6 +12,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 
 	"github.com/goccy/go-yaml"
@@ -247,12 +248,15 @@ func Save(path string, c Config) error {
 // updated, and was left as it was.
 var ErrChanged = errors.New("the file changed while it was being updated")
 
-// Update reads the config at path, applies change to it, and saves it. If
-// the file changes meanwhile, in its contents, modification time, or by
-// being replaced, Update leaves it alone and returns ErrChanged, so an
-// edit made in an editor is not lost. The check runs just before the final rename,
-// which narrows the window for losing such an edit but cannot close it.
-func Update(path string, change func(*Config)) error {
+// Update reads the config at path, applies change to it, and saves it.
+// If change returns an error, Update returns it. If change leaves the
+// config as it was, the file is not rewritten, since a save drops its
+// comments. If the file changes meanwhile, in its contents,
+// modification time, or by being replaced, Update leaves it alone and
+// returns ErrChanged, so an edit made in an editor is not lost. The
+// check runs just before the final rename, which narrows the window
+// for losing such an edit but cannot close it.
+func Update(path string, change func(*Config) error) error {
 	before, err := os.Stat(path)
 	if err != nil {
 		return err
@@ -265,7 +269,12 @@ func Update(path string, change func(*Config)) error {
 	if err != nil {
 		return fmt.Errorf("%s: %w", path, err)
 	}
-	change(&c)
+	if err := change(&c); err != nil {
+		return err
+	}
+	if was, _ := Parse(data); reflect.DeepEqual(c, was) {
+		return nil
+	}
 	if err := c.Validate(); err != nil {
 		return err
 	}

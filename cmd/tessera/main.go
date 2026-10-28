@@ -63,7 +63,7 @@ func main() {
 	reloads := make(chan reload, 1)
 	go func() {
 		name := filepath.Base(*configPath)
-		err := config.Watch(context.Background(), *configPath, read, func(c config.Config, err error) {
+		err := config.Watch(context.Background(), *configPath, read, nil, func(c config.Config, err error) {
 			if err != nil {
 				log.Print(reloadError(*configPath, err, error.Error))
 				err = reloadError(name, err, brief)
