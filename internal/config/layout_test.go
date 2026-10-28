@@ -121,6 +121,7 @@ func TestStep(t *testing.T) {
 		{"up at the top stays", []string{"a 0 0 1 1", "b 1 0 1 1"}, 0, -1, "a 0 0 1 1, b 1 0 1 1"},
 		{"right", []string{"a 0 0 1 1"}, 1, 0, "a 1 0 1 1"},
 		{"left at the edge stays", []string{"a 0 0 1 1"}, -1, 0, "a 0 0 1 1"},
+		{"right goes below a tall panel above it", []string{"b 0 0 1 1", "a 0 1 1 1", "t 1 0 1 3"}, 1, 0, "b 0 0 1 1, a 1 3 1 1, t 1 0 1 3"},
 		{"only its columns count", []string{"a 0 0 1 1", "b 1 0 1 1"}, 0, 1, "a 0 0 1 1, b 1 0 1 1"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -144,6 +145,7 @@ func TestResize(t *testing.T) {
 	}{
 		{"wider pushes down", []string{"a 0 0 1 1", "b 1 0 1 1"}, 1, 0, "a 0 0 2 1, b 1 1 1 1"},
 		{"taller", []string{"a 0 0 1 1", "b 0 1 1 1"}, 0, 1, "a 0 0 1 2, b 0 2 1 1"},
+		{"wider goes below a tall panel above it", []string{"b 0 0 1 1", "a 0 1 1 1", "t 1 0 1 3"}, 1, 0, "b 0 0 1 1, a 0 3 2 1, t 1 0 1 3"},
 		{"no wider than the grid's edge", []string{"a 1 0 1 1"}, 1, 0, "a 1 0 1 1"},
 		{"no smaller than a cell", []string{"a 0 0 1 1"}, -1, -1, "a 0 0 1 1"},
 		{"from where it is now", []string{"a 0 3 1 1"}, 1, 0, "a 0 0 2 1"},

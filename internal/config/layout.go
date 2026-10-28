@@ -68,12 +68,12 @@ func (c *Config) Place(id string, x, y, w, h int) error {
 	}
 	Compact(c.Panels)
 	p := &c.Panels[i]
-	down := y > p.Y
+	down, up := y > p.Y, y < p.Y
 	p.W = min(max(w, 1), c.Grid.Columns)
 	p.X = min(max(x, 0), c.Grid.Columns-p.W)
 	p.H = min(max(h, 1), maxRows)
 	y = max(y, 0)
-	for !down {
+	for up {
 		// Up to the top of a panel in its columns that spans row y.
 		top := slices.IndexFunc(c.Panels, func(q Panel) bool {
 			return q.IsEnabled() && q.ID != id && q.Y < y && y < q.Y+q.H && p.X < q.X+q.W && q.X < p.X+p.W
@@ -212,7 +212,8 @@ func (c *Config) Step(id string, dx, dy int) error {
 
 // Resize makes the enabled panel id dw columns wider and dh rows taller,
 // or narrower and shorter for negative ones, as Shift and the arrow keys
-// do. Its corner stays, so it widens only up to the grid's last column.
+// do. Its column stays, so it widens only up to the grid's last column,
+// and it goes below a panel above it in a column it widens into.
 func (c *Config) Resize(id string, dw, dh int) error {
 	i := slices.IndexFunc(c.Panels, func(p Panel) bool { return p.ID == id && p.IsEnabled() })
 	if i < 0 {
