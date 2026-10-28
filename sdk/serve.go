@@ -12,6 +12,7 @@ import (
 	"math"
 	"os"
 	"reflect"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -44,15 +45,16 @@ type Plugin struct {
 	DefaultSize Size
 
 	// Views carries the panel's views; each one replaces the last. The
-	// host is sent the newest, so a plugin need not wait for one to go
-	// out before sending the next. A view sent belongs to the SDK: do
-	// not change its widgets afterwards. Until the first one arrives,
-	// the panel shows as starting; if none arrives within half the
-	// heartbeat interval the host asks for (2.5 seconds), the SDK sends
-	// an empty view, since the protocol requires one. A view the host
-	// would refuse, over one of the limits in docs/protocol.md or not
-	// encodable (a string of invalid UTF-8), is dropped, and the reason
-	// logged to stderr, so the panel keeps the last view it accepted.
+	// host is sent the newest, so a plugin need not wait for one to go out
+	// before sending the next. A view sent belongs to the SDK: do not
+	// change its widgets, table columns, or list items afterwards. Until
+	// the first one arrives, the panel shows as starting; if none arrives
+	// within half the heartbeat interval the host asks for (2.5 seconds),
+	// the SDK sends an empty view, since the protocol requires one. A view
+	// the host would refuse, over one of the limits in docs/protocol.md or
+	// not encodable (a string of invalid UTF-8), is dropped, and the
+	// reason logged to stderr, so the panel keeps the last view it
+	// accepted.
 	// Closing Views fails the plugin, and the host restarts it. Required.
 	Views <-chan View
 
@@ -95,17 +97,26 @@ type Config struct {
 // setting's name must equal the field's JSON name exactly: its json tag,
 // or else the field's own name. A setting v has no field for, or one of
 // the wrong type, is an error that rejects the settings (see
-// [InvalidSettings]).
+// [InvalidSettings]). On an error, v may be partly filled, so decode
+// into a fresh value rather than the plugin's live settings.
 //
-// v must be a non-nil pointer; anything else is a plain error, since the
-// fault is the plugin's, not the settings'.
+// v must be a non-nil pointer to a struct, a map, or an interface;
+// anything else is a plain error, since the fault is the plugin's, not
+// the settings'.
 func (c Config) Decode(v any) error {
-	if rv := reflect.ValueOf(v); !rv.IsValid() || rv.Kind() != reflect.Pointer || rv.IsNil() {
+	rv := reflect.ValueOf(v)
+	if !rv.IsValid() || rv.Kind() != reflect.Pointer || rv.IsNil() {
 		return fmt.Errorf("sdk: Decode needs a non-nil pointer, not %T", v)
 	}
-	rv := reflect.ValueOf(v)
-	if p := unknownKey(c.Settings, rv, rv.Type(), ""); p != "" {
-		return InvalidSettings("unknown setting %q", p)
+	t := rv.Type()
+	for t.Kind() == reflect.Pointer {
+		t = t.Elem()
+	}
+	if k := t.Kind(); k != reflect.Struct && k != reflect.Map && k != reflect.Interface {
+		return fmt.Errorf("sdk: Decode needs a pointer to a struct, a map, or an interface, not %T", v)
+	}
+	if problem := checkKeys(c.Settings, rv, rv.Type(), ""); problem != "" {
+		return InvalidSettings("%s", problem)
 	}
 	data, err := json.Marshal(c.Settings)
 	if err != nil {
@@ -114,11 +125,21 @@ func (c Config) Decode(v any) error {
 	dec := json.NewDecoder(bytes.NewReader(data))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(v); err != nil {
-		if typeErr := (*json.UnmarshalTypeError)(nil); errors.As(err, &typeErr) {
-			return InvalidSettings("setting %q: want %s, not %s%.0w",
-				typeErr.Field, describeType(typeErr.Type), describeValue(typeErr.Value), err)
+		// encoding/json's own path leaves out map keys, and list indices
+		// before Go 1.27, and names no setting for a type that decodes
+		// itself.
+		prefix := ""
+		if path := failingKey(c.Settings, rv.Type(), ""); path != "" {
+			prefix = fmt.Sprintf("setting %q: ", path)
 		}
-		return InvalidSettings("%w", err)
+		if typeErr := (*json.UnmarshalTypeError)(nil); errors.As(err, &typeErr) {
+			want := describeType(typeErr.Type)
+			if r := numberRange(typeErr.Type, typeErr.Value); r != "" {
+				want = r
+			}
+			return InvalidSettings("%swant %s, not %s%.0w", prefix, want, describeValue(typeErr.Value), err)
+		}
+		return InvalidSettings("%s%w", prefix, err)
 	}
 	return nil
 }
@@ -146,6 +167,41 @@ func describeType(t reflect.Type) string {
 	return t.String()
 }
 
+// numberRange names the numbers a numeric type t holds, when v, as an
+// UnmarshalTypeError names it, is a number of the right kind that lies
+// outside them, or returns "".
+func numberRange(t reflect.Type, v string) string {
+	for t.Kind() == reflect.Pointer {
+		t = t.Elem()
+	}
+	switch t.Kind() {
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+		if wholeNumber(v) {
+			return fmt.Sprintf("a whole number from %d to %d", int64(-1)<<(t.Bits()-1), int64(1)<<(t.Bits()-1)-1)
+		}
+	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64, reflect.Uintptr:
+		if wholeNumber(v) {
+			return fmt.Sprintf("a whole number from 0 to %d", uint64(math.MaxUint64)>>(64-t.Bits()))
+		}
+	case reflect.Float32:
+		if strings.HasPrefix(v, "number ") {
+			return fmt.Sprintf("a number from %.2g to %.2g", -math.MaxFloat32, math.MaxFloat32)
+		}
+	}
+	return ""
+}
+
+// wholeNumber reports whether v, as an UnmarshalTypeError names it, is
+// a whole number.
+func wholeNumber(v string) bool {
+	n, ok := strings.CutPrefix(v, "number ")
+	if !ok {
+		return false
+	}
+	f, err := strconv.ParseFloat(n, 64)
+	return err == nil && f == math.Trunc(f)
+}
+
 // describeValue names the JSON value encoding/json reports in an
 // UnmarshalTypeError: "string", "number 7", and so on.
 func describeValue(v string) string {
@@ -154,7 +210,7 @@ func describeValue(v string) string {
 	}
 	switch v {
 	case "bool":
-		return "true or false"
+		return "a boolean"
 	case "array":
 		return "a list"
 	case "object":
@@ -259,8 +315,8 @@ func (s *server) receive(views <-chan View) {
 	s.mu.Unlock()
 }
 
-// errClosed ends Watch, and fails Render, once Plugin.Views is closed,
-// so the host restarts the plugin.
+// errClosed ends Watch once Plugin.Views is closed, so the host
+// restarts the plugin; Render reports it too.
 var errClosed = status.Error(codes.Unavailable, "sdk: the plugin closed its views channel")
 
 // checkLimits returns why the host would refuse v, if it would.

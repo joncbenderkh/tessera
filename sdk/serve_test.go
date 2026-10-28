@@ -379,7 +379,7 @@ func TestDecodeNamesExactly(t *testing.T) {
 		{map[string]any{"Skipped": 1.0}, "Skipped"},
 		{map[string]any{"Shared": "s"}, "Shared"},
 		{map[string]any{"Server": map[string]any{"Port": 1.0}}, "Server.Port"},
-		{map[string]any{"servers": []any{map[string]any{"PORT": 2.0}}}, "servers.PORT"},
+		{map[string]any{"servers": []any{map[string]any{"PORT": 2.0}}}, "servers[0].PORT"},
 		{map[string]any{"by_name": map[string]any{"a": map[string]any{"Port": 3.0}}}, "by_name.a.Port"},
 	} {
 		var s settings
@@ -407,6 +407,11 @@ type stepConfig struct{ Step int }
 type taggedEmbed struct {
 	stepConfig `json:"nested"`
 }
+type fooConfig struct {
+	Foo int `json:"foo"`
+}
+type fooViaA struct{ fooConfig }
+type fooViaB struct{ fooConfig }
 
 // TestDecodeEmbedding pins encoding/json's rules for embedded structs:
 // the shallowest field of a name wins, and a type embedded in itself
@@ -423,13 +428,93 @@ func TestDecodeEmbedding(t *testing.T) {
 	if err := (sdk.Config{Settings: map[string]any{"Server": map[string]any{"Host": "h"}}}).Decode(&s); err != nil || s.shallow.Server.Host != "h" {
 		t.Errorf("shallowest: Decode = %v, host %q", err, s.shallow.Server.Host)
 	}
+	var twice struct {
+		fooViaA
+		fooViaB
+		FOO int
+	}
+	if err := (sdk.Config{Settings: map[string]any{"foo": 7.0}}).Decode(&twice); err == nil || !strings.Contains(err.Error(), `unknown setting "foo"`) {
+		t.Errorf("same type embedded twice: Decode = %v, FOO %d, want unknown setting foo", err, twice.FOO)
+	}
+}
+
+type hiddenStep struct{ Step int }
+
+// TestDecodeHiddenEmbedding treats a field promoted through a nil
+// embedded pointer to an unexported struct as unknown: encoding/json
+// cannot allocate it, only fill one already set.
+func TestDecodeHiddenEmbedding(t *testing.T) {
+	settings := map[string]any{"Step": 2.0}
+	var s struct{ *hiddenStep }
+	if err := (sdk.Config{Settings: settings}).Decode(&s); err == nil || !strings.Contains(err.Error(), `unknown setting "Step"`) {
+		t.Errorf("nil: Decode = %v, want unknown setting Step", err)
+	}
+	set := struct{ *hiddenStep }{&hiddenStep{}}
+	if err := (sdk.Config{Settings: settings}).Decode(&set); err != nil || set.Step != 2 {
+		t.Errorf("set: Decode = %v, step %d, want step 2", err, set.Step)
+	}
+}
+
+func TestDecodeQuotedFields(t *testing.T) {
+	var s struct {
+		N int `json:"n,string"`
+	}
+	err := sdk.Config{Settings: map[string]any{"n": 5.0}}.Decode(&s)
+	if want := `setting "n": want a whole number in quotes, not 5`; err == nil || err.Error() != want {
+		t.Errorf("bare: Decode = %v, want %s", err, want)
+	}
+	if err := (sdk.Config{Settings: map[string]any{"n": "5"}}).Decode(&s); err != nil || s.N != 5 {
+		t.Errorf("quoted: Decode = %v, n %d, want n 5", err, s.N)
+	}
+	var str struct {
+		S string `json:"s,string"`
+	}
+	err = sdk.Config{Settings: map[string]any{"s": "abc"}}.Decode(&str)
+	if want := `setting "s": want a string in quotes, not abc`; err == nil || err.Error() != want {
+		t.Errorf("bare string: Decode = %v, want %s", err, want)
+	}
+	if err := (sdk.Config{Settings: map[string]any{"s": `"abc"`}}).Decode(&str); err != nil || str.S != "abc" {
+		t.Errorf("quoted string: Decode = %v, s %q, want abc", err, str.S)
+	}
+}
+
+// TestDecodeQuotedPointer quotes through one unnamed pointer only, as
+// encoding/json does: a pointer to a pointer takes a bare number.
+func TestDecodeQuotedPointer(t *testing.T) {
+	var s struct {
+		P *int `json:"p,string"`
+		//lint:ignore SA5008 encoding/json's handling of this misuse is under test.
+		PP **int `json:"pp,string"`
+	}
+	err := sdk.Config{Settings: map[string]any{"p": "3", "pp": 4.0}}.Decode(&s)
+	if err != nil || s.P == nil || *s.P != 3 || s.PP == nil || **s.PP != 4 {
+		t.Errorf("Decode = %v, want p 3 and pp 4", err)
+	}
+}
+
+// TestDecodeArrayExtras ignores the elements past an array's length, as
+// encoding/json does.
+func TestDecodeArrayExtras(t *testing.T) {
+	var s struct{ A [1]struct{ B int } }
+	settings := map[string]any{"A": []any{map[string]any{"B": 1.0}, map[string]any{"b": 1.0}}}
+	if err := (sdk.Config{Settings: settings}).Decode(&s); err != nil || s.A[0].B != 1 {
+		t.Errorf("Decode = %v, A %v, want A[0].B 1", err, s.A)
+	}
+}
+
+func TestDecodeNamesListElements(t *testing.T) {
+	var s struct{ L []struct{ A int } }
+	err := sdk.Config{Settings: map[string]any{"L": []any{map[string]any{"A": 1.0}, map[string]any{"B": 1.0}}}}.Decode(&s)
+	if err == nil || !strings.Contains(err.Error(), `unknown setting "L[1].B"`) {
+		t.Errorf("Decode = %v, want unknown setting L[1].B", err)
+	}
 }
 
 func TestDecodeMisuseIsNotASettingsError(t *testing.T) {
 	var s struct{}
-	for _, v := range []any{s, nil, (*struct{})(nil)} {
+	for _, v := range []any{s, nil, (*struct{})(nil), &[]int{}, new(string)} {
 		err := sdk.Config{Settings: map[string]any{}}.Decode(v)
-		if err == nil || strings.Contains(err.Error(), "json:") {
+		if err == nil || strings.Contains(err.Error(), "json:") || strings.Contains(err.Error(), "setting") {
 			t.Errorf("Decode(%T) = %v, want the SDK's own error", v, err)
 		}
 	}
@@ -479,6 +564,8 @@ func TestDecodeTypeErrors(t *testing.T) {
 		On    bool            `json:"on"`
 		Hosts []string        `json:"hosts"`
 		Inner struct{ N int } `json:"inner"`
+		Small uint8           `json:"small"`
+		Ratio float32         `json:"ratio"`
 	}
 	for _, tc := range []struct {
 		settings map[string]any
@@ -486,15 +573,61 @@ func TestDecodeTypeErrors(t *testing.T) {
 	}{
 		{map[string]any{"step": "x"}, `setting "step": want a whole number, not a string`},
 		{map[string]any{"step": 1.5}, `setting "step": want a whole number, not 1.5`},
-		{map[string]any{"name": true}, `setting "name": want a string, not true or false`},
+		{map[string]any{"name": true}, `setting "name": want a string, not a boolean`},
 		{map[string]any{"on": []any{}}, `setting "on": want true or false, not a list`},
 		{map[string]any{"hosts": map[string]any{}}, `setting "hosts": want a list, not a map`},
 		{map[string]any{"inner": map[string]any{"N": "x"}}, `setting "inner.N": want a whole number, not a string`},
+		{map[string]any{"small": 300.0}, `setting "small": want a whole number from 0 to 255, not 300`},
+		{map[string]any{"small": -1.0}, `setting "small": want a whole number from 0 to 255, not -1`},
+		{map[string]any{"ratio": 1e300}, `setting "ratio": want a number from -3.4e+38 to 3.4e+38, not 1e+300`},
+		{map[string]any{"step": 1e19}, `setting "step": want a whole number from -9223372036854775808 to 9223372036854775807, not 10000000000000000000`},
 	} {
 		err := sdk.Config{Settings: tc.settings}.Decode(&s)
 		if err == nil || err.Error() != tc.want {
 			t.Errorf("Decode(%v) = %v, want %s", tc.settings, err, tc.want)
 		}
+	}
+}
+
+// TestDecodeErrorPaths names the setting at fault on every Go version:
+// encoding/json leaves map keys out of its path, list indices too
+// before Go 1.27, and names none for a type that decodes itself.
+func TestDecodeErrorPaths(t *testing.T) {
+	type item struct {
+		Color string `json:"color"`
+	}
+	var s struct {
+		Items []item          `json:"items"`
+		M     map[string]item `json:"m"`
+		When  time.Time       `json:"when"`
+	}
+	for _, tc := range []struct {
+		settings map[string]any
+		want     string
+	}{
+		{map[string]any{"items": []any{map[string]any{"color": "red"}, map[string]any{"color": 5.0}}}, `setting "items[1].color": want a string, not a number`},
+		{map[string]any{"m": map[string]any{"k": map[string]any{"color": 5.0}}}, `setting "m.k.color": want a string, not a number`},
+		{map[string]any{"when": "nope"}, `setting "when": parsing time`},
+	} {
+		err := sdk.Config{Settings: tc.settings}.Decode(&s)
+		if err == nil || !strings.HasPrefix(err.Error(), tc.want) {
+			t.Errorf("Decode(%v) = %v, want %s", tc.settings, err, tc.want)
+		}
+	}
+	var keyed struct{ IK map[int8]string }
+	for k, want := range map[string]string{
+		"x":   `setting "IK": key x: want a whole number`,
+		"300": `setting "IK": key 300: want a whole number from -128 to 127`,
+	} {
+		err := sdk.Config{Settings: map[string]any{"IK": map[string]any{k: "v"}}}.Decode(&keyed)
+		if err == nil || err.Error() != want {
+			t.Errorf("key %s: Decode = %v, want %s", k, err, want)
+		}
+	}
+	m := map[string]int{}
+	err := sdk.Config{Settings: map[string]any{"a": 1.0, "b": "x"}}.Decode(&m)
+	if want := `setting "b": want a whole number, not a string`; err == nil || err.Error() != want {
+		t.Errorf("map: Decode = %v, want %s", err, want)
 	}
 }
 
