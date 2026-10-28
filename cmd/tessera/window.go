@@ -178,7 +178,7 @@ func run(window *app.Window, plugins *pluginhost.Manager, pluginDir string, cfg 
 			}
 			select {
 			case err := <-layouts.done:
-				toast.Show("Layout not saved; it applies until the config file changes or tessera restarts: " + err.Error())
+				toast.Show(layoutNotSaved(err))
 			default:
 			}
 			w.takeReload()
