@@ -178,7 +178,7 @@ func run(window *app.Window, plugins *pluginhost.Manager, pluginDir string, cfg 
 			}
 			select {
 			case err := <-layouts.done:
-				toast.Show(layoutNotSaved(err))
+				toast.Show("Layout not saved: " + err.Error())
 			default:
 			}
 			w.takeReload()

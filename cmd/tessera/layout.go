@@ -3,7 +3,6 @@
 package main
 
 import (
-	"errors"
 	"log"
 	"os"
 	"path/filepath"
@@ -325,14 +324,4 @@ func (w *windowConfig) change(a ui.Action) bool {
 	// or stops no plugin brings no other frame.
 	w.redraw()
 	return true
-}
-
-// layoutNotSaved is the message for a layout change that could not be
-// saved. One the file changed under is dropped once the file is read,
-// so it is not said to apply.
-func layoutNotSaved(err error) string {
-	if errors.Is(err, config.ErrChanged) {
-		return "Layout not saved: the config file was edited meanwhile, and its layout applies"
-	}
-	return "Layout not saved; it applies until the config file changes or tessera restarts: " + err.Error()
 }

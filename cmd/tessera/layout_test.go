@@ -5,7 +5,6 @@ package main
 import (
 	"context"
 	"errors"
-	"fmt"
 	"image"
 	"os"
 	"path/filepath"
@@ -395,15 +394,5 @@ func TestWindowConfigChange(t *testing.T) {
 	}
 	if layouts.last != 1 {
 		t.Errorf("%d saves, want 1", layouts.last)
-	}
-}
-
-// A change the file changed under is not said to apply.
-func TestLayoutNotSaved(t *testing.T) {
-	if msg := layoutNotSaved(fmt.Errorf("saving: %w", config.ErrChanged)); strings.Contains(msg, "it applies") {
-		t.Errorf("file changed: %q says the change applies", msg)
-	}
-	if msg := layoutNotSaved(errors.New("disk full")); !strings.Contains(msg, "it applies until") || !strings.Contains(msg, "disk full") {
-		t.Errorf("other error: %q", msg)
 	}
 }
