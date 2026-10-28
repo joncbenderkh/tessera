@@ -9,9 +9,13 @@ import (
 	"math"
 	"time"
 
+	"gioui.org/f32"
 	"gioui.org/font"
 	"gioui.org/gesture"
+	"gioui.org/io/event"
 	"gioui.org/io/key"
+	"gioui.org/io/pointer"
+	"gioui.org/io/semantic"
 	"gioui.org/layout"
 	"gioui.org/op"
 	"gioui.org/op/clip"
@@ -33,10 +37,38 @@ var menuItems = [...]struct {
 	{"Disable panel", ActionDisable},
 }
 
+// editMode is how a tile shows the grid's edit mode.
+type editMode int
+
+const (
+	editOff  editMode = iota
+	editOn            // in edit mode, with the panels where they are
+	editMove          // in edit mode, and the panel can move
+)
+
+// dragKind is what dragging a tile does.
+type dragKind int
+
+const (
+	dragNone   dragKind = iota
+	dragMove            // the head, to move the panel
+	dragResize          // the corner handle, to resize it
+)
+
 // tile is one panel's frame: its head, with the title, the plugin on
 // hover, and the options menu, and a body for its state: a live panel's
-// view, or why it has none.
+// view, or why it has none. In edit mode, the head has a grip and moves
+// the panel, and a handle in the corner resizes it.
 type tile struct {
+	move    gesture.Drag // the head, in edit mode
+	resize  gesture.Drag // the corner handle
+	grip    bool         // its address tags the head for the keyboard in edit mode
+	drag    dragKind     // the drag under way
+	dragAt  f32.Point    // where it started, in the dragged area
+	dragBy  f32.Point    // how far it has gone, or went if dropped
+	dropped dragKind     // the drag that ended this frame
+	keys    []Action     // the arrow keys pressed this frame, in turn, as Steps and Resizes
+
 	content  viewState
 	launch   *tesserav1.DescribeResponse // the launch content is for: each answers Describe anew
 	head     gesture.Hover
@@ -112,9 +144,10 @@ func pluginInfo(s pluginhost.PanelState) string {
 
 // Layout draws the tile over exactly gtx's constraints and returns the
 // actions the user chose and the input for the plugin.
-func (t *tile) Layout(gtx layout.Context, th *theme.Theme, s pluginhost.PanelState, narrow bool) ([]ActionKind, []*tesserav1.HandleEventRequest) {
+func (t *tile) Layout(gtx layout.Context, th *theme.Theme, s pluginhost.PanelState, narrow bool, edit editMode) ([]ActionKind, []*tesserav1.HandleEventRequest) {
 	var actions []ActionKind
 	var events []*tesserav1.HandleEventRequest
+	t.updateEdit(gtx, edit)
 	if !gtx.Enabled() {
 		// A dialog is open. The menu's backdrop would draw over it and
 		// take its clicks, and a disabled gtx never sees them close it.
@@ -173,9 +206,12 @@ func (t *tile) Layout(gtx layout.Context, th *theme.Theme, s pluginhost.PanelSta
 	}
 	paint.FillShape(gtx.Ops, th.Surface, clip.UniformRRect(frame, rr).Op(gtx.Ops))
 	strokeRRect(gtx, frame, rr, gtx.Dp(1), border)
+	if edit != editOff {
+		dashGaps(gtx, frame, rr, gtx.Dp(1), th.Surface)
+	}
 	defer clip.UniformRRect(frame, rr).Push(gtx.Ops).Pop()
 
-	headH := t.layoutHead(gtx, th, s, kind, narrow)
+	headH := t.layoutHead(gtx, th, s, kind, narrow, edit)
 	body := gtx
 	padX := gtx.Dp(theme.Space16)
 	body.Constraints = layout.Constraints{Max: bodySize(gtx, size, headH)}
@@ -200,13 +236,116 @@ func (t *tile) Layout(gtx layout.Context, th *theme.Theme, s pluginhost.PanelSta
 		wrapped(th, s.ViewErr.Error(), theme.TextMin, th.Muted, theme.Mono).Layout(body)
 	}
 	st.Pop()
+	if edit == editMove {
+		t.resizeHandle(gtx, th)
+	}
 	return actions, events
+}
+
+// updateEdit reads the drags and arrow keys of edit mode.
+func (t *tile) updateEdit(gtx layout.Context, edit editMode) {
+	t.dropped, t.keys = dragNone, t.keys[:0]
+	// A drag whose release a disabled frame missed, as when a dialog
+	// opened during it, ends too.
+	if edit != editMove || !gtx.Enabled() {
+		t.drag = dragNone
+		t.move, t.resize = gesture.Drag{}, gesture.Drag{}
+		return
+	}
+	for _, d := range []struct {
+		gesture *gesture.Drag
+		kind    dragKind
+	}{{&t.move, dragMove}, {&t.resize, dragResize}} {
+		for {
+			e, ok := d.gesture.Update(gtx.Metric, gtx.Source, gesture.Both)
+			if !ok {
+				break
+			}
+			switch e.Kind {
+			case pointer.Press:
+				t.drag, t.dragAt, t.dragBy = d.kind, e.Position, f32.Point{}
+				gtx.Execute(key.FocusCmd{Tag: &t.grip})
+			case pointer.Drag:
+				if t.drag == d.kind {
+					t.dragBy = e.Position.Sub(t.dragAt)
+				}
+			case pointer.Release:
+				if t.drag == d.kind {
+					t.dragBy = e.Position.Sub(t.dragAt)
+					t.drag, t.dropped = dragNone, d.kind
+				}
+			case pointer.Cancel:
+				t.drag = dragNone
+			}
+		}
+	}
+	arrows := map[key.Name]image.Point{
+		key.NameLeftArrow: {-1, 0}, key.NameRightArrow: {1, 0},
+		key.NameUpArrow: {0, -1}, key.NameDownArrow: {0, 1},
+	}
+	filters := []event.Filter{key.FocusFilter{Target: &t.grip}}
+	for name := range arrows {
+		filters = append(filters, key.Filter{Focus: &t.grip, Name: name, Optional: key.ModShift})
+	}
+	for {
+		e, ok := gtx.Event(filters...)
+		if !ok {
+			break
+		}
+		if e, ok := e.(key.Event); ok && e.State == key.Press {
+			kind := ActionStep
+			if e.Modifiers.Contain(key.ModShift) {
+				kind = ActionResize
+			}
+			t.keys = append(t.keys, Action{Kind: kind, Step: arrows[e.Name]})
+		}
+	}
+}
+
+// resizeHandle draws the corner handle that resizes the panel, two short
+// diagonal strokes, and takes its drags.
+func (t *tile) resizeHandle(gtx layout.Context, th *theme.Theme) {
+	side := gtx.Dp(18)
+	at := gtx.Constraints.Max.Sub(image.Pt(side, side))
+	defer op.Offset(at).Push(gtx.Ops).Pop()
+	area := clip.Rect{Max: image.Pt(side, side)}.Push(gtx.Ops)
+	pointer.CursorNorthWestSouthEastResize.Add(gtx.Ops)
+	t.resize.Add(gtx.Ops)
+	area.Pop()
+	c := th.Muted
+	if t.drag == dragResize {
+		c = th.Accent
+	}
+	var p clip.Path
+	p.Begin(gtx.Ops)
+	end := float32(side - gtx.Dp(5))
+	for _, from := range []float32{float32(gtx.Dp(5)), end - float32(gtx.Dp(5))} {
+		p.MoveTo(f32.Pt(end, from))
+		p.LineTo(f32.Pt(from, end))
+	}
+	paint.FillShape(gtx.Ops, c, clip.Stroke{Path: p.End(), Width: float32(gtx.Dp(1.5))}.Op())
+}
+
+// dashGaps paints c over every other stretch of the straight edges of
+// the outline of r, width px wide, so it shows dashed.
+func dashGaps(gtx layout.Context, r image.Rectangle, radius, width int, c color.NRGBA) {
+	dash := gtx.Dp(5)
+	for x := r.Min.X + radius + dash; x < r.Max.X-radius; x += 2 * dash {
+		end := min(x+dash, r.Max.X-radius)
+		fillRect(gtx, image.Rect(x, r.Min.Y, end, r.Min.Y+width), c)
+		fillRect(gtx, image.Rect(x, r.Max.Y-width, end, r.Max.Y), c)
+	}
+	for y := r.Min.Y + radius + dash; y < r.Max.Y-radius; y += 2 * dash {
+		end := min(y+dash, r.Max.Y-radius)
+		fillRect(gtx, image.Rect(r.Min.X, y, r.Min.X+width, end), c)
+		fillRect(gtx, image.Rect(r.Max.X-width, y, r.Max.X, end), c)
+	}
 }
 
 // layoutHead draws the head and returns its height. The plugin popover
 // and the menu are deferred, so they draw over the tiles after this one;
 // deferring drops the grid's clip, so they clip to t.view themselves.
-func (t *tile) layoutHead(gtx layout.Context, th *theme.Theme, s pluginhost.PanelState, kind panelKind, narrow bool) int {
+func (t *tile) layoutHead(gtx layout.Context, th *theme.Theme, s pluginhost.PanelState, kind panelKind, narrow bool, edit editMode) int {
 	width := gtx.Constraints.Max.X
 	pad := gtx.Dp(theme.Space16)
 	inner := gtx
@@ -219,7 +358,11 @@ func (t *tile) layoutHead(gtx layout.Context, th *theme.Theme, s pluginhost.Pane
 		tag = recordLabel(inner, th, "stale", theme.TextMin, th.Warn, theme.Mono)
 	}
 	gap := gtx.Dp(theme.Space8)
-	titleW := max(inner.Constraints.Max.X-menu.dims.Size.X-tag.dims.Size.X-2*gap, 0)
+	gripW := 0
+	if edit == editMove {
+		gripW = gtx.Dp(gripWidth) + gap
+	}
+	titleW := max(inner.Constraints.Max.X-menu.dims.Size.X-tag.dims.Size.X-2*gap-gripW, 0)
 	tgtx := inner
 	tgtx.Constraints = layout.Constraints{Max: image.Pt(titleW, gtx.Constraints.Max.Y)}
 	name := record(tgtx, titleLabel(th, title(s)).Layout)
@@ -227,10 +370,29 @@ func (t *tile) layoutHead(gtx layout.Context, th *theme.Theme, s pluginhost.Pane
 	t.headSize = image.Pt(width, headH)
 	area := clip.Rect{Max: t.headSize}.Push(gtx.Ops)
 	t.head.Add(gtx.Ops)
+	if edit == editMove {
+		cursor := pointer.CursorGrab
+		if t.drag == dragMove {
+			cursor = pointer.CursorGrabbing
+		}
+		cursor.Add(gtx.Ops)
+		t.move.Add(gtx.Ops)
+		event.Op(gtx.Ops, &t.grip)
+		semantic.DescriptionOp("Move " + title(s) + ": arrow keys move it, Shift and arrow keys resize it").Add(gtx.Ops)
+	}
 	area.Pop()
 	hovered := t.head.Update(gtx.Source)
 
-	name.at(gtx, image.Pt(pad, (headH-name.dims.Size.Y)/2))
+	if edit == editMove {
+		grip := image.Rectangle{Max: image.Pt(gtx.Dp(gripWidth), headH)}.Add(image.Pt(pad, 0))
+		gripDots(gtx, grip, th.Muted)
+		if gtx.Focused(&t.grip) {
+			ring := gtx.Dp(2)
+			focus := image.Rect(grip.Min.X-gtx.Dp(4), (headH-gtx.Dp(22))/2, grip.Max.X+gtx.Dp(4), (headH+gtx.Dp(22))/2)
+			strokeRRect(gtx, focus, gtx.Dp(theme.RadiusSmall), ring, th.Accent)
+		}
+	}
+	name.at(gtx, image.Pt(pad+gripW, (headH-name.dims.Size.Y)/2))
 	x := width - pad - menu.dims.Size.X
 	menu.at(gtx, image.Pt(x, (headH-menu.dims.Size.Y)/2))
 	t.menuEnd = (headH + menu.dims.Size.Y) / 2
@@ -242,7 +404,7 @@ func (t *tile) layoutHead(gtx layout.Context, th *theme.Theme, s pluginhost.Pane
 	t.infoBox = image.Rectangle{}
 	pop := op.Record(gtx.Ops)
 	// ⋯ sits over the head's hover area, so hovering it counts too.
-	if (hovered || t.menu.Hovered() || gtx.Focused(&t.menu.Clickable)) && !t.open {
+	if (hovered || t.menu.Hovered() || gtx.Focused(&t.menu.Clickable)) && !t.open && t.drag == dragNone {
 		t.infoPopover(gtx, th, s, narrow)
 	}
 	if t.open {
@@ -250,6 +412,21 @@ func (t *tile) layoutHead(gtx layout.Context, th *theme.Theme, s pluginhost.Pane
 	}
 	op.Defer(gtx.Ops, pop.Stop())
 	return headH
+}
+
+// gripWidth is the width of the grip at the start of a head in edit
+// mode.
+const gripWidth unit.Dp = 8
+
+// gripDots draws the grip, ⠿: two columns of three dots, centred in r.
+func gripDots(gtx layout.Context, r image.Rectangle, c color.NRGBA) {
+	dot, space := gtx.Dp(2), gtx.Dp(4)
+	w, h := dot+space, 2*space+dot
+	at := r.Min.Add(r.Size().Sub(image.Pt(w, h)).Div(2))
+	for i := range 6 {
+		p := at.Add(image.Pt(i%2*space, i/2*space))
+		paint.FillShape(gtx.Ops, c, clip.Ellipse(image.Rectangle{Min: p, Max: p.Add(image.Pt(dot, dot))}).Op(gtx.Ops))
+	}
 }
 
 // infoPopover shows the plugin below the head's end. It takes no input,

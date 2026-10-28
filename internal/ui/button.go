@@ -28,6 +28,9 @@ type Button struct {
 	// Bare drops the border, as the tile menu and its items have, and
 	// sets the text at the start. A bare icon button is 26 dp and Muted.
 	Bare bool
+	// Inverse draws it in the background colour, for a surface in the
+	// foreground colour, such as the toast's.
+	Inverse bool
 	// Description is what the button does, for screen readers; an icon
 	// button's glyph does not say.
 	Description string
@@ -44,7 +47,13 @@ func (b *Button) Layout(gtx layout.Context, th *theme.Theme, label string) layou
 		if b.Bare && b.Icon {
 			fg = th.Muted
 		}
+		border := th.Border
 		switch {
+		case b.Inverse:
+			fg, border = th.Bg, mix(th.Bg, th.Fg, 0.45)
+			if b.Hovered() {
+				bg = mix(th.Bg, th.Fg, 0.2)
+			}
 		case b.Pressed:
 			fg, bg = th.Bg, th.Fg
 		case b.Hovered():
@@ -55,6 +64,8 @@ func (b *Button) Layout(gtx layout.Context, th *theme.Theme, label string) layou
 			size, pad = theme.TextIcon, 0
 		}
 		gtx.Constraints.Min = image.Point{}
+		// A label too long for the width given is cut short.
+		gtx.Constraints.Max.X = max(gtx.Constraints.Max.X-2*gtx.Dp(pad), 0)
 		text := recordLabel(gtx, th, label, size, fg, theme.Body)
 		if b.Draw != nil {
 			side := gtx.Sp(size)
@@ -87,7 +98,7 @@ func (b *Button) Layout(gtx layout.Context, th *theme.Theme, label string) layou
 		if b.Bare && !b.Icon {
 			at.X = gtx.Dp(pad)
 		} else if !b.Bare {
-			strokeRRect(gtx, bounds, rr, gtx.Dp(1), th.Border)
+			strokeRRect(gtx, bounds, rr, gtx.Dp(1), border)
 		}
 		text.at(gtx, at)
 		return layout.Dimensions{Size: bounds.Max}
