@@ -29,6 +29,8 @@ dialogs). Edit mode must be able to re-enable any disabled panel.
   `google.golang.org/grpc` v1.84.0 (latest as of 2026-10-15, whose
   `go.mod` declares `go 1.25.0`; `gioui.org` v0.10.3 needs 1.24). The
   local toolchain is go1.27.2 (`/usr/local/go`).
+  `github.com/shirou/gopsutil/v4` stays at v4.26.8, the last release
+  that needs no more than Go 1.24; v4.26.9 needs 1.26.
 - **GUI:** [Gio](https://gioui.org) (`gioui.org`), immediate mode. Gio needs
   cgo on Linux (Wayland/X11, EGL/Vulkan, xkbcommon), so the host binary is
   **not** `CGO_ENABLED=0`. CI needs the system dev packages, and
@@ -107,6 +109,9 @@ dialogs). Edit mode must be able to re-enable any disabled panel.
   through `internal/pluginhost`; the author guide is `docs/plugins.md`.
 - `plugins/<name>`: first-party panels, each its own `main` package.
   `plugins/internal/zones` holds the time zone names the clocks accept.
+  The system panels (`system`, `disk`, `network`, `processes`) are
+  Linux-only (`//go:build linux`); `plugins/internal/metric` is what
+  they share.
 
 ## Commands
 
@@ -167,7 +172,8 @@ backend.
 `.github/workflows/release.yml` fails unless the tag equals `v` + `VERSION`.
 It builds the host natively on linux/amd64, linux/arm64, darwin/arm64, and
 windows/amd64, cross-builds every `plugins/*` main package with
-`CGO_ENABLED=0` for the same targets, and publishes the archives with
+`CGO_ENABLED=0` for the same targets (the Linux-only ones for Linux
+alone), and publishes the archives with
 `SHA256SUMS` and generated notes as a GitHub release. On PRs that touch
 the workflow it runs the builds without publishing. The macOS host is a
 bare binary, not a signed `.app` bundle.
@@ -199,7 +205,9 @@ and callbacks, with builders for every widget (#18).
 The first first-party plugins are the text panels clock, greeting,
 and notes (#19). The calendar panel lists the rest of today's events
 from iCalendar feeds, from URLs or files, read-only (#21), and a world
-clock shows up to four time zones (#50).
+clock shows up to four time zones (#50). The system panels system,
+disk, network, and processes (#20), Linux-only, read /proc directly
+and through gopsutil.
 
 ## Git workflow
 
