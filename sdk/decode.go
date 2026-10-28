@@ -11,6 +11,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"unicode"
 )
 
 // checkKeys returns why value, as the JSON data model holds it, cannot
@@ -336,4 +337,52 @@ func mapKeyProblem(k string, t reflect.Type) string {
 func decodes(value any, t reflect.Type) bool {
 	data, err := json.Marshal(value)
 	return err == nil && json.Unmarshal(data, reflect.New(t).Interface()) == nil
+}
+
+// invalidTag returns the first struct field reachable from t, as
+// Type.Field, whose json tag names it with a name encoding/json before
+// Go 1.27 ignores, or "". Types that decode themselves are not looked
+// into.
+func invalidTag(t reflect.Type, seen map[reflect.Type]bool) string {
+	for t.Kind() == reflect.Pointer {
+		t = t.Elem()
+	}
+	if seen[t] {
+		return ""
+	}
+	seen[t] = true
+	if p := reflect.PointerTo(t); p.Implements(jsonUnmarshaler) || p.Implements(textUnmarshaler) {
+		return ""
+	}
+	switch t.Kind() {
+	case reflect.Struct:
+		for i := range t.NumField() {
+			f := t.Field(i)
+			tag := f.Tag.Get("json")
+			if tag == "-" || !f.IsExported() && !f.Anonymous {
+				continue
+			}
+			if name, _, _ := strings.Cut(tag, ","); name != "" && !validTag(name) {
+				return t.String() + "." + f.Name
+			}
+			if p := invalidTag(f.Type, seen); p != "" {
+				return p
+			}
+		}
+	case reflect.Slice, reflect.Array, reflect.Map:
+		return invalidTag(t.Elem(), seen)
+	}
+	return ""
+}
+
+// validTag reports whether encoding/json before Go 1.27 takes name, from
+// a json tag, as a field's name.
+func validTag(name string) bool {
+	for _, c := range name {
+		if !strings.ContainsRune("!#$%&()*+-./:;<=>?@[]^_{|}~ ", c) &&
+			!unicode.IsLetter(c) && !unicode.IsDigit(c) {
+			return false
+		}
+	}
+	return true
 }

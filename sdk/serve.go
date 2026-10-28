@@ -100,9 +100,11 @@ type Config struct {
 // [InvalidSettings]). On an error, v may be partly filled, so decode
 // into a fresh value rather than the plugin's live settings.
 //
-// v must be a non-nil pointer to a struct, a map, or an interface;
-// anything else is a plain error, since the fault is the plugin's, not
-// the settings'.
+// v must be a non-nil pointer to a struct, a map, or an interface, and
+// its json tag names must be valid (letters, digits, and punctuation
+// other than quotes and backslashes), since encoding/json reads others
+// differently from one Go version to the next; anything else is a
+// plain error, since the fault is the plugin's, not the settings'.
 func (c Config) Decode(v any) error {
 	rv := reflect.ValueOf(v)
 	if !rv.IsValid() || rv.Kind() != reflect.Pointer || rv.IsNil() {
@@ -114,6 +116,9 @@ func (c Config) Decode(v any) error {
 	}
 	if k := t.Kind(); k != reflect.Struct && k != reflect.Map && k != reflect.Interface {
 		return fmt.Errorf("sdk: Decode needs a pointer to a struct, a map, or an interface, not %T", v)
+	}
+	if f := invalidTag(t, map[reflect.Type]bool{}); f != "" {
+		return fmt.Errorf("sdk: Decode cannot use %T: the json tag of %s is not a valid name", v, f)
 	}
 	if problem := checkKeys(c.Settings, rv, rv.Type(), ""); problem != "" {
 		return InvalidSettings("%s", problem)

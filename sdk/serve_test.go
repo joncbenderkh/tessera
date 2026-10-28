@@ -510,6 +510,35 @@ func TestDecodeNamesListElements(t *testing.T) {
 	}
 }
 
+// TestDecodeInvalidTag refuses a json tag name encoding/json reads one
+// way before Go 1.27 and another after, at any depth.
+func TestDecodeInvalidTag(t *testing.T) {
+	type inner struct {
+		Step int `json:"💡"`
+	}
+	var s struct{ Items []inner }
+	err := sdk.Config{Settings: map[string]any{}}.Decode(&s)
+	if err == nil || !strings.Contains(err.Error(), "inner.Step") || strings.Contains(err.Error(), "setting") {
+		t.Errorf("Decode = %v, want the SDK's own error naming inner.Step", err)
+	}
+}
+
+// TestDecodeSkipsUnexportedTags ignores the tags inside an unexported
+// field, which encoding/json never reads.
+func TestDecodeSkipsUnexportedTags(t *testing.T) {
+	var s struct {
+		X    int
+		meta struct {
+			Y int `json:"💡"`
+		}
+	}
+	err := sdk.Config{Settings: map[string]any{"X": 1.0}}.Decode(&s)
+	if err != nil || s.X != 1 {
+		t.Errorf("Decode = %v, X %d, want X 1", err, s.X)
+	}
+	_ = s.meta
+}
+
 func TestDecodeMisuseIsNotASettingsError(t *testing.T) {
 	var s struct{}
 	for _, v := range []any{s, nil, (*struct{})(nil), &[]int{}, new(string)} {

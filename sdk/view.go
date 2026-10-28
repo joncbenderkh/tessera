@@ -23,9 +23,10 @@ func (v View) proto() *tesserav1.View {
 	return &tesserav1.View{Title: v.Title, Body: protoOf(v.Body)}
 }
 
-// Widget is one node of a view; nil, or a nil builder, is none. Build one with [Text], [Stat], [Gauge],
-// [Sparkline], [Table], [List], [Row], [Column], or [Raw]. The builders'
-// methods change the widget and return it, so calls chain:
+// Widget is one node of a view; nil, or a nil builder, is none. Build
+// one with [Text], [Stat], [Gauge], [Sparkline], [Table], [List],
+// [Row], [Column], or [Raw]. The builders' methods change the widget
+// and return it, so calls chain:
 //
 //	sdk.Stat("CPU", "24.8").Unit("%").Caption("4 cores")
 type Widget interface {
