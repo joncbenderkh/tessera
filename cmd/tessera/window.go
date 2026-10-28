@@ -235,6 +235,7 @@ func run(window *app.Window, plugins *pluginhost.Manager, pluginDir string, cfg 
 				top += dims.Size.Y
 				actions = append(actions, chosen...)
 			}
+			grid.Covered = editing && bar.MenuShown()
 			content := behind
 			content.Constraints = layout.Exact(image.Pt(gtx.Constraints.Max.X, max(gtx.Constraints.Max.Y-top, 0)))
 			st := op.Offset(image.Pt(0, top)).Push(gtx.Ops)

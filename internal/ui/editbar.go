@@ -247,6 +247,9 @@ func (b *EditBar) MenuOpened() bool { return b.opened }
 // Adding reports whether Add panel…'s menu is open.
 func (b *EditBar) Adding() bool { return b.add.open }
 
+// MenuShown reports whether one of its menus is open.
+func (b *EditBar) MenuShown() bool { return b.more.open || b.add.open }
+
 // Close closes the bar's menus, as when edit mode ends.
 func (b *EditBar) Close() { b.more.open, b.add.open = false, false }
 

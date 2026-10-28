@@ -177,6 +177,27 @@ func TestEditKeys(t *testing.T) {
 	}
 }
 
+// A menu over the grid, opened by a click, leaves the head focused but
+// takes the arrow keys from it.
+func TestEditKeysCovered(t *testing.T) {
+	var r input.Router
+	cfg := gridConfig([]config.Panel{panel("a", 0, 0, 1, 1)})
+	g := editGrid(&r, cfg)
+	frame(&r, g, cfg, live("a"), time.Now(), click(g.placed["a"].Min.Add(image.Pt(60, 22)))...)
+	down := key.Event{Name: key.NameDownArrow, State: key.Press}
+	g.Covered = true
+	frame(&r, g, cfg, live("a"), time.Now())
+	if actions := frame(&r, g, cfg, live("a"), time.Now(), down); len(actions) != 0 {
+		t.Errorf("covered: actions %v, want none", actions)
+	}
+	g.Covered = false
+	frame(&r, g, cfg, live("a"), time.Now())
+	want := []Action{{Kind: ActionStep, Panel: "a", Step: image.Pt(0, 1)}}
+	if actions := frame(&r, g, cfg, live("a"), time.Now(), down); !slices.Equal(actions, want) {
+		t.Errorf("uncovered: actions %v, want %v", actions, want)
+	}
+}
+
 // A panel the keyboard moves out of sight is scrolled into view, and
 // keeps the focus.
 func TestEditKeysFollowThePanel(t *testing.T) {

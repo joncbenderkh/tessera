@@ -68,6 +68,7 @@ type tile struct {
 	dragBy  f32.Point    // how far it has gone, or went if dropped
 	dropped dragKind     // the drag that ended this frame
 	keys    []Action     // the arrow keys pressed this frame, in turn, as Steps and Resizes
+	covered bool         // a menu over the grid takes the arrow keys
 
 	content  viewState
 	launch   *tesserav1.DescribeResponse // the launch content is for: each answers Describe anew
@@ -286,8 +287,10 @@ func (t *tile) updateEdit(gtx layout.Context, edit editMode) {
 		key.NameUpArrow: {0, -1}, key.NameDownArrow: {0, 1},
 	}
 	filters := []event.Filter{key.FocusFilter{Target: &t.grip}}
-	for name := range arrows {
-		filters = append(filters, key.Filter{Focus: &t.grip, Name: name, Optional: key.ModShift})
+	if !t.covered {
+		for name := range arrows {
+			filters = append(filters, key.Filter{Focus: &t.grip, Name: name, Optional: key.ModShift})
+		}
 	}
 	for {
 		e, ok := gtx.Event(filters...)

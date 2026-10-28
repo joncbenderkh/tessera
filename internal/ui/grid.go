@@ -103,6 +103,9 @@ type Grid struct {
 	// them, by the corner to resize them, and moved and resized with the
 	// arrow keys, while the grid shows all the config's columns.
 	Edit bool
+	// Covered is set while a menu over the grid takes the keys, so the
+	// arrow keys move no panel behind it.
+	Covered bool
 
 	fits   bool   // the last Layout showed all the config's columns
 	wide   bool   // the last Layout's config has more columns than any window shows
@@ -360,6 +363,7 @@ func (g *Grid) Layout(gtx layout.Context, th *theme.Theme, cfg config.Config, st
 		tgtx.Constraints = layout.Exact(r.Size())
 		st := op.Offset(r.Min).Push(gtx.Ops)
 		wasOpen := t.open
+		t.covered = g.Covered
 		kinds, events := t.Layout(tgtx, th, s, width <= Narrow, mode)
 		for _, k := range kinds {
 			actions = append(actions, Action{Kind: k, Panel: c.ID})
