@@ -116,7 +116,9 @@ freely is #36.
   move it a column sideways or past the next panel up or down, and
   Shift with the arrow keys makes it wider, narrower, taller, or
   shorter. Moving up or down trades places with that panel; moving
-  sideways, like dragging, moves the panels in its way below it.
+  sideways or growing wider, like dragging, moves the panels in its
+  way below it, and the panel itself below one that starts above it
+  in its new columns.
 - **Disable panel** in a panel's menu, in edit mode or not, sets
   `enabled: false`, with an Undo in the message that follows, for the
   panel disabled last. In edit mode, the bar above the grid has an
@@ -132,12 +134,14 @@ freely is #36.
 Moving and resizing need the window to show all the grid's columns;
 in a narrower window, edit mode can still disable, enable, and add
 panels. No window shows more than 7 columns, so a grid with more can
-be edited only in the file.
+be moved and resized only in the file.
 
 A change is saved at once. One that could not be saved stays in the
 window, as [above](#configuration) says, and repeating it does not
 save it, since the window already shows it; the next change that is
-saved, or the next edit to the file, drops it.
+saved, or the next edit to the file, drops it. If the file was edited
+while the change was being saved, the window takes the file's layout
+as soon as it reads it.
 
 ### Settings
 
