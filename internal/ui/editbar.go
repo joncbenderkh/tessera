@@ -331,7 +331,18 @@ func (p *popover) layout(gtx layout.Context, th *theme.Theme, labels []string) {
 	}
 	p.labels = labels
 	if len(p.items) != len(labels) {
+		// The list changed while open: the focus goes to the item in
+		// the place of the one that had it.
+		focused := -1
+		for i := range p.items {
+			if gtx.Focused(&p.items[i].Clickable) {
+				focused = i
+			}
+		}
 		p.items = make([]Button, len(labels))
+		if focused >= 0 && len(p.items) > 0 {
+			gtx.Execute(key.FocusCmd{Tag: &p.items[min(focused, len(p.items)-1)].Clickable})
+		}
 	}
 	pop := op.Record(gtx.Ops)
 	defer func() { op.Defer(gtx.Ops, pop.Stop()) }()

@@ -460,6 +460,33 @@ func TestEditBarEnableMenuKeepsTheFocus(t *testing.T) {
 	}
 }
 
+// A list that changes while its menu is open, as when Add panel… lists
+// the plugins anew, keeps the focus in the menu.
+func TestEditBarMenuKeepsTheFocusOnANewList(t *testing.T) {
+	cfg := gridConfig([]config.Panel{panel("a", 0, 0, 1, 1)})
+	plugins := []string{"clock"}
+	var r input.Router
+	var b EditBar
+	layoutBar := func(events ...event.Event) []Action {
+		for _, e := range events {
+			r.Queue(e)
+		}
+		gtx := context(&r, image.Pt(1440, 900), time.Now())
+		_, actions := b.Layout(gtx, testTheme, cfg, plugins, HintMove)
+		r.Frame(gtx.Ops)
+		return actions
+	}
+	layoutBar()
+	r.Source().Execute(key.FocusCmd{Tag: &b.add.button.Clickable})
+	layoutBar(pressKey(key.NameReturn)...)
+	layoutBar() // the menu is drawn, its first item focused
+	plugins = []string{"clock", "notes"}
+	layoutBar()
+	if actions := layoutBar(pressKey(key.NameReturn)...); !slices.Equal(actions, []Action{{Kind: ActionAdd, Plugin: "clock"}}) {
+		t.Errorf("actions %v, want clock added", actions)
+	}
+}
+
 // A layout wider than any window is not one a wider window lets move.
 func TestEditHint(t *testing.T) {
 	for _, tc := range []struct {
