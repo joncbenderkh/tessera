@@ -120,14 +120,15 @@ numbers. How the host draws each widget is in
 
 Send each new view on `Plugin.Views` when the content changes; it
 replaces the last one. The SDK hands the host only the newest, so a
-plugin never waits for the host, and sending views faster than the
-host redraws (30 times a second) gains nothing. Do not change a view's
-widgets after sending it; the builders copy the slices they are given,
-so a plugin may reuse its own, such as a buffer of samples. Until the
-first view arrives the panel shows as starting; if none comes within
-half the heartbeat interval (2.5 seconds), the SDK sends an empty one,
-as the protocol requires. A plugin still fetching data sends a view
-with its widgets marked `.Loading()` first.
+plugin never waits for the host, and sending views faster than the host
+redraws (30 times a second) gains nothing. Do not change a view's
+widgets, table columns, or list items after sending it; the builders
+copy the slices they are given, so a plugin may reuse its own, such as a
+buffer of samples. Until the first view arrives the panel shows as
+starting; if none comes within half the heartbeat interval (2.5
+seconds), the SDK sends an empty one, as the protocol requires. A plugin
+still fetching data sends a view with its widgets marked `.Loading()`
+first.
 
 A view is limited to 1024 widgets, nested at most 16 deep, with at most
 64 columns per table and 4 MiB encoded, and its strings must be valid
@@ -161,10 +162,15 @@ func (c *counter) configure(_ context.Context, cfg sdk.Config) error {
 }
 ```
 
-An error from `Decode` or `InvalidSettings` rejects the settings: the
-panel shows the message until the user changes them. Any other error
-fails the plugin, which the host restarts, so a plugin whose data
-source is down accepts its settings and shows the outage in its view.
+A `time.Duration` field takes a number of nanoseconds, as in
+`encoding/json`; for a setting such as `5s`, decode a string and call
+`time.ParseDuration`. `Decode` may fill part of the struct before it
+finds an error, so decode into a fresh value, as above, not the plugin's
+live settings. An error from `Decode` or `InvalidSettings` rejects the
+settings: the panel shows the message until the user changes them. Any
+other error fails the plugin, which the host restarts, so a plugin whose
+data source is down accepts its settings and shows the outage in its
+view.
 
 ## Input events
 
