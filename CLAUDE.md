@@ -90,6 +90,8 @@ dialogs). Edit mode must be able to re-enable any disabled panel.
   running (`Manager.Apply` starts, stops and reconfigures panels).
   Its tests run the test binary itself as a plugin whose behaviour
   follows its file name (`plugin_test.go`).
+- `internal/plugintest`: runs a first-party plugin's test binary as the
+  plugin, through `internal/pluginhost`, for its end-to-end tests.
 - `proto/`: the plugin protocol. The `.proto` files and the Go code
   generated from them live in `proto/tessera/v1` (Go package
   `tesserav1`); `buf.yaml` and `buf.gen.yaml` sit in `proto/`. The
@@ -115,6 +117,12 @@ Use the local toolchain: `export PATH=/usr/local/go/bin:$PATH`.
 - Regenerate protocol code after editing a `.proto`: `go generate ./proto`.
   It runs `buf` and the protoc plugins through `go run`, so no `protoc`
   install is needed. Generated files are committed.
+- Refresh the clock plugin's list of time zone names from the
+  toolchain's database: `go test ./plugins/clock -run TestZoneList -update`.
+  It is not part of `go generate`, so a new Go release does not fail
+  CI's drift check. Run it with the `go.mod` minimum
+  (`GOTOOLCHAIN=go1.25.0`): CI's Windows job on that Go has no system
+  time zones, so a zone only newer releases know fails `TestZoneList`.
 - Lint the protocol (from `proto/`):
   `go run github.com/bufbuild/buf/cmd/buf@v1.74.0 lint` and
   `go run github.com/bufbuild/buf/cmd/buf@v1.74.0 format -d --exit-code`.
@@ -129,8 +137,8 @@ Use the local toolchain: `export PATH=/usr/local/go/bin:$PATH`.
   rules pinned in the workflow), a `go generate` drift check, and an
   SPDX header check. Pull requests must target `main`; CI fails on any
   other base. A separate job runs the `internal/pluginhost`,
-  `internal/config`, `internal/ui`, and `sdk` tests on macOS and
-  Windows, on both Go versions; the BSD variants of the plugin host's
+  `internal/config`, `internal/ui`, `sdk`, and `plugins` tests on macOS
+  and Windows, on both Go versions; the BSD variants of the plugin host's
   process code are only vetted (`GOOS=freebsd go vet` and so on, in the
   stable Linux job), never run. It does not run the host.
 - Plugins and `sdk/` must also build with `CGO_ENABLED=0`.
@@ -157,11 +165,11 @@ bare binary, not a signed `.app` bundle.
 
 ## Status
 
-The module and source skeleton exist (#4); `plugins/` is a
-placeholder. The backlog is tracked as GitHub issues. CI (#5), the
-release workflow (#6), the config file (#7), and plugin protocol v1
-(#8) are in place. The host launches, describes, and configures each
-enabled panel's plugin and shuts them all down on exit (#12), and
+The module and source skeleton exist (#4). The backlog is tracked as
+GitHub issues. CI (#5), the release workflow (#6), the config file
+(#7), and plugin protocol v1 (#8) are in place. The host launches,
+describes, and configures each enabled panel's plugin and shuts them
+all down on exit (#12), and
 supervises them: crashes and hangs restart with backoff, and each
 panel keeps its state and logs (#13). It reads each panel's view, from
 the Watch stream with its heartbeat or by polling Render, shows a
@@ -179,6 +187,8 @@ live tile draws its plugin's view: every widget of view schema v1, in
 activate and scroll events, and keep the row last activated (#11).
 The Go SDK serves a plugin from a description, a channel of views,
 and callbacks, with builders for every widget (#18).
+The first first-party plugins are the text panels clock, greeting,
+and notes (#19).
 
 ## Git workflow
 

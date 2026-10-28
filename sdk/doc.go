@@ -15,7 +15,7 @@
 //			views <- sdk.View{Title: "Clock", Body: sdk.Text(t.Format("15:04:05")).Size(sdk.SizeDisplay)}
 //		}
 //	}()
-//	sdk.Serve(sdk.Plugin{Name: "clock", Version: "0.1.0", Views: views})
+//	sdk.Serve(sdk.Plugin{Name: "my-clock", Version: "0.1.0", Views: views})
 //
 // The host shows only the latest view, so the SDK sends it the newest
 // one and drops any it had no time to send. docs/plugins.md is the
