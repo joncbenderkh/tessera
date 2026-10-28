@@ -3,6 +3,8 @@
 package sdk
 
 import (
+	"log"
+	"os"
 	"strings"
 	"testing"
 )
@@ -16,5 +18,26 @@ func TestCheckLimitsRefusesUnencodable(t *testing.T) {
 	}
 	if err := checkLimits(View{Body: Text("good")}.proto()); err != nil {
 		t.Errorf("checkLimits = %v, want nil", err)
+	}
+}
+
+// TestDroppedViewsLogOncePerReason logs a run of views dropped for the
+// same reason once, so a plugin that keeps sending them does not push
+// everything else out of its panel's log.
+func TestDroppedViewsLogOncePerReason(t *testing.T) {
+	var buf strings.Builder
+	log.SetOutput(&buf)
+	defer log.SetOutput(os.Stderr)
+	views := make(chan View)
+	s := newServer(Plugin{Views: views})
+	done := make(chan struct{})
+	go func() { s.receive(views); close(done) }()
+	for _, v := range []string{"bad\xff", "bad\xff", "bad\xff", "good", "bad\xff"} {
+		views <- View{Body: Text(v)}
+	}
+	close(views)
+	<-done
+	if n := strings.Count(buf.String(), "view dropped"); n != 2 {
+		t.Errorf("logged %d drops, want 2:\n%s", n, buf.String())
 	}
 }

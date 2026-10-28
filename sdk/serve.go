@@ -53,8 +53,8 @@ type Plugin struct {
 	// the SDK sends an empty view, since the protocol requires one. A view
 	// the host would refuse, over one of the limits in docs/protocol.md or
 	// not encodable (a string of invalid UTF-8), is dropped, and the
-	// reason logged to stderr, so the panel keeps the last view it
-	// accepted.
+	// reason logged to stderr, once for a run of drops with the same
+	// reason, so the panel keeps the last view it accepted.
 	// Closing Views fails the plugin, and the host restarts it. Required.
 	Views <-chan View
 
@@ -299,14 +299,20 @@ func newServer(p Plugin) *server {
 }
 
 // receive keeps the latest view from views, dropping any the host would
-// refuse, and records when views is closed.
+// refuse, and records when views is closed. A run of views dropped for
+// the same reason is logged once.
 func (s *server) receive(views <-chan View) {
+	var dropped string
 	for v := range views {
 		pv := v.proto()
 		if err := checkLimits(pv); err != nil {
-			log.Printf("sdk: view dropped: %v", err)
+			if err.Error() != dropped {
+				dropped = err.Error()
+				log.Printf("sdk: view dropped: %v", err)
+			}
 			continue
 		}
+		dropped = ""
 		s.mu.Lock()
 		s.view = pv
 		s.seq++
