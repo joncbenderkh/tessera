@@ -137,15 +137,15 @@ func TestThemeSaverWritesQueuedSavesOnce(t *testing.T) {
 func TestQueueKeepsValidConfig(t *testing.T) {
 	reloads := make(chan reload, 1)
 	valid := config.Config{Version: 1, Theme: config.ThemeLight}
-	queue(reloads, valid, nil)
-	queue(reloads, config.Config{}, errors.New("line 3: bad"))
+	queue(reloads, valid, 0, nil)
+	queue(reloads, config.Config{}, 0, errors.New("line 3: bad"))
 	r := <-reloads
 	if !r.valid || r.cfg.Theme != config.ThemeLight || r.err == nil {
 		t.Errorf("after a valid then an invalid change: %+v, want the valid config and the error", r)
 	}
 
-	queue(reloads, config.Config{}, errors.New("line 3: bad"))
-	queue(reloads, valid, nil)
+	queue(reloads, config.Config{}, 0, errors.New("line 3: bad"))
+	queue(reloads, valid, 0, nil)
 	if r := <-reloads; !r.valid || r.err != nil {
 		t.Errorf("after an invalid then a valid change: %+v, want only the valid config", r)
 	}
