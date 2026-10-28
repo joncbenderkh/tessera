@@ -7,6 +7,8 @@ import (
 	"slices"
 	"time"
 
+	"gioui.org/io/event"
+	"gioui.org/io/pointer"
 	"gioui.org/layout"
 	"gioui.org/op"
 	"gioui.org/op/clip"
@@ -131,9 +133,6 @@ func (t *Toaster) Layout(gtx layout.Context, th *theme.Theme) layout.Dimensions 
 	if t.fresh {
 		t.fresh, t.until = false, gtx.Now.Add(t.lasts())
 	}
-	if t.action != "" && len(t.next) > 0 {
-		t.until = minTime(t.until, gtx.Now.Add(ToastFor))
-	}
 	if t.text != "" && !gtx.Now.Before(t.until) {
 		t.toast = toast{}
 	}
@@ -144,6 +143,9 @@ func (t *Toaster) Layout(gtx layout.Context, th *theme.Theme) layout.Dimensions 
 		t.toast = t.next[0]
 		t.until = gtx.Now.Add(t.lasts())
 		t.next = t.next[1:]
+	}
+	if t.action != "" && len(t.next) > 0 {
+		t.until = minTime(t.until, gtx.Now.Add(ToastFor))
 	}
 	gtx.Execute(op.InvalidateCmd{At: t.until})
 
@@ -170,7 +172,18 @@ func (t *Toaster) Layout(gtx layout.Context, th *theme.Theme) layout.Dimensions 
 	size := inner.Add(image.Pt(2*padX, 2*padY))
 	at := image.Pt((area.X-size.X)/2, area.Y-gtx.Dp(theme.Space24)-size.Y)
 	defer op.Offset(at).Push(gtx.Ops).Pop()
-	paint.FillShape(gtx.Ops, th.Fg, clip.UniformRRect(image.Rectangle{Max: size}, gtx.Dp(6)).Op(gtx.Ops))
+	box := clip.UniformRRect(image.Rectangle{Max: size}, gtx.Dp(6))
+	paint.FillShape(gtx.Ops, th.Fg, box.Op(gtx.Ops))
+	// The toast takes the presses on it, so they do not reach what is
+	// below, such as a panel's head.
+	for {
+		if _, ok := gtx.Event(pointer.Filter{Target: t, Kinds: pointer.Press | pointer.Release}); !ok {
+			break
+		}
+	}
+	hit := box.Push(gtx.Ops)
+	event.Op(gtx.Ops, t)
+	hit.Pop()
 	msg.at(gtx, image.Pt(padX, padY+(inner.Y-msg.dims.Size.Y)/2))
 	t.actBox = image.Rectangle{}
 	if t.action != "" {

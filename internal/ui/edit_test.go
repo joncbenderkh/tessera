@@ -14,6 +14,7 @@ import (
 	"gioui.org/io/input"
 	"gioui.org/io/key"
 	"gioui.org/io/pointer"
+	"gioui.org/op/clip"
 
 	"github.com/joncbenderkh/tessera/internal/config"
 )
@@ -83,6 +84,18 @@ func TestLanding(t *testing.T) {
 	}
 	if cfg.Panels[0].Y != 0 || cfg.Panels[1].Y != 1 {
 		t.Errorf("cfg changed: %v", cfg.Panels)
+	}
+}
+
+// The handle covers none of the body: a drag on its last pixel does not
+// resize the panel.
+func TestEditResizeHandleLeavesTheBody(t *testing.T) {
+	var r input.Router
+	cfg := gridConfig([]config.Panel{panel("a", 0, 0, 1, 1)})
+	g := editGrid(&r, cfg)
+	body := g.placed["a"].Max.Sub(image.Pt(17, 17))
+	if actions := frame(&r, g, cfg, live("a"), time.Now(), drag(body, body.Add(image.Pt(349, 204)))...); len(actions) != 0 {
+		t.Errorf("actions %v, want none", actions)
 	}
 }
 
@@ -270,8 +283,19 @@ func TestEditBar(t *testing.T) {
 	if layoutBar(); r.Source().Focused(&b.add.button.Clickable) {
 		t.Error("Add panel focused after a click on an item")
 	}
-	// Chosen with the keyboard, the focus goes back to Add panel….
+	// Nor after a click on the first item, which a click does not focus.
 	layoutBar(click(center(b.boxes[len(b.boxes)-1]))...)
+	layoutBar()
+	first := b.add.box.Min.Add(image.Pt(20, 6+16))
+	if actions := layoutBar(click(first)...); !slices.Equal(actions, []Action{{Kind: ActionAdd, Plugin: "clock"}}) {
+		t.Errorf("Add first: actions %v", actions)
+	}
+	if layoutBar(); r.Source().Focused(&b.add.button.Clickable) {
+		t.Error("Add panel focused after a click on the first item")
+	}
+	// Chosen with the keyboard, the focus goes back to Add panel….
+	r.Source().Execute(key.FocusCmd{Tag: &b.add.button.Clickable})
+	layoutBar(pressKey(key.NameReturn)...)
 	layoutBar() // the menu is drawn, its first item focused
 	if actions := layoutBar(pressKey(key.NameReturn)...); !slices.Equal(actions, []Action{{Kind: ActionAdd, Plugin: "clock"}}) {
 		t.Errorf("Add by key: actions %v", actions)
@@ -320,6 +344,42 @@ func TestEditBarEnableKeepsTheFocus(t *testing.T) {
 	layoutBar()
 	if !r.Source().Focused(&b.enable["d"].Clickable) {
 		t.Error("Enable d, now where Enable c was, not focused")
+	}
+}
+
+// A choice from Enable… by key leaves the focus on Enable…, or on Add
+// panel once Enable… goes with it.
+func TestEditBarEnableMenuKeepsTheFocus(t *testing.T) {
+	var panels []config.Panel
+	for _, id := range []string{"a", "b", "c", "d", "e"} {
+		panels = append(panels, disabled(panel(id, 0, 0, 1, 1)))
+	}
+	cfg := gridConfig(panels)
+	var r input.Router
+	var b EditBar
+	layoutBar := func(events ...event.Event) []Action {
+		for _, e := range events {
+			r.Queue(e)
+		}
+		gtx := context(&r, image.Pt(1440, 900), time.Now())
+		_, actions := b.Layout(gtx, testTheme, cfg, []string{"clock"}, HintMove)
+		r.Frame(gtx.Ops)
+		return actions
+	}
+	layoutBar()
+	r.Source().Execute(key.FocusCmd{Tag: &b.more.button.Clickable})
+	layoutBar(pressKey(key.NameReturn)...)
+	layoutBar()
+	if !b.more.open {
+		t.Fatal("Enable… did not open its menu")
+	}
+	if actions := layoutBar(pressKey(key.NameReturn)...); !slices.Equal(actions, []Action{{Kind: ActionEnable, Panel: "d"}}) {
+		t.Fatalf("actions %v", actions)
+	}
+	cfg.Panels[3].Enabled = nil
+	layoutBar()
+	if !r.Source().Focused(&b.add.button.Clickable) {
+		t.Error("Add panel… not focused once Enable… went")
 	}
 }
 
@@ -558,5 +618,59 @@ func TestToasterAction(t *testing.T) {
 	layoutToast(4*time.Minute + time.Second)
 	if layoutToast(4*time.Minute + time.Second + ToastFor); toast.Text() != "Layout not saved for a" {
 		t.Errorf("showing %q %v after a message came, want the message", toast.Text(), ToastFor)
+	}
+	// So does one waiting when the action's toast comes from the queue.
+	toast.Show("one")
+	layoutToast(5 * time.Minute)
+	toast.Show("two")
+	toast.ShowAction("Panel c disabled", "Undo", "c")
+	layoutToast(5*time.Minute + ToastFor)
+	if toast.Text() != "Panel c disabled" {
+		t.Fatalf("showing %q, want the action's", toast.Text())
+	}
+	if layoutToast(5*time.Minute + 2*ToastFor); toast.Text() != "two" {
+		t.Errorf("showing %q %v after the action's toast came, want two", toast.Text(), ToastFor)
+	}
+}
+
+// A press on the toast, beside its action, does not reach what is
+// below it.
+func TestToasterTakesPresses(t *testing.T) {
+	var r input.Router
+	var toast Toaster
+	var below int // the presses that reach the area below
+	layoutAll := func(events ...event.Event) {
+		for _, e := range events {
+			r.Queue(e)
+		}
+		gtx := context(&r, image.Pt(800, 600), time.Now())
+		for {
+			e, ok := gtx.Event(pointer.Filter{Target: &below, Kinds: pointer.Press})
+			if !ok {
+				break
+			}
+			if e, ok := e.(pointer.Event); ok && e.Kind == pointer.Press {
+				below++
+			}
+		}
+		area := clip.Rect{Max: image.Pt(800, 600)}.Push(gtx.Ops)
+		event.Op(gtx.Ops, &below)
+		area.Pop()
+		toast.Layout(gtx, testTheme)
+		r.Frame(gtx.Ops)
+	}
+	toast.ShowAction("Panel notes disabled", "Undo", "notes")
+	layoutAll()
+	beside := image.Pt(toast.actBox.Min.X-4, toast.actBox.Min.Y+toast.actBox.Dy()/2)
+	layoutAll(click(beside)...)
+	layoutAll()
+	if below != 0 {
+		t.Errorf("%d presses on the toast reached the area below", below)
+	}
+	// One away from the toast still does.
+	layoutAll(click(image.Pt(10, 10))...)
+	layoutAll()
+	if below != 1 {
+		t.Errorf("%d presses reached the area below, want 1", below)
 	}
 }

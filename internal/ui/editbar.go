@@ -40,7 +40,10 @@ type EditBar struct {
 	// with the panel it enabled, whose focus the button there now
 	// takes; 0 if none went.
 	refocus int
-	opened  bool // the last Layout opened a menu
+	// refocusMore moves the focus back to Enable… after a choice from
+	// its menu, or to Add panel… if Enable… went with it.
+	refocusMore bool
+	opened      bool // the last Layout opened a menu
 }
 
 // inlineEnable is how many disabled panels get an Enable button of
@@ -119,6 +122,14 @@ func (b *EditBar) Layout(gtx layout.Context, th *theme.Theme, cfg config.Config,
 		gtx.Execute(key.FocusCmd{Tag: &order[min(b.refocus, len(order))-1].Clickable})
 		b.refocus = 0
 	}
+	if b.refocusMore {
+		tag := &b.add.button.Clickable
+		if len(rest) > 0 {
+			tag = &b.more.button.Clickable
+		}
+		gtx.Execute(key.FocusCmd{Tag: tag})
+		b.refocusMore = false
+	}
 	// Focus moves on only from a button the keyboard pressed: a click
 	// leaves it alone.
 	for k, id := range inline {
@@ -135,10 +146,7 @@ func (b *EditBar) Layout(gtx layout.Context, th *theme.Theme, cfg config.Config,
 	was := b.more.open || b.add.open
 	if id, keyed, ok := b.more.update(gtx, &b.add); ok {
 		actions = append(actions, Action{Kind: ActionEnable, Panel: id})
-		if keyed {
-			// Enable… goes too once few enough panels are disabled.
-			b.refocus = len(inline) + 1
-		}
+		b.refocusMore = keyed
 	}
 	if plugin, keyed, ok := b.add.update(gtx, &b.more); ok {
 		actions = append(actions, Action{Kind: ActionAdd, Plugin: plugin})
@@ -265,7 +273,9 @@ type popover struct {
 func (p *popover) update(gtx layout.Context, other *popover) (string, bool, bool) {
 	if p.button.Clicked(gtx) {
 		p.open = !p.open
-		p.focus = p.open
+		// Its first item takes the focus only if a key opened it, as a
+		// click does not focus the button.
+		p.focus = p.open && gtx.Focused(&p.button.Clickable)
 		if p.open {
 			other.open = false
 		}

@@ -303,9 +303,10 @@ func (t *tile) updateEdit(gtx layout.Context, edit editMode) {
 }
 
 // resizeHandle draws the corner handle that resizes the panel, two short
-// diagonal strokes, and takes its drags.
+// diagonal strokes, and takes its drags. It fills the corner the body's
+// padding leaves, so it covers none of the body.
 func (t *tile) resizeHandle(gtx layout.Context, th *theme.Theme) {
-	side := gtx.Dp(18)
+	side := gtx.Dp(theme.Space16)
 	at := gtx.Constraints.Max.Sub(image.Pt(side, side))
 	defer op.Offset(at).Push(gtx.Ops).Pop()
 	area := clip.Rect{Max: image.Pt(side, side)}.Push(gtx.Ops)
