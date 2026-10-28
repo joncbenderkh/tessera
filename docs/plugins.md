@@ -8,6 +8,9 @@ other languages follow [the protocol](protocol.md) directly.
 
 `sdk/example/counter` is a complete plugin; this page walks through it.
 
+The SDK, like the rest of tessera, is licensed GPL-3.0-or-later, so a
+plugin built with it and distributed is covered by the GPL too.
+
 ## A first plugin
 
 ```go
