@@ -577,6 +577,52 @@ func TestUpdateLeavesAFileThatChanged(t *testing.T) {
 	}
 }
 
+func TestUpdateSavesOverTheSameContents(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		save func(path string, data []byte) error
+	}{
+		{"touched", func(path string, _ []byte) error {
+			later := time.Now().Add(time.Hour)
+			return os.Chtimes(path, later, later)
+		}},
+		{"replaced", func(path string, data []byte) error {
+			tmp := path + ".new"
+			if err := os.WriteFile(tmp, data, 0o600); err != nil {
+				return err
+			}
+			return os.Rename(tmp, path)
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), FileName)
+			if err := Save(path, Default()); err != nil {
+				t.Fatal(err)
+			}
+			original, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			err = Update(path, func(c *Config) error {
+				c.Theme = ThemeLight
+				// An editor saves the file unchanged while the update is
+				// under way.
+				return tc.save(path, original)
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			c, _, err := Read(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if c.Theme != ThemeLight {
+				t.Errorf("theme %q, want the update's %q", c.Theme, ThemeLight)
+			}
+		})
+	}
+}
+
 func TestMarshalQuotesTheme(t *testing.T) {
 	c := Default()
 	c.Theme = "x\npanels: [a]"
