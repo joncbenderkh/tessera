@@ -99,6 +99,44 @@ func TestEditResizeHandleLeavesTheBody(t *testing.T) {
 	}
 }
 
+// touchDrag is a finger moved from one point to another in steps, each
+// read in a frame of its own.
+func touchDrag(from, to image.Point) []event.Event {
+	ev := []event.Event{pointer.Event{Kind: pointer.Press, Source: pointer.Touch, Position: pt(from)}}
+	for i := 1; i <= 10; i++ {
+		p := from.Add(to.Sub(from).Mul(i).Div(10))
+		ev = append(ev, pointer.Event{Kind: pointer.Move, Source: pointer.Touch, Position: pt(p)})
+	}
+	return append(ev, pointer.Event{Kind: pointer.Release, Source: pointer.Touch, Position: pt(to)})
+}
+
+func TestEditTouchDrag(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		from, by image.Point
+		want     Cell
+	}{
+		{"move", image.Pt(60, 22), image.Pt(2*349+100, 204+60), cell("a", 2, 1, 1, 1)},
+		{"resize", image.Pt(335-9, 190-9), image.Pt(349, 204), cell("a", 0, 0, 2, 2)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var r input.Router
+			cfg := gridConfig([]config.Panel{panel("a", 0, 0, 1, 1), panel("b", 1, 0, 1, 1)})
+			g := editGrid(&r, cfg)
+			// The grid's scroll must not take a drag that moves down.
+			from := g.placed["a"].Min.Add(tc.from)
+			var actions []Action
+			for _, e := range touchDrag(from, from.Add(tc.by)) {
+				actions = append(actions, frame(&r, g, cfg, live("a", "b"), time.Now(), e)...)
+			}
+			want := []Action{{Kind: ActionPlace, Panel: "a", Cell: tc.want}}
+			if !slices.Equal(actions, want) {
+				t.Errorf("actions %v, want %v", actions, want)
+			}
+		})
+	}
+}
+
 func TestEditDragResizes(t *testing.T) {
 	var r input.Router
 	cfg := gridConfig([]config.Panel{panel("a", 0, 0, 1, 1)})

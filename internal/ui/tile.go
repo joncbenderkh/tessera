@@ -264,6 +264,8 @@ func (t *tile) updateEdit(gtx layout.Context, edit editMode) {
 			switch e.Kind {
 			case pointer.Press:
 				t.drag, t.dragAt, t.dragBy = d.kind, e.Position, f32.Point{}
+				// Before the grid's scroll can take a touch drag.
+				gtx.Execute(pointer.GrabCmd{Tag: d.gesture, ID: e.PointerID})
 				gtx.Execute(key.FocusCmd{Tag: &t.grip})
 			case pointer.Drag:
 				if t.drag == d.kind {
