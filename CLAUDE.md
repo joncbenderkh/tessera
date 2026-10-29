@@ -123,6 +123,11 @@ Use the local toolchain: `export PATH=/usr/local/go/bin:$PATH`.
   CI's drift check. Run it with the `go.mod` minimum
   (`GOTOOLCHAIN=go1.25.0`): CI's Windows job on that Go has no system
   time zones, so a zone only newer releases know fails `TestZoneList`.
+- Refresh the calendar plugin's table of Windows time zone names from
+  CLDR (it downloads `windowsZones.xml` at the release pinned in
+  `plugins/calendar/windowszones_test.go`):
+  `go test ./plugins/calendar -run TestWindowsZones -update`, also
+  with `GOTOOLCHAIN=go1.25.0`.
 - Lint the protocol (from `proto/`):
   `go run github.com/bufbuild/buf/cmd/buf@v1.74.0 lint` and
   `go run github.com/bufbuild/buf/cmd/buf@v1.74.0 format -d --exit-code`.
@@ -188,7 +193,8 @@ activate and scroll events, and keep the row last activated (#11).
 The Go SDK serves a plugin from a description, a channel of views,
 and callbacks, with builders for every widget (#18).
 The first first-party plugins are the text panels clock, greeting,
-and notes (#19).
+and notes (#19). The calendar panel lists the rest of today's events
+from iCalendar feeds, from URLs or files, read-only (#21).
 
 ## Git workflow
 
