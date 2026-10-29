@@ -86,6 +86,16 @@ func (p *Plugin) Configure(settings map[string]any) error {
 	return err
 }
 
+// Activate sends the plugin an activate event with actionID and
+// returns its answer.
+func (p *Plugin) Activate(actionID string) error {
+	p.t.Helper()
+	_, err := p.Client.HandleEvent(p.ctx, &tesserav1.HandleEventRequest{
+		Event: &tesserav1.HandleEventRequest_Activate{Activate: &tesserav1.ActivateEvent{ActionId: actionID}},
+	})
+	return err
+}
+
 // Await reads views from the plugin's Watch stream, which the first
 // call opens, until one satisfies ok. It fails the test, with the view
 // last seen, if none does before the plugin's deadline.
