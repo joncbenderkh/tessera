@@ -198,7 +198,8 @@ The Go SDK serves a plugin from a description, a channel of views,
 and callbacks, with builders for every widget (#18).
 The first first-party plugins are the text panels clock, greeting,
 and notes (#19). The calendar panel lists the rest of today's events
-from iCalendar feeds, from URLs or files, read-only (#21).
+from iCalendar feeds, from URLs or files, read-only (#21), and a world
+clock shows up to four time zones (#50).
 
 ## Git workflow
 
