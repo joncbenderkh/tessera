@@ -104,6 +104,7 @@ dialogs). Edit mode must be able to re-enable any disabled panel.
   builders. `sdk/example/counter` is a complete plugin, tested end to end
   through `internal/pluginhost`; the author guide is `docs/plugins.md`.
 - `plugins/<name>`: first-party panels, each its own `main` package.
+  `plugins/internal/zones` holds the time zone names the clocks accept.
 
 ## Commands
 
@@ -117,8 +118,9 @@ Use the local toolchain: `export PATH=/usr/local/go/bin:$PATH`.
 - Regenerate protocol code after editing a `.proto`: `go generate ./proto`.
   It runs `buf` and the protoc plugins through `go run`, so no `protoc`
   install is needed. Generated files are committed.
-- Refresh the clock plugin's list of time zone names from the
-  toolchain's database: `go test ./plugins/clock -run TestZoneList -update`.
+- Refresh the clock plugins' list of time zone names from the
+  toolchain's database:
+  `go test ./plugins/internal/zones -run TestZoneList -update`.
   It is not part of `go generate`, so a new Go release does not fail
   CI's drift check. Run it with the `go.mod` minimum
   (`GOTOOLCHAIN=go1.25.0`): CI's Windows job on that Go has no system

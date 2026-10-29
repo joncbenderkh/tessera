@@ -47,27 +47,6 @@ func TestZoneLabel(t *testing.T) {
 	}
 }
 
-func TestLocation(t *testing.T) {
-	for _, tc := range []struct{ name, want string }{
-		{"", "Local"},
-		{"local", "Local"},
-		{"Asia/Tokyo", "Asia/Tokyo"},
-		{"asia/tokyo", "Asia/Tokyo"},
-		{"AMERICA/PORT-AU-PRINCE", "America/Port-au-Prince"},
-		{"utc", "UTC"},
-		{" Europe/Berlin ", "Europe/Berlin"},
-	} {
-		if _, got, err := location(tc.name); err != nil || got != tc.want {
-			t.Errorf("location(%q) = %q, %v; want %q", tc.name, got, err, tc.want)
-		}
-	}
-	for _, name := range []string{"Mars/Olympus", "posix/Europe/Berlin", "right/UTC"} {
-		if _, _, err := location(name); err == nil {
-			t.Errorf("location(%q) succeeded", name)
-		}
-	}
-}
-
 func TestClock(t *testing.T) {
 	p := plugintest.Launch(t, "clock")
 	if got := p.Info.GetName(); got != "clock" {
