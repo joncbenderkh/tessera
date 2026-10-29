@@ -1161,3 +1161,17 @@ func TestRowLabelIgnoresExtraCells(t *testing.T) {
 		t.Error(`want the row labelled "A, B"`)
 	}
 }
+
+func TestTileBodySize(t *testing.T) {
+	// The head is 44 dp at the normal text size, and the padding 16 dp.
+	if got, want := TileBodySize(image.Pt(338, 180), "Clock", 1), image.Pt(306, 120); got != want {
+		t.Errorf("body %v, want %v", got, want)
+	}
+	if got := TileBodySize(image.Pt(338, 180), "Clock", 2); got.Y >= 120 {
+		t.Errorf("body %v with large text, want a taller head", got)
+	}
+	view := &tesserav1.View{Body: textW("09:41")}
+	if got := ViewSize(view, 300, 1); got.X == 0 || got.X >= 300 || got.Y == 0 {
+		t.Errorf("view size %v, want the text's", got)
+	}
+}

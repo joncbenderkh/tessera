@@ -79,7 +79,9 @@ dialogs). Edit mode must be able to re-enable any disabled panel.
 - `internal/ui`: the host-owned UI drawn with Gio: the window header,
   the grid and its tiles (placement in `Arrange`, the menu, and the
   starting and error bodies), the plugins' views in them (`view*.go`),
-  the button, and the toast and dialog primitives. `internal/ui/theme`
+  the button, the toast and dialog primitives, and the measures
+  first-party plugins' tests use to check that a view fits a tile
+  (`measure.go`). `internal/ui/theme`
   holds the design tokens (dark and light palettes, spacing, radius, and
   type scales) taken from `docs/design`.
 - `internal/pluginhost`: finding, launching, describing, configuring,

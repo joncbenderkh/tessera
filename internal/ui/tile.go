@@ -178,7 +178,7 @@ func (t *tile) Layout(gtx layout.Context, th *theme.Theme, s pluginhost.PanelSta
 	headH := t.layoutHead(gtx, th, s, kind, narrow)
 	body := gtx
 	padX := gtx.Dp(theme.Space16)
-	body.Constraints = layout.Constraints{Max: image.Pt(max(size.X-2*padX, 0), max(size.Y-headH-padX, 0))}
+	body.Constraints = layout.Constraints{Max: bodySize(gtx, size, headH)}
 	st := op.Offset(image.Pt(padX, headH)).Push(gtx.Ops)
 	if kind == kindStarting || kind == kindFailing || s.View == nil || s.Info != t.launch {
 		// A new launch starts afresh: its first view's ranges are sent.
@@ -345,6 +345,13 @@ func titleLabel(th *theme.Theme, text string) material.LabelStyle {
 		Text: text, TextSize: theme.TextSmall, Color: th.Fg,
 		Font: font.Font{Typeface: theme.Body.Typeface, Weight: 150}, MaxLines: 1, Shaper: th.Shaper,
 	}
+}
+
+// bodySize is what a tile of size leaves the panel's view below a head
+// headH tall: all but the padding at its sides and bottom.
+func bodySize(gtx layout.Context, size image.Point, headH int) image.Point {
+	pad := gtx.Dp(theme.Space16)
+	return image.Pt(max(size.X-2*pad, 0), max(size.Y-headH-pad, 0))
 }
 
 // headHeight is the height of a tile head whose title and menu button
