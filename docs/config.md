@@ -22,10 +22,10 @@ kept, and leaves the file alone if it cannot read it or it changes
 during the save. If `config.yaml` is a symlink to a file, as with a
 dotfiles manager, tessera writes the file it points to and keeps the
 link; if that file's directory is read-only, as in the Nix store, the
-change is reported as not saved and lasts only until tessera restarts.
-A layout change that is not saved, there or because the file changed
-during the save, also lasts only until the file changes again, as it
-does when tessera saves the next layout change; if the file is not
+change is reported as not saved, and a theme lasts only until tessera
+restarts. A layout change that is not saved, there or because the file
+changed during the save, lasts only until the file changes again, as
+it does when tessera saves the next layout change; if the file is not
 watched, until tessera restarts.
 Changes are noticed through such links too, including a linked
 `tessera` directory, and when a link is pointed elsewhere. An edit

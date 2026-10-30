@@ -15,7 +15,8 @@ import (
 )
 
 // saveMu keeps the host's writes to the config file apart: Update gives
-// up with ErrChanged if another write lands while it runs.
+// up with ErrChanged if another write lands while it runs. Every call of
+// config.Update holds it, as update and the layout saver do.
 var saveMu sync.Mutex
 
 // applyMu keeps a layout change's save and Apply together with the
