@@ -7,8 +7,8 @@ as third-party plugins; the host treats them no differently.
 Each one's version is tessera's, from `./VERSION`. Their tests run the
 test binary as the plugin through `internal/plugintest`.
 
-`go run ./cmd/build -plugins`, from anywhere in the module, builds them
-all and installs them into the plugins directory; without `-plugins` it
+`go run ./cmd/build -plugins`, from the repository root, builds them all
+and installs them into the plugins directory; without `-plugins` it
 builds the host as well.
 
 | Plugin | Shows | Settings |

@@ -9,6 +9,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"flag"
 	"fmt"
@@ -19,22 +20,32 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"syscall"
 
 	"github.com/joncbenderkh/tessera/internal/pluginhost"
 )
 
 func main() {
 	pluginsOnly := flag.Bool("plugins", false, "build and install the plugins only, not the host")
-	run := flag.Bool("run", false, "start the host once everything is built; arguments after -- go to it")
+	run := flag.Bool("run", false, "start the host, with -dest as its plugins directory, once everything is built; arguments after -- go to it")
 	dest := flag.String("dest", pluginhost.DefaultDir(), "the plugins directory to install into")
 	flag.Parse()
 	log.SetFlags(0)
 	log.SetPrefix("build: ")
+	// A signal stops go build and leaves this to remove what it staged;
+	// one from the terminal reaches go build as well. Unlike Ignore, this
+	// does not pass on to it.
+	ctx, stop := signal.NotifyContext(context.Background(), stopSignals...)
+	defer stop()
+	if *dest == "" {
+		// Abs would read it as the working directory.
+		log.Fatal("-dest is empty")
+	}
 	if *pluginsOnly && *run {
 		log.Fatal("-run needs the host, which -plugins leaves out")
 	}
 	if flag.NArg() > 0 && !*run {
-		log.Fatalf("unexpected arguments %q: only -run passes arguments on, to the host", flag.Args())
+		log.Fatalf("unexpected arguments %q: only -run passes arguments on, to the host (-dest takes the plugins directory)", flag.Args())
 	}
 	root, err := moduleRoot()
 	if err != nil {
@@ -42,30 +53,48 @@ func main() {
 	}
 	host := filepath.Join(root, "tessera"+exeSuffix())
 	if !*pluginsOnly {
-		if err := goBuild(root, nil, "-o", host, "./cmd/tessera"); err != nil {
+		if err := goBuild(ctx, root, nil, "-o", host, "./cmd/tessera"); err != nil {
 			log.Fatalf("building the host: %v", err)
 		}
 		log.Printf("host: %s", host)
 	}
-	names, err := installPlugins(root, *dest)
+	names, err := installPlugins(ctx, root, *dest)
 	if err != nil {
 		log.Fatalf("installing the plugins: %v", err)
 	}
 	log.Printf("plugins in %s: %s", *dest, strings.Join(names, ", "))
 	if *run {
-		os.Exit(runHost(host, flag.Args()))
+		// Signals from here on go to the host; one before the check
+		// stops this, as the renames do not.
+		signals := make(chan os.Signal, len(stopSignals))
+		signal.Notify(signals, stopSignals...)
+		if ctx.Err() != nil {
+			log.Fatal("stopped before starting the host")
+		}
+		args, err := hostArgs(*dest, flag.Args())
+		if err != nil {
+			log.Fatal(err)
+		}
+		os.Exit(runHost(host, args, signals))
 	}
 }
 
+// module is tessera's module path.
+const module = "github.com/joncbenderkh/tessera"
+
 // moduleRoot is the nearest directory at or above the working directory
-// that holds a go.mod.
+// that holds a go.mod, which must be tessera's: the plugins of another
+// module must not replace tessera's.
 func moduleRoot() (string, error) {
 	dir, err := os.Getwd()
 	if err != nil {
 		return "", err
 	}
 	for {
-		if _, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil {
+		if data, err := os.ReadFile(filepath.Join(dir, "go.mod")); err == nil {
+			if modulePath(data) != module {
+				return "", fmt.Errorf("%s is not tessera's module: run this inside the tessera module", dir)
+			}
 			return dir, nil
 		}
 		parent := filepath.Dir(dir)
@@ -76,10 +105,22 @@ func moduleRoot() (string, error) {
 	}
 }
 
-// goBuild runs go build in root with env added to the environment. There
-// is no library for compiling Go, so it runs the go command.
-func goBuild(root string, env []string, args ...string) error {
-	cmd := exec.Command("go", append([]string{"build"}, args...)...)
+// modulePath is the path the module line of a go.mod gives.
+func modulePath(goMod []byte) string {
+	for line := range strings.Lines(string(goMod)) {
+		if rest, ok := strings.CutPrefix(strings.TrimSpace(line), "module"); ok && rest != strings.TrimLeft(rest, " \t") {
+			path, _, _ := strings.Cut(strings.TrimSpace(rest), "//")
+			return strings.Trim(strings.TrimSpace(path), `"`)
+		}
+	}
+	return ""
+}
+
+// goBuild runs go build in root with env added to the environment,
+// stopping it when ctx is done. There is no library for compiling Go,
+// so it runs the go command.
+func goBuild(ctx context.Context, root string, env []string, args ...string) error {
+	cmd := exec.CommandContext(ctx, "go", append([]string{"build"}, args...)...)
 	cmd.Dir = root
 	cmd.Env = append(os.Environ(), env...)
 	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
@@ -88,7 +129,12 @@ func goBuild(root string, env []string, args ...string) error {
 
 // installPlugins builds every plugin under root's plugins directory,
 // without cgo, and moves each into dest. It returns their names.
-func installPlugins(root, dest string) ([]string, error) {
+func installPlugins(ctx context.Context, root, dest string) ([]string, error) {
+	// go build runs in root, so it must not read a relative dest itself.
+	dest, err := filepath.Abs(dest)
+	if err != nil {
+		return nil, err
+	}
 	if err := os.MkdirAll(dest, 0o755); err != nil {
 		return nil, err
 	}
@@ -100,10 +146,14 @@ func installPlugins(root, dest string) ([]string, error) {
 		return nil, err
 	}
 	defer os.RemoveAll(staging)
-	if err := goBuild(root, []string{"CGO_ENABLED=0"}, "-o", staging+string(filepath.Separator), "./plugins/..."); err != nil {
+	if err := goBuild(ctx, root, []string{"CGO_ENABLED=0"}, "-o", staging+string(filepath.Separator), "./plugins/..."); err != nil {
 		return nil, err
 	}
-	return install(staging, dest)
+	names, err := install(staging, dest)
+	if err == nil && len(names) == 0 {
+		err = errors.New("go build wrote no plugins")
+	}
+	return names, err
 }
 
 // install renames every file in staging into dest and returns the
@@ -127,18 +177,50 @@ func install(staging, dest string) ([]string, error) {
 	return names, nil
 }
 
-// runHost runs the host with args until it exits, and returns its exit
-// code.
-func runHost(host string, args []string) int {
-	// An interrupt from the terminal reaches the host as well; this waits
-	// for it to shut down. Notify, unlike Ignore, does not pass on to the
-	// host.
-	signal.Notify(make(chan os.Signal, 1), os.Interrupt)
+// hostArgs is how the host is started on the plugins in dest, then with
+// the arguments given after --, which can override it.
+func hostArgs(dest string, extra []string) ([]string, error) {
+	abs, err := filepath.Abs(dest)
+	if err != nil {
+		return nil, err
+	}
+	return append([]string{"-plugins", abs}, extra...), nil
+}
+
+// stopSignals are the signals that stop the build, and the host.
+var stopSignals = []os.Signal{os.Interrupt, syscall.SIGTERM, syscall.SIGHUP}
+
+// runHost runs the host with args until it exits, passing on each
+// signal from signals, and returns its exit code.
+func runHost(host string, args []string, signals <-chan os.Signal) int {
 	cmd := exec.Command(host, args...)
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
-	err := cmd.Run()
+	// Signals reach the host from this alone, each once: one sent to the
+	// whole process group as well would end its shutdown at once, as a
+	// second one does.
+	ownGroup(cmd)
+	err := cmd.Start()
+	if err == nil {
+		done := make(chan struct{})
+		go func() {
+			for {
+				select {
+				case sig := <-signals:
+					cmd.Process.Signal(sig)
+				case <-done:
+					return
+				}
+			}
+		}()
+		err = cmd.Wait()
+		close(done)
+	}
 	var exit *exec.ExitError
 	if errors.As(err, &exit) {
+		// The shell's code for a signalled exit, as the host gives its own.
+		if status, ok := exit.Sys().(syscall.WaitStatus); ok && status.Signaled() {
+			return 128 + int(status.Signal())
+		}
 		return exit.ExitCode()
 	}
 	if err != nil {
