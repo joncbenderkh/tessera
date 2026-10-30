@@ -3,6 +3,7 @@
 package ui
 
 import (
+	"fmt"
 	"image"
 	"slices"
 	"strings"
@@ -484,6 +485,56 @@ func TestEditBarMenuKeepsTheFocusOnANewList(t *testing.T) {
 	layoutBar()
 	if actions := layoutBar(pressKey(key.NameReturn)...); !slices.Equal(actions, []Action{{Kind: ActionAdd, Plugin: "clock"}}) {
 		t.Errorf("actions %v, want clock added", actions)
+	}
+}
+
+// A menu scrolled down and closed opens again at the top: by a key,
+// with its first item focused and in view, so Return chooses it.
+func TestEditBarMenuReopensAtTheTop(t *testing.T) {
+	cfg := gridConfig([]config.Panel{panel("a", 0, 0, 1, 1)})
+	var plugins []string
+	for i := range 40 {
+		plugins = append(plugins, fmt.Sprintf("plugin%02d", i))
+	}
+	var r input.Router
+	var b EditBar
+	layoutBar := func(events ...event.Event) []Action {
+		for _, e := range events {
+			r.Queue(e)
+		}
+		gtx := context(&r, image.Pt(1440, 400), time.Now())
+		_, actions := b.Layout(gtx, testTheme, cfg, plugins, HintMove)
+		r.Frame(gtx.Ops)
+		return actions
+	}
+	layoutBar()
+	r.Source().Execute(key.FocusCmd{Tag: &b.add.button.Clickable})
+	layoutBar(pressKey(key.NameReturn)...)
+	layoutBar()
+	if !b.add.open {
+		t.Fatal("Add panel… did not open its menu")
+	}
+	b.add.list.Position.First = 30 // scrolled down
+	layoutBar()
+	r.Source().Execute(key.FocusCmd{Tag: &b.add.button.Clickable})
+	layoutBar(pressKey(key.NameReturn)...) // closes it
+	if b.add.open {
+		t.Fatal("Add panel… did not close")
+	}
+	layoutBar(pressKey(key.NameReturn)...) // opens it again
+	layoutBar()
+	if actions := layoutBar(pressKey(key.NameReturn)...); !slices.Equal(actions, []Action{{Kind: ActionAdd, Plugin: "plugin00"}}) {
+		t.Errorf("actions %v, want plugin00 added", actions)
+	}
+
+	// Opened by a click, it starts at the top too.
+	b.add.open, b.add.list.Position.First = false, 30
+	r.Source().Execute(key.FocusCmd{}) // a click does not focus the button
+	layoutBar()
+	layoutBar(click(b.add.anchor.Min.Add(b.add.anchor.Size().Div(2)))...)
+	layoutBar()
+	if !b.add.open || b.add.list.Position.First != 0 {
+		t.Errorf("clicked open %t at item %d, want open at 0", b.add.open, b.add.list.Position.First)
 	}
 }
 

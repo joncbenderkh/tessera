@@ -281,6 +281,7 @@ func (p *popover) update(gtx layout.Context, other *popover) (string, bool, bool
 		p.focus = p.open && gtx.Focused(&p.button.Clickable)
 		if p.open {
 			other.open = false
+			p.list.ScrollTo(0) // at the top, where a key focuses the first item
 		}
 	}
 	chosen, keyed, ok := "", false, false
