@@ -97,7 +97,7 @@ func TestInstallPlugins(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"calendar", "clock", "greeting", "notes", "worldclock"} {
+	for _, want := range []string{"calendar", "clock", "disk", "greeting", "network", "notes", "processes", "system", "worldclock"} {
 		if !slices.Contains(names, want) {
 			t.Errorf("installed %q, missing %q", names, want)
 		}

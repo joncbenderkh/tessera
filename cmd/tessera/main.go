@@ -50,13 +50,14 @@ func main() {
 
 	// A plugin's path must not be a bare name, which exec looks up in
 	// PATH, as -plugins . would make it.
-	dir, err := filepath.Abs(*pluginsDir)
+	pluginDir, err := filepath.Abs(*pluginsDir)
 	if err != nil {
 		log.Fatal(err)
 	}
-	plugins := pluginhost.Start(cfg, dir, log.Default())
+	plugins := pluginhost.Start(cfg, pluginDir, log.Default())
 	window := new(app.Window)
 	saver := &themeSaver{path: *configPath, done: make(chan error, 1), invalidate: window.Invalidate}
+	layouts := &layoutSaver{path: *configPath, done: make(chan error, 1), invalidate: window.Invalidate}
 	signals := make(chan os.Signal, 1)
 	// SIGHUP too: plugins run in their own process groups, so a closed
 	// terminal reaches only the host.
@@ -65,6 +66,7 @@ func main() {
 		sig := <-signals
 		signal.Stop(signals) // a second signal ends a slow shutdown at once
 		saver.wait()
+		layouts.wait()
 		plugins.Close()
 		// The shell convention for a signalled exit, so a supervisor sees
 		// why the host stopped.
@@ -74,22 +76,14 @@ func main() {
 	reloads := make(chan reload, 1)
 	go func() {
 		name := filepath.Base(*configPath)
-		err := config.Watch(context.Background(), *configPath, read, func(c config.Config, err error) {
-			if err != nil {
-				log.Print(reloadError(*configPath, err, error.Error))
-				err = reloadError(name, err, brief)
-			}
-			// Queued first, so a frame that shows the new plugins' states
-			// lays out the new config.
-			queue(reloads, c, err)
-			if err == nil {
-				plugins.Apply(c)
-			}
+		err := config.Watch(context.Background(), *configPath, read, layouts.readFile, func(c config.Config, err error) {
+			reloaded(c, err, layouts, plugins.Apply, reloads)
 			window.Invalidate()
 		})
 		if err != nil {
 			log.Printf("not watching %s for changes: %v", *configPath, err)
-			queue(reloads, config.Config{}, fmt.Errorf("%s is not watched, so edits apply only after a restart: %w", name, err))
+			layouts.unwatch()
+			queue(reloads, config.Config{}, 0, fmt.Errorf("%s is not watched, so edits apply only after a restart: %w", name, err))
 			window.Invalidate()
 		}
 	}()
@@ -102,7 +96,7 @@ func main() {
 			}
 		}()
 		window.Option(app.Title("tessera"), app.Size(unit.Dp(1440), unit.Dp(900)), app.MinSize(minWidth, minHeight))
-		err := run(window, plugins, cfg, reloads, saver)
+		err := run(window, plugins, pluginDir, cfg, reloads, saver, layouts)
 		plugins.Close()
 		if err != nil {
 			log.Fatal(err)

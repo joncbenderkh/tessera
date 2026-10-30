@@ -126,17 +126,35 @@ func (p *Plugin) Await(ok func(v *tesserav1.View) bool) {
 // order; see Await.
 func (p *Plugin) AwaitTexts(want ...string) {
 	p.t.Helper()
-	p.Await(func(v *tesserav1.View) bool { return slices.Equal(Texts(v.GetBody()), want) })
+	p.AwaitTextsFunc(func(texts []string) bool { return slices.Equal(texts, want) })
+}
+
+// AwaitTextsFunc awaits a view whose text widgets satisfy ok; see
+// Await.
+func (p *Plugin) AwaitTextsFunc(ok func(texts []string) bool) {
+	p.t.Helper()
+	p.Await(func(v *tesserav1.View) bool { return ok(Texts(v.GetBody())) })
 }
 
 // Texts returns the values of the text widgets in w, depth first.
 func Texts(w *tesserav1.Widget) []string {
-	if t := w.GetText(); t != nil {
-		return []string{t.GetValue()}
-	}
 	var texts []string
-	for _, item := range w.GetStack().GetItems() {
-		texts = append(texts, Texts(item.GetWidget())...)
+	for _, x := range Widgets(w) {
+		if t := x.GetText(); t != nil {
+			texts = append(texts, t.GetValue())
+		}
 	}
 	return texts
+}
+
+// Widgets returns w and every widget under it, depth first.
+func Widgets(w *tesserav1.Widget) []*tesserav1.Widget {
+	if w == nil {
+		return nil
+	}
+	all := []*tesserav1.Widget{w}
+	for _, item := range w.GetStack().GetItems() {
+		all = append(all, Widgets(item.GetWidget())...)
+	}
+	return all
 }

@@ -5,7 +5,12 @@ separate executable with `CGO_ENABLED=0`. They use the same protocol and SDK
 as third-party plugins; the host treats them no differently.
 
 Each one's version is tessera's, from `./VERSION`. Their tests run the
-test binary as the plugin through `internal/plugintest`.
+test binary as the plugin through `internal/plugintest`. The system
+panels (`system`, `disk`, `network`, and `processes`) run on Linux
+only: they read the system through `/proc` and
+`github.com/shirou/gopsutil/v4`, which needs no cgo, and share
+`internal/metric`: the `interval` setting, sample history, polling,
+and units.
 
 `go run ./cmd/build -plugins`, from the repository root, builds them all
 and installs them into the plugins directory; without `-plugins` it
@@ -18,6 +23,27 @@ builds the host as well.
 | `notes` | A note | `title` and `body`; a body keeps its line breaks |
 | `calendar` | The rest of today's events in iCalendar feeds, including those under way; activating one shows its details below the list, which a Hide details item closes | `sources` (required): feeds, each an `http`, `https`, or `webcal` URL, an absolute path, or a path starting with `~/`; `refresh` (`1m`–`24h`, default `15m`); `title` (default `Next events`; empty keeps it) |
 | `worldclock` | Up to four clocks to the minute, each with its label, its time zone's abbreviation, how far it is ahead of or behind local time, and its day when that is not today's | `clocks`: a list of 1 to 4, each with a `timezone` (as for `clock`; `Local` if left out) and a `label`, on one line (if left out, the city in the zone's name, or the UTC offset for a numbered `Etc/GMT` zone such as `Etc/GMT+5`, or `GMT` at zero); one local clock if `clocks` is left out or empty (`clocks:`), while `clocks: []` is rejected. `utc_offsets` (default `false`) names a zone with no letter abbreviation by its UTC offset, such as `UTC+7`, on a clock that is not compact (below) |
+| `system` | CPU utilization and memory in use, each with a sparkline of the last 60 samples | `interval` (default `2s`) |
+| `disk` | How full a file system is, on a gauge (warning from 80%, error from 95%), with the space free, its device, and its file system type | `mount` (default `/`); `interval` (default `30s`) |
+| `network` | Download and upload rates, in bits per second, each with a sparkline | `interface` (default: the physical interfaces added up, or every one but loopback if there is none); `interval` (default `2s`) |
+| `processes` | A table of processes; activating a row shows the process's details below the table, and activating it again hides them, though the row stays highlighted until another is activated | `sort`: `cpu` (default), `memory`, `pid`, or `name`; `rows`, 1 to 100 (default 10); `interval` (default `2s`) |
+
+`interval` is a duration from `1s` to `1h`, such as `2s` or `1m`.
+Changing it, or what a panel shows, clears its sparklines. A process's
+CPU is its share of all the CPUs, as in the `system` panel, so the
+column adds up to about 100% at most (each process is read at a
+slightly different moment); a process new since the last sample
+shows its CPU as —. The kernel keeps 15 bytes of a process's name;
+a longer one is its executable's, which may not be read of another
+user's processes, whose names stay cut short, as systemd-journal for
+systemd-journald. Sizes are in binary units (KiB, MiB, GiB). A
+missing mount point or interface shows in the panel, which keeps
+trying, since it may appear later; so does a directory with nothing
+mounted on it. A sample that takes longer than twice the interval
+(from 5 to 30 seconds), as on a network mount that stopped answering,
+shows as an error, and so do a process's details that take as long. A
+selected process that exits shows so once, and its details then
+close.
 
 Text settings are strings: quote one that would read as a number or
 boolean, such as `title: "2026"`, or the panel rejects it.

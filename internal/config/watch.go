@@ -31,7 +31,9 @@ const linkCheck = time.Second
 // unchanged, including the host's own Save of an identical config, are
 // ignored. from is the content the caller last read, as Read returns it;
 // if the file no longer holds it when Watch starts, that is a change too,
-// so an edit made between the two is not missed.
+// so an edit made between the two is not missed. read reads the file,
+// as os.ReadFile does if it is nil; a caller that writes the file can
+// use it to know which of its writes the content Watch reports has.
 //
 // It watches the directory rather than the file, because atomic saves
 // replace the file and editors often do the same. It watches the
@@ -41,7 +43,10 @@ const linkCheck = time.Second
 // itself is a link, the file it points to is checked every linkCheck
 // rather than watched: its directory can be as large as /nix/store, and
 // kqueue opens a file for each entry of a watched directory.
-func Watch(ctx context.Context, path string, from []byte, onChange func(Config, error)) error {
+func Watch(ctx context.Context, path string, from []byte, read func(path string) ([]byte, error), onChange func(Config, error)) error {
+	if read == nil {
+		read = os.ReadFile
+	}
 	watcher, err := fsnotify.NewWatcher()
 	if err != nil {
 		return err
@@ -110,7 +115,7 @@ func Watch(ctx context.Context, path string, from []byte, onChange func(Config, 
 			}
 		case <-settle.C:
 			follow()
-			data, err := os.ReadFile(path)
+			data, err := read(path)
 			if err != nil {
 				if err.Error() != lastErr {
 					lastErr = err.Error()

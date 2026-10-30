@@ -5,13 +5,16 @@ package ui
 import (
 	"cmp"
 	"image"
+	"math"
 	"slices"
 
+	"gioui.org/f32"
 	"gioui.org/gesture"
 	"gioui.org/io/pointer"
 	"gioui.org/layout"
 	"gioui.org/op"
 	"gioui.org/op/clip"
+	"gioui.org/op/paint"
 	"gioui.org/unit"
 
 	"github.com/joncbenderkh/tessera/internal/config"
@@ -55,41 +58,24 @@ func Columns(width unit.Dp, configured int) int {
 
 // Arrange places the enabled panels on a grid columns wide, for a config
 // whose grid is configured columns wide. Each panel keeps its column and
-// rises into rows left free above it, by disabled or removed panels, in
-// the order of its row and then its column; it stops below the first
-// panel in its way, so it never passes one. On a grid narrower than the
-// config's, the panels then flow in that reading order, as CSS grid's
-// auto-placement does, each as wide as it was or as the grid, whichever
-// is less.
+// rises into rows left free above it, as config.Compact has them. On a
+// grid narrower than the config's, the panels then flow in reading
+// order, as CSS grid's auto-placement does, each as wide as it was or as
+// the grid, whichever is less. The cells come in reading order.
 func Arrange(panels []config.Panel, configured, columns int) []Cell {
-	var order []config.Panel
-	for _, p := range panels {
+	risen := slices.Clone(panels)
+	config.Compact(risen)
+	var cells []Cell
+	for _, p := range risen {
 		if p.IsEnabled() {
-			order = append(order, p)
+			cells = append(cells, Cell{ID: p.ID, X: p.X, Y: p.Y, W: p.W, H: p.H})
 		}
 	}
 	byPlace := func(a, b Cell) int { return cmp.Or(cmp.Compare(a.Y, b.Y), cmp.Compare(a.X, b.X)) }
-	slices.SortStableFunc(order, func(a, b config.Panel) int {
-		return byPlace(Cell{X: a.X, Y: a.Y}, Cell{X: b.X, Y: b.Y})
-	})
-	cells := make([]Cell, 0, len(order))
-	for _, p := range order {
-		// It rises to just below the panels placed before it in its
-		// columns, all of which end by its own row: they come no lower
-		// in the config, enabled panels do not overlap, and they only
-		// moved up.
-		c := Cell{ID: p.ID, X: p.X, W: p.W, H: p.H}
-		for _, d := range cells {
-			if c.X < d.X+d.W && d.X < c.X+c.W {
-				c.Y = max(c.Y, d.Y+d.H)
-			}
-		}
-		cells = append(cells, c)
-	}
+	slices.SortStableFunc(cells, byPlace)
 	if columns >= configured {
 		return cells
 	}
-	slices.SortStableFunc(cells, byPlace)
 	flowed := make([]Cell, 0, len(cells))
 	row, col := 0, 0 // the auto-placement cursor, which never moves back
 	for _, c := range cells {
@@ -113,6 +99,18 @@ func Arrange(panels []config.Panel, configured, columns int) []Cell {
 // Grid lays out the panels of a config as tiles, and scrolls them when
 // they are taller than the window.
 type Grid struct {
+	// Edit is edit mode: the tiles can be dragged by the head to move
+	// them, by the corner to resize them, and moved and resized with the
+	// arrow keys, while the grid shows all the config's columns.
+	Edit bool
+	// Covered is set while a menu over the grid takes the keys, so the
+	// arrow keys move no panel behind it.
+	Covered bool
+
+	fits   bool   // the last Layout showed all the config's columns
+	wide   bool   // the last Layout's config has more columns than any window shows
+	opened bool   // the last Layout opened a tile's menu
+	follow string // the panel the keyboard moved last frame, kept in view
 	tiles  map[string]*tile
 	scroll gesture.Scroll
 	offset int                        // px scrolled down
@@ -155,7 +153,7 @@ type ActionKind int
 const (
 	// ActionConfigure is the menu's Configure… (#16).
 	ActionConfigure ActionKind = iota
-	// ActionDisable is the menu's Disable panel (#15).
+	// ActionDisable is the menu's Disable panel.
 	ActionDisable
 	// ActionRestart is the error tile's Restart.
 	ActionRestart
@@ -163,14 +161,59 @@ const (
 	ActionLogs
 	// ActionEvent is input for the panel's plugin, in Event.
 	ActionEvent
+	// ActionPlace moves or resizes the panel to Cell, from a drag in
+	// edit mode.
+	ActionPlace
+	// ActionStep moves the panel by Step, from an arrow key in edit
+	// mode: a column sideways, or past the next panel up or down, as
+	// config.Config.Step does.
+	ActionStep
+	// ActionResize makes the panel wider and taller by Step, from Shift
+	// and an arrow key in edit mode, as config.Config.Resize does.
+	ActionResize
+	// ActionEnable is the edit bar's Enable for a disabled panel.
+	ActionEnable
+	// ActionAdd is the edit bar's Add panel, with the plugin in Plugin.
+	ActionAdd
 )
 
-// Action is a request from panel Panel's tile, which the host carries
-// out.
+// Action is a request from panel Panel's tile, or from the edit bar,
+// which the host carries out.
 type Action struct {
-	Kind  ActionKind
-	Panel string
-	Event *tesserav1.HandleEventRequest // for ActionEvent
+	Kind   ActionKind
+	Panel  string
+	Event  *tesserav1.HandleEventRequest // for ActionEvent
+	Cell   Cell                          // for ActionPlace
+	Step   image.Point                   // for ActionStep and ActionResize
+	Plugin string                        // for ActionAdd
+}
+
+// Movable reports whether the last Layout let the panels move: it was in
+// edit mode, and showed all the config's columns, so the cells it showed
+// are the config's, compacted.
+func (g *Grid) Movable() bool { return g.Edit && g.fits }
+
+// MenuOpened reports whether the last Layout opened a tile's menu.
+func (g *Grid) MenuOpened() bool { return g.opened }
+
+// CloseMenus closes the tiles' menus, as when another menu opens.
+func (g *Grid) CloseMenus() {
+	for _, t := range g.tiles {
+		t.open = false
+	}
+}
+
+// EditHint is the hint for the edit bar after the last Layout: how to
+// move panels, or why they cannot move. It holds for the frame edit
+// mode starts in too, since the last Layout measured the columns.
+func (g *Grid) EditHint() string {
+	switch {
+	case g.fits:
+		return HintMove
+	case g.wide:
+		return HintWide
+	}
+	return HintNarrow
 }
 
 const (
@@ -249,6 +292,16 @@ func (g *Grid) Layout(gtx layout.Context, th *theme.Theme, cfg config.Config, st
 	g.offset += g.scroll.Update(gtx.Metric, gtx.Source, gtx.Now, gesture.Vertical,
 		pointer.ScrollRange{}, pointer.ScrollRange{Min: -g.offset, Max: overflow - g.offset})
 	g.offset = min(max(g.offset, 0), overflow)
+	// A panel the keyboard moved is scrolled into view, its top first,
+	// so it stays laid out and keeps the focus.
+	if i := slices.IndexFunc(cells, func(c Cell) bool { return c.ID == g.follow }); i >= 0 {
+		c := cells[i]
+		top := pad + c.Y*(rowH+gap)
+		bottom := top + c.H*rowH + (c.H-1)*gap
+		g.offset = min(max(g.offset, bottom+pad-area.Y), top-pad)
+		g.offset = min(max(g.offset, 0), overflow)
+	}
+	g.follow = ""
 	defer clip.Rect{Max: area}.Push(gtx.Ops).Pop()
 	g.scroll.Add(gtx.Ops)
 
@@ -265,6 +318,25 @@ func (g *Grid) Layout(gtx layout.Context, th *theme.Theme, cfg config.Config, st
 	var actions []Action
 	var opened *tile // the tile whose menu opened this frame
 	origin := image.Pt((area.X-content)/2, pad-g.offset)
+	fits := columns >= cfg.Grid.Columns
+	// The most columns any window shows, at this text size.
+	most := max(min(Columns(2*maxContent, cfg.Grid.Columns), (gtx.Dp(maxContent)+gap)/(least.X+gap)), 1)
+	wide := cfg.Grid.Columns > most
+	if fits != g.fits || wide != g.wide {
+		// The edit bar, drawn before the grid, says whether panels move.
+		gtx.Execute(op.InvalidateCmd{})
+	}
+	g.fits, g.wide = fits, wide
+	mode := editOff
+	switch {
+	case g.Movable():
+		mode = editMove
+	case g.Edit:
+		mode = editOn
+	}
+	step := image.Pt(colW+gap, rowH+gap)
+	var preview image.Rectangle // where a dragged tile would go
+	refused := false            // and it cannot go there
 	for _, c := range cells {
 		t := g.tiles[c.ID]
 		if t == nil {
@@ -291,7 +363,8 @@ func (g *Grid) Layout(gtx layout.Context, th *theme.Theme, cfg config.Config, st
 		tgtx.Constraints = layout.Exact(r.Size())
 		st := op.Offset(r.Min).Push(gtx.Ops)
 		wasOpen := t.open
-		kinds, events := t.Layout(tgtx, th, s, width <= Narrow)
+		t.covered = g.Covered
+		kinds, events := t.Layout(tgtx, th, s, width <= Narrow, mode)
 		for _, k := range kinds {
 			actions = append(actions, Action{Kind: k, Panel: c.ID})
 		}
@@ -299,9 +372,38 @@ func (g *Grid) Layout(gtx layout.Context, th *theme.Theme, cfg config.Config, st
 			actions = append(actions, Action{Kind: ActionEvent, Panel: c.ID, Event: e})
 		}
 		st.Pop()
+		if mode == editMove {
+			if t.drag != dragNone {
+				var to Cell
+				to, refused = landing(cfg, dragTarget(c, t.drag, t.dragBy, step, columns))
+				preview = image.Rectangle{Min: origin.Add(image.Pt(to.X*step.X, to.Y*step.Y))}
+				preview.Max = preview.Min.Add(image.Pt(to.W*step.X-gap, to.H*step.Y-gap))
+			}
+			if t.dropped != dragNone {
+				if to := dragTarget(c, t.dropped, t.dragBy, step, columns); to != c {
+					actions = append(actions, Action{Kind: ActionPlace, Panel: c.ID, Cell: to})
+				}
+			}
+			for _, a := range t.keys {
+				a.Panel = c.ID
+				actions = append(actions, a)
+				g.follow = c.ID
+			}
+		}
 		if t.open && !wasOpen {
 			opened = t
 		}
+	}
+	if !preview.Empty() {
+		rr := gtx.Dp(theme.RadiusLarge)
+		ink := th.Accent
+		if refused {
+			ink = th.Error
+		}
+		fill := ink
+		fill.A = 0x1a
+		paint.FillShape(gtx.Ops, fill, clip.UniformRRect(preview, rr).Op(gtx.Ops))
+		strokeRRect(gtx, preview, rr, gtx.Dp(2), ink)
 	}
 	// One menu at a time: the keyboard can reach another tile's ⋯ past
 	// an open menu's backdrop.
@@ -310,6 +412,38 @@ func (g *Grid) Layout(gtx layout.Context, th *theme.Theme, cfg config.Config, st
 			t.open = t == opened
 		}
 	}
+	g.opened = opened != nil
 	g.tiles = seen
 	return layout.Dimensions{Size: area}, actions
+}
+
+// landing is where cell to ends up once placed on cfg, with the panels
+// in its way moved and the grid compacted again, or to itself, refused,
+// if it cannot be placed there. It is where a dragged tile is shown to
+// go.
+func landing(cfg config.Config, to Cell) (_ Cell, refused bool) {
+	cfg.Panels = slices.Clone(cfg.Panels)
+	if cfg.Place(to.ID, to.X, to.Y, to.W, to.H) != nil {
+		return to, true
+	}
+	i := slices.IndexFunc(cfg.Panels, func(p config.Panel) bool { return p.ID == to.ID })
+	p := cfg.Panels[i]
+	return Cell{ID: p.ID, X: p.X, Y: p.Y, W: p.W, H: p.H}, false
+}
+
+// dragTarget is where cell c goes when its tile is dragged by by px, by
+// the head to move it or by the corner to resize it, on a grid columns
+// wide whose cells are step px apart.
+func dragTarget(c Cell, kind dragKind, by f32.Point, step image.Point, columns int) Cell {
+	dx := int(math.Round(float64(by.X) / float64(max(step.X, 1))))
+	dy := int(math.Round(float64(by.Y) / float64(max(step.Y, 1))))
+	switch kind {
+	case dragMove:
+		c.X = min(max(c.X+dx, 0), columns-c.W)
+		c.Y = max(c.Y+dy, 0)
+	case dragResize:
+		c.W = min(max(c.W+dx, 1), columns-c.X)
+		c.H = max(c.H+dy, 1)
+	}
+	return c
 }

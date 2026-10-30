@@ -31,7 +31,7 @@ const LayoutName = "Default"
 
 // Header is the window header: the app name, the layout selector, the
 // plugin status, and the Edit layout and theme toggles. The caller reads
-// the toggles' clicks and sets Edit.Pressed.
+// the toggles' clicks, and makes Edit a toggle and sets Edit.Pressed.
 type Header struct {
 	Edit  Button
 	Theme Button
@@ -68,7 +68,6 @@ func (h *Header) Layout(gtx layout.Context, th *theme.Theme, status Status) layo
 	width := gtx.Constraints.Max.X
 	gtx.Constraints = layout.Constraints{Max: image.Pt(width, gtx.Constraints.Max.Y)}
 
-	// Edit becomes a toggle when edit mode exists (#15).
 	h.Theme.Icon = true
 	editLabel := "Edit layout"
 	if h.Edit.Pressed {

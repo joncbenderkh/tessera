@@ -29,6 +29,8 @@ dialogs). Edit mode must be able to re-enable any disabled panel.
   `google.golang.org/grpc` v1.84.0 (latest as of 2026-10-15, whose
   `go.mod` declares `go 1.25.0`; `gioui.org` v0.10.3 needs 1.24). The
   local toolchain is go1.27.2 (`/usr/local/go`).
+  `github.com/shirou/gopsutil/v4` stays at v4.26.8, the last release
+  that needs no more than Go 1.24; v4.26.9 needs 1.26.
 - **GUI:** [Gio](https://gioui.org) (`gioui.org`), immediate mode. Gio needs
   cgo on Linux (Wayland/X11, EGL/Vulkan, xkbcommon), so the host binary is
   **not** `CGO_ENABLED=0`. CI needs the system dev packages, and
@@ -73,17 +75,21 @@ dialogs). Edit mode must be able to re-enable any disabled panel.
 
 - `version.go`: package `tessera`, which embeds `./VERSION` as
   `tessera.Version`.
-- `cmd/tessera`: the host (Gio window, layout, plugin manager).
+- `cmd/tessera`: the host (Gio window, layout, plugin manager). Its
+  `layout.go` saves edit mode's changes one at a time, numbered, so
+  those not yet in a config reloaded from the file are applied on top
+  of it.
 - `cmd/build`: the developer build: the host and every first-party
   plugin, installed into the plugins directory (`go run ./cmd/build`).
 - `internal/config`: loading, validating, saving, and watching the user
-  config.
+  config, and the layout changes edit mode makes (`layout.go`).
 - `internal/ui`: the host-owned UI drawn with Gio: the window header,
-  the grid and its tiles (placement in `Arrange`, the menu, and the
-  starting and error bodies), the plugins' views in them (`view*.go`),
-  the button, the toast and dialog primitives, and the measures
-  first-party plugins' tests use to check that a view fits a tile
-  (`measure.go`). `internal/ui/theme`
+  the grid and its tiles (placement in `Arrange`, the menu, the
+  starting and error bodies, and edit mode's drags and keys), the
+  edit bar, the plugins' views in them (`view*.go`), the button, the
+  toast and dialog primitives, and the measures first-party plugins'
+  tests use to check that a view fits a tile (`measure.go`).
+  `internal/ui/theme`
   holds the design tokens (dark and light palettes, spacing, radius, and
   type scales) taken from `docs/design`.
 - `internal/pluginhost`: finding, launching, describing, configuring,
@@ -109,6 +115,9 @@ dialogs). Edit mode must be able to re-enable any disabled panel.
   through `internal/pluginhost`; the author guide is `docs/plugins.md`.
 - `plugins/<name>`: first-party panels, each its own `main` package.
   `plugins/internal/zones` holds the time zone names the clocks accept.
+  The system panels (`system`, `disk`, `network`, `processes`) are
+  Linux-only (`//go:build linux`); `plugins/internal/metric` is what
+  they share.
 
 ## Commands
 
@@ -176,7 +185,8 @@ backend.
 `.github/workflows/release.yml` fails unless the tag equals `v` + `VERSION`.
 It builds the host natively on linux/amd64, linux/arm64, darwin/arm64, and
 windows/amd64, cross-builds every `plugins/*` main package with
-`CGO_ENABLED=0` for the same targets, and publishes the archives with
+`CGO_ENABLED=0` for the same targets (the Linux-only ones for Linux
+alone), and publishes the archives with
 `SHA256SUMS` and generated notes as a GitHub release. On PRs that touch
 the workflow it runs the builds without publishing. The macOS host is a
 bare binary, not a signed `.app` bundle.
@@ -193,13 +203,13 @@ panel keeps its state and logs (#13). It reads each panel's view, from
 the Watch stream with its heartbeat or by polling Render, shows a
 polled panel whose Render fails as stale, and passes input events on
 (#14). The window has its header (app name, a single "Default" layout,
-plugin status, an Edit layout button whose edit mode is #15, and a
-theme toggle), dark and light themes saved in the config, and toast
-and dialog primitives (#9). The grid lays the enabled panels out,
-compacted upward and flowed into fewer columns in narrow windows, as
-tiles with a title, the plugin on hover, an options menu whose items
-are stubs until #15 and #16, and a body for starting and failed
-panels, with Restart and Logs; config changes apply live (#10). A
+plugin status, the Edit layout toggle, and a theme toggle), dark and
+light themes saved in the config, and toast and dialog primitives
+(#9). The grid lays the enabled panels out, compacted upward and
+flowed into fewer columns in narrow windows, as tiles with a title,
+the plugin on hover, an options menu (Disable panel works; Configure…
+is a stub until #16), and a body for starting and failed panels, with
+Restart and Logs; config changes apply live (#10). A
 live tile draws its plugin's view: every widget of view schema v1, in
 `internal/ui/view*.go`, with tables and lists that scroll, send
 activate and scroll events, and keep the row last activated (#11).
@@ -208,7 +218,12 @@ and callbacks, with builders for every widget (#18).
 The first first-party plugins are the text panels clock, greeting,
 and notes (#19). The calendar panel lists the rest of today's events
 from iCalendar feeds, from URLs or files, read-only (#21), and a world
-clock shows up to four time zones (#50).
+clock shows up to four time zones (#50). The system panels system,
+disk, network, and processes (#20), Linux-only, read /proc directly
+and through gopsutil. Edit mode moves and resizes panels by dragging
+or with the arrow keys, disables them with an Undo, re-enables them
+and adds panels from a bar above the grid, and saves each change at
+once (#15).
 
 ## Git workflow
 

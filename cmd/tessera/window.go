@@ -30,23 +30,24 @@ import (
 // could not, as the toast shows it.
 type reload struct {
 	cfg   config.Config
+	seen  int // the number of the latest layout change cfg has
 	valid bool
 	err   error
 }
 
 // queue hands a change Watch reported to the window, folded into one
-// the window has not read yet: it keeps the latest valid config, which
-// Apply already runs, and the latest error, unless a valid config
-// followed it. Only Watch's goroutine calls it, so the send never
-// blocks.
-func queue(reloads chan reload, c config.Config, err error) {
+// the window has not read yet: it keeps the latest valid config, with
+// seen, which Apply already runs, and the latest error, unless a valid
+// config followed it. Only Watch's goroutine calls it, so the send
+// never blocks.
+func queue(reloads chan reload, c config.Config, seen int, err error) {
 	var r reload
 	select {
 	case r = <-reloads:
 	default:
 	}
 	if err == nil {
-		r.cfg, r.valid, r.err = c, true, nil
+		r.cfg, r.seen, r.valid, r.err = c, seen, true, nil
 	} else {
 		r.err = err
 	}
@@ -111,28 +112,50 @@ func minWindowHeight(gtx layout.Context, px int) unit.Dp {
 }
 
 // run draws the window until it is closed: the header, the grid of
-// cfg's panels below it, and the toast and dialog over both. Each
-// reload replaces cfg; one that failed keeps the last good one.
-func run(window *app.Window, plugins *pluginhost.Manager, cfg config.Config, reloads <-chan reload, saver *themeSaver) error {
+// cfg's panels below it, with the edit bar between them in edit mode,
+// and the toast and dialog over them. Each reload replaces cfg; one that
+// failed keeps the last good one. Edit mode lists the plugins in
+// pluginDir, and layouts saves its changes.
+func run(window *app.Window, plugins *pluginhost.Manager, pluginDir string, cfg config.Config, reloads <-chan reload, saver *themeSaver, layouts *layoutSaver) error {
 	go func() {
 		for range plugins.Changed() {
 			window.Invalidate()
 		}
 	}()
 	shaper := theme.NewShaper(true)
-	dark := cfg.Theme != config.ThemeLight
-	fileDark := dark // the theme config.yaml held at the latest reload
+	var toast ui.Toaster
+	w := &windowConfig{
+		cfg:      cfg,
+		dark:     cfg.Theme != config.ThemeLight,
+		fileDark: cfg.Theme != config.ThemeLight,
+		reloads:  reloads,
+		layouts:  layouts,
+		themes:   saver,
+		toast:    &toast,
+		apply:    plugins.Apply,
+		redraw:   window.Invalidate,
+	}
+	dark := w.dark // the theme th has
 	th := theme.New(dark, shaper)
 
 	shortest := minHeight // the window's least height, which large text raises
 	mode := app.Windowed
 	var (
-		ops    op.Ops
-		header ui.Header
-		grid   ui.Grid
-		toast  ui.Toaster
-		dialog ui.Dialog
+		ops       op.Ops
+		header    ui.Header
+		grid      ui.Grid
+		bar       ui.EditBar
+		dialog    ui.Dialog
+		editing   bool
+		installed []string // the plugins Add panel offers
 	)
+	// listPlugins lists the plugins installed, for Add panel….
+	listPlugins := func() {
+		var err error
+		if installed, err = pluginhost.List(pluginDir); err != nil {
+			toast.Show("Installed plugins not listed: " + err.Error())
+		}
+	}
 	for {
 		switch e := window.Event().(type) {
 		case app.ConfigEvent:
@@ -144,6 +167,7 @@ func run(window *app.Window, plugins *pluginhost.Manager, cfg config.Config, rel
 			mode = e.Config.Mode
 		case app.DestroyEvent:
 			saver.wait()
+			layouts.wait()
 			return e.Err
 		case app.FrameEvent:
 			gtx := app.NewContext(&ops, e)
@@ -153,38 +177,36 @@ func run(window *app.Window, plugins *pluginhost.Manager, cfg config.Config, rel
 			default:
 			}
 			select {
-			case r := <-reloads:
-				// Only the latest problem with the file shows, and none
-				// once it is fixed.
-				if r.err != nil {
-					toast.Put(reloadToast, r.err.Error())
-				} else {
-					toast.Drop(reloadToast)
-				}
-				if !r.valid {
-					break
-				}
-				cfg = r.cfg
-				was := fileDark
-				fileDark = cfg.Theme != config.ThemeLight
-				if d := themeOnReload(dark, was, fileDark, saver.pending()); d != dark {
-					dark = d
-					th = theme.New(dark, shaper)
-				}
+			case err := <-layouts.done:
+				toast.Show("Layout not saved: " + err.Error())
 			default:
 			}
+			w.takeReload()
 			behind := gtx
 			if dialog.IsOpen() {
 				behind = gtx.Disabled()
 			}
 			if header.Theme.Clicked(behind) {
-				dark = !dark
-				th = theme.New(dark, shaper)
-				saver.save(dark)
+				w.dark = !w.dark
+				saver.save(w.dark)
 			}
-			// Edit layout stays unpressed until edit mode exists (#15).
 			if header.Edit.Clicked(behind) {
-				toast.Show("Layout editing is not available yet")
+				editing = !editing
+				if editing {
+					listPlugins()
+				}
+			}
+			if id, ok := toast.Acted(behind); ok {
+				w.change(ui.Action{Kind: ui.ActionEnable, Panel: id})
+			}
+			if !editing {
+				bar.Close()
+			}
+			header.Edit.Toggle, header.Edit.Pressed = true, editing
+			grid.Edit = editing
+			if w.dark != dark {
+				dark = w.dark
+				th = theme.New(dark, shaper)
 			}
 			paint.Fill(gtx.Ops, th.Bg)
 			states := plugins.States()
@@ -193,12 +215,47 @@ func run(window *app.Window, plugins *pluginhost.Manager, cfg config.Config, rel
 				shortest = h
 				window.Option(app.MinSize(minWidth, shortest))
 			}
+			top := head.Size.Y
+			var actions []ui.Action
+			if editing {
+				bgtx := behind
+				bgtx.Constraints = layout.Constraints{Max: image.Pt(gtx.Constraints.Max.X, max(gtx.Constraints.Max.Y-top, 0))}
+				st := op.Offset(image.Pt(0, top)).Push(gtx.Ops)
+				adding := bar.Adding()
+				dims, chosen := bar.Layout(bgtx, th, w.cfg, installed, grid.EditHint())
+				st.Pop()
+				if bar.MenuOpened() {
+					grid.CloseMenus() // one menu at a time
+				}
+				if bar.Adding() && !adding {
+					// Plugins installed since edit mode began show next frame.
+					listPlugins()
+					gtx.Execute(op.InvalidateCmd{})
+				}
+				top += dims.Size.Y
+				actions = append(actions, chosen...)
+			}
+			grid.Covered = editing && bar.MenuShown()
 			content := behind
-			content.Constraints = layout.Exact(image.Pt(gtx.Constraints.Max.X, max(gtx.Constraints.Max.Y-head.Size.Y, 0)))
-			st := op.Offset(image.Pt(0, head.Size.Y)).Push(gtx.Ops)
-			_, actions := grid.Layout(content, th, cfg, states)
+			content.Constraints = layout.Exact(image.Pt(gtx.Constraints.Max.X, max(gtx.Constraints.Max.Y-top, 0)))
+			st := op.Offset(image.Pt(0, top)).Push(gtx.Ops)
+			_, chosen := grid.Layout(content, th, w.cfg, states)
 			st.Pop()
+			if grid.MenuOpened() && editing {
+				bar.Close() // one menu at a time
+				gtx.Execute(op.InvalidateCmd{})
+			}
+			actions = append(actions, chosen...)
 			for _, a := range actions {
+				if changeFor(a, w.cfg) != nil {
+					switch changed := w.change(a); {
+					case a.Kind == ui.ActionEnable:
+						toast.DropAction(a.Panel) // nothing left to undo
+					case changed && a.Kind == ui.ActionDisable:
+						toast.ShowAction("Panel "+a.Panel+" disabled", "Undo", a.Panel)
+					}
+					continue
+				}
 				if act(a, plugins, states, &grid, &toast, &dialog) {
 					// A scroll range the plugin's queue refused goes
 					// again in a moment.
@@ -208,6 +265,7 @@ func run(window *app.Window, plugins *pluginhost.Manager, cfg config.Config, rel
 			// Deferred after the tiles' popovers, which are deferred too, so
 			// the toast and the dialog stay on top of them.
 			over := op.Record(gtx.Ops)
+			toast.Inert = dialog.IsOpen()
 			toast.Layout(gtx, th)
 			dialog.Layout(gtx, th)
 			op.Defer(gtx.Ops, over.Stop())
@@ -260,8 +318,6 @@ func act(a ui.Action, plugins *pluginhost.Manager, states []pluginhost.PanelStat
 	switch a.Kind {
 	case ui.ActionConfigure:
 		toast.Show("Configuring panels is not available yet")
-	case ui.ActionDisable:
-		toast.Show("Disabling panels is not available yet")
 	case ui.ActionRestart:
 		switch err := plugins.Restart(a.Panel); {
 		case errors.Is(err, pluginhost.ErrStarting):
@@ -376,10 +432,11 @@ func (s *themeSaver) save(dark bool) {
 }
 
 func saveTheme(path string, dark bool) error {
-	return config.Update(path, func(c *config.Config) {
+	return update(path, func(c *config.Config) error {
 		c.Theme = config.ThemeLight
 		if dark {
 			c.Theme = config.ThemeDark
 		}
+		return nil
 	})
 }
