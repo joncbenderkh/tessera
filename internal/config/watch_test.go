@@ -29,7 +29,7 @@ func TestWatch(t *testing.T) {
 	changes := make(chan change, 8)
 	done := make(chan error, 1)
 	go func() {
-		done <- Watch(ctx, path, read(t, path), func(c Config, err error) { changes <- change{c, err} })
+		done <- Watch(ctx, path, read(t, path), nil, func(c Config, err error) { changes <- change{c, err} })
 	}()
 	defer func() {
 		cancel()
@@ -93,7 +93,7 @@ func TestWatchFollowsSymlink(t *testing.T) {
 	changes := make(chan change, 8)
 	done := make(chan error, 1)
 	go func() {
-		done <- Watch(ctx, path, read(t, path), func(c Config, err error) { changes <- change{c, err} })
+		done <- Watch(ctx, path, read(t, path), nil, func(c Config, err error) { changes <- change{c, err} })
 	}()
 	defer func() {
 		cancel()
@@ -163,7 +163,7 @@ func TestWatchFollowsDanglingSymlink(t *testing.T) {
 	changes := make(chan change, 8)
 	done := make(chan error, 1)
 	go func() {
-		done <- Watch(ctx, path, read(t, path), func(c Config, err error) { changes <- change{c, err} })
+		done <- Watch(ctx, path, read(t, path), nil, func(c Config, err error) { changes <- change{c, err} })
 	}()
 	defer func() {
 		cancel()
@@ -230,7 +230,7 @@ func TestWatchReportsEditBeforeStart(t *testing.T) {
 	changes := make(chan change, 8)
 	done := make(chan error, 1)
 	go func() {
-		done <- Watch(ctx, path, data, func(c Config, err error) { changes <- change{c, err} })
+		done <- Watch(ctx, path, data, nil, func(c Config, err error) { changes <- change{c, err} })
 	}()
 	defer func() {
 		cancel()
@@ -257,7 +257,7 @@ func watching(t *testing.T, path string) func(step string, n int) {
 	changes := make(chan change, 8)
 	done := make(chan error, 1)
 	go func() {
-		done <- Watch(ctx, path, read(t, path), func(c Config, err error) { changes <- change{c, err} })
+		done <- Watch(ctx, path, read(t, path), nil, func(c Config, err error) { changes <- change{c, err} })
 	}()
 	t.Cleanup(func() {
 		cancel()
@@ -433,7 +433,7 @@ func TestWatchReportsMissingDirectoryOnce(t *testing.T) {
 	var errs []error
 	done := make(chan error, 1)
 	go func() {
-		done <- Watch(ctx, path, read(t, path), func(_ Config, err error) {
+		done <- Watch(ctx, path, read(t, path), nil, func(_ Config, err error) {
 			mu.Lock()
 			defer mu.Unlock()
 			if err != nil {
@@ -521,7 +521,7 @@ func TestWatchReportsRecoveryFromReadError(t *testing.T) {
 	changes := make(chan change, 8)
 	done := make(chan error, 1)
 	go func() {
-		done <- Watch(ctx, path, data, func(c Config, err error) { changes <- change{c, err} })
+		done <- Watch(ctx, path, data, nil, func(c Config, err error) { changes <- change{c, err} })
 	}()
 	defer func() {
 		cancel()
