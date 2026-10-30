@@ -667,7 +667,7 @@ func TestEditBarEnableMenu(t *testing.T) {
 	}
 }
 
-// Behind a dialog, Tab does not reach a toast's action.
+// Behind a dialog, neither Tab nor a click reaches a toast's action.
 func TestToasterInert(t *testing.T) {
 	for _, inert := range []bool{false, true} {
 		var r input.Router
@@ -685,6 +685,13 @@ func TestToasterInert(t *testing.T) {
 		r.Frame(gtx.Ops)
 		if got := r.Source().Focused(&toast.act.Clickable); got == inert {
 			t.Errorf("inert %t: action focused %t", inert, got)
+		}
+		for _, e := range click(toast.actBox.Min.Add(toast.actBox.Size().Div(2))) {
+			r.Queue(e)
+		}
+		gtx = context(&r, image.Pt(800, 600), time.Now())
+		if _, ok := toast.Acted(gtx); ok == inert {
+			t.Errorf("inert %t: clicked %t", inert, ok)
 		}
 	}
 }
