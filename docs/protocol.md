@@ -234,9 +234,10 @@ error a plugin returned, continues on lines that start with `| `.
 Plugins are installed in `tessera/plugins` under the user data
 directory: `$XDG_DATA_HOME` (or `~/.local/share`) on Linux,
 `~/Library/Application Support` on macOS, and `%LOCALAPPDATA%` on
-Windows. A plugin's `DescribeResponse.name` must equal its executable's
-file name, which is how the config's `plugin:` field finds it: the name
-itself on Unix, the name plus `.exe` on Windows. Other files in the
+Windows, unless the host is started with `--plugins <dir>`. A plugin's
+`DescribeResponse.name` must equal its executable's file name, which
+is how the config's `plugin:` field finds it: the name itself on Unix,
+the name plus `.exe` on Windows. Other files in the
 plugins directory, such as `clock.py` next to `clock`, are ignored.
 Install or update a plugin by renaming it into place (write it as
 `clock.new` in the plugins directory, then rename it to `clock`): a

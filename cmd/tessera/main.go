@@ -25,12 +25,17 @@ import (
 func main() {
 	showVersion := flag.Bool("version", false, "print the version and exit")
 	configPath := flag.String("config", "", "config file (default: tessera/config.yaml in the user config directory)")
+	pluginsDir := flag.String("plugins", pluginhost.DefaultDir(), "plugins directory")
 	flag.Parse()
 	if *showVersion {
 		fmt.Println("tessera", tessera.Version)
 		return
 	}
 
+	if *pluginsDir == "" {
+		// Abs would read it as the working directory.
+		log.Fatal("-plugins is empty")
+	}
 	if *configPath == "" {
 		path, err := config.DefaultPath()
 		if err != nil {
@@ -43,7 +48,13 @@ func main() {
 		log.Fatal(err)
 	}
 
-	plugins := pluginhost.Start(cfg, pluginhost.DefaultDir(), log.Default())
+	// A plugin's path must not be a bare name, which exec looks up in
+	// PATH, as -plugins . would make it.
+	dir, err := filepath.Abs(*pluginsDir)
+	if err != nil {
+		log.Fatal(err)
+	}
+	plugins := pluginhost.Start(cfg, dir, log.Default())
 	window := new(app.Window)
 	saver := &themeSaver{path: *configPath, done: make(chan error, 1), invalidate: window.Invalidate}
 	signals := make(chan os.Signal, 1)
