@@ -7,6 +7,10 @@ as third-party plugins; the host treats them no differently.
 Each one's version is tessera's, from `./VERSION`. Their tests run the
 test binary as the plugin through `internal/plugintest`.
 
+`go run ./cmd/build -plugins`, from anywhere in the module, builds them
+all and installs them into the plugins directory; without `-plugins` it
+builds the host as well.
+
 | Plugin | Shows | Settings |
 |---|---|---|
 | `clock` | The time to the second, the date, and the time zone | `timezone`: an IANA name such as `Europe/Berlin`, in any case, or `Local` (the default) |

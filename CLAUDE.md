@@ -74,6 +74,8 @@ dialogs). Edit mode must be able to re-enable any disabled panel.
 - `version.go`: package `tessera`, which embeds `./VERSION` as
   `tessera.Version`.
 - `cmd/tessera`: the host (Gio window, layout, plugin manager).
+- `cmd/build`: the developer build: the host and every first-party
+  plugin, installed into the plugins directory (`go run ./cmd/build`).
 - `internal/config`: loading, validating, saving, and watching the user
   config.
 - `internal/ui`: the host-owned UI drawn with Gio: the window header,
@@ -112,7 +114,13 @@ dialogs). Edit mode must be able to re-enable any disabled panel.
 
 Use the local toolchain: `export PATH=/usr/local/go/bin:$PATH`.
 
-- Build the host: `go build ./cmd/tessera`; `./tessera --version`.
+- Build the host as `./tessera` and install every plugin in
+  `plugins/` into the plugins directory, each renamed into place:
+  `go run ./cmd/build`. `-plugins` skips the host, `-dest` picks
+  another plugins directory, and `-run` starts the host afterwards
+  (arguments after `--` go to it). A bare `go build` at the root
+  builds the `tessera` library package and writes nothing.
+- Build the host alone: `go build ./cmd/tessera`; `./tessera --version`.
 - Test: `go test ./...`
 - Vet: `go vet ./...`
 - Format check: `gofmt -l .` (must print nothing).
