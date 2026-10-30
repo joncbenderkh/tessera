@@ -79,7 +79,9 @@ dialogs). Edit mode must be able to re-enable any disabled panel.
 - `internal/ui`: the host-owned UI drawn with Gio: the window header,
   the grid and its tiles (placement in `Arrange`, the menu, and the
   starting and error bodies), the plugins' views in them (`view*.go`),
-  the button, and the toast and dialog primitives. `internal/ui/theme`
+  the button, the toast and dialog primitives, and the measures
+  first-party plugins' tests use to check that a view fits a tile
+  (`measure.go`). `internal/ui/theme`
   holds the design tokens (dark and light palettes, spacing, radius, and
   type scales) taken from `docs/design`.
 - `internal/pluginhost`: finding, launching, describing, configuring,
@@ -104,6 +106,7 @@ dialogs). Edit mode must be able to re-enable any disabled panel.
   builders. `sdk/example/counter` is a complete plugin, tested end to end
   through `internal/pluginhost`; the author guide is `docs/plugins.md`.
 - `plugins/<name>`: first-party panels, each its own `main` package.
+  `plugins/internal/zones` holds the time zone names the clocks accept.
 
 ## Commands
 
@@ -117,8 +120,9 @@ Use the local toolchain: `export PATH=/usr/local/go/bin:$PATH`.
 - Regenerate protocol code after editing a `.proto`: `go generate ./proto`.
   It runs `buf` and the protoc plugins through `go run`, so no `protoc`
   install is needed. Generated files are committed.
-- Refresh the clock plugin's list of time zone names from the
-  toolchain's database: `go test ./plugins/clock -run TestZoneList -update`.
+- Refresh the clock plugins' list of time zone names from the
+  toolchain's database:
+  `go test ./plugins/internal/zones -run TestZoneList -update`.
   It is not part of `go generate`, so a new Go release does not fail
   CI's drift check. Run it with the `go.mod` minimum
   (`GOTOOLCHAIN=go1.25.0`): CI's Windows job on that Go has no system
@@ -194,7 +198,8 @@ The Go SDK serves a plugin from a description, a channel of views,
 and callbacks, with builders for every widget (#18).
 The first first-party plugins are the text panels clock, greeting,
 and notes (#19). The calendar panel lists the rest of today's events
-from iCalendar feeds, from URLs or files, read-only (#21).
+from iCalendar feeds, from URLs or files, read-only (#21), and a world
+clock shows up to four time zones (#50).
 
 ## Git workflow
 

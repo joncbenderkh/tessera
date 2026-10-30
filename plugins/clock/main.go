@@ -6,14 +6,11 @@ package main
 
 import (
 	"context"
-	"fmt"
-	"strings"
 	"sync"
 	"time"
-	// The time zone database, for systems without one, such as Windows.
-	_ "time/tzdata"
 
 	"github.com/joncbenderkh/tessera"
+	"github.com/joncbenderkh/tessera/plugins/internal/zones"
 	"github.com/joncbenderkh/tessera/sdk"
 )
 
@@ -65,7 +62,7 @@ func (c *clock) configure(_ context.Context, cfg sdk.Config) error {
 	if err := cfg.Decode(&s); err != nil {
 		return err
 	}
-	loc, zone, err := location(s.Timezone)
+	loc, zone, err := zones.Load(s.Timezone)
 	if err != nil {
 		return sdk.InvalidSettings("%v", err)
 	}
@@ -76,36 +73,6 @@ func (c *clock) configure(_ context.Context, cfg sdk.Config) error {
 	c.start.Do(func() { go c.tick() })
 	return nil
 }
-
-// location loads the time zone name, in any case, and returns it with
-// its IANA spelling. Only the names in zoneList are accepted, so a
-// setting means the same on every system; "" and "Local" are the
-// system's. Surrounding spaces are ignored.
-func location(name string) (*time.Location, string, error) {
-	name = strings.TrimSpace(name)
-	if name == "" || strings.EqualFold(name, "Local") {
-		return time.Local, "Local", nil
-	}
-	spelt, ok := zoneNames[strings.ToLower(name)]
-	if !ok {
-		return nil, name, fmt.Errorf("unknown time zone %q", name)
-	}
-	loc, err := time.LoadLocation(spelt)
-	return loc, spelt, err
-}
-
-// zoneNames maps the zones in zoneList, in lower case, to their IANA
-// spelling. The system's zone database would otherwise accept names
-// that others reject: misspelt ones on file systems that ignore case,
-// as macOS's do by default, and its own extras such as posix/ paths.
-var zoneNames = func() map[string]string {
-	names := map[string]string{}
-	for name := range strings.Lines(zoneList) {
-		name = strings.TrimSpace(name)
-		names[strings.ToLower(name)] = name
-	}
-	return names
-}()
 
 // tick shows the time now, then again at the start of every second.
 func (c *clock) tick() {
