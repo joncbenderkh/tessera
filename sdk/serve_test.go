@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log"
 	"os"
@@ -98,7 +99,8 @@ func sendOversize(views chan<- sdk.View) {
 const greeterSchema = `{"type":"object","properties":{"greeting":{"type":"string"}}}`
 
 // serveGreeter shows its greeting setting, "pong" once activated, and
-// the visible range once scrolled. It rejects the greeting "bad".
+// the visible range once scrolled, or for the greeting "size" the
+// panel's size and shown size. It rejects the greeting "bad".
 func serveGreeter(name string) {
 	views := make(chan sdk.View)
 	var mu sync.Mutex
@@ -112,6 +114,7 @@ func serveGreeter(name string) {
 		Description:  "Says hello.",
 		ConfigSchema: greeterSchema,
 		DefaultSize:  sdk.Size{Columns: 3, Rows: 2},
+		MinBody:      sdk.BodySize{Width: 120, Height: 40},
 		Views:        views,
 		Configure: func(_ context.Context, c sdk.Config) error {
 			var s struct {
@@ -125,6 +128,9 @@ func serveGreeter(name string) {
 				return sdk.InvalidSettings("greeting %q is not allowed", s.Greeting)
 			case "unimplemented":
 				return status.Error(codes.Unimplemented, "a data source's own status")
+			case "size":
+				show(fmt.Sprintf("size %v shown %v", c.Size, c.Shown))
+				return nil
 			}
 			mu.Lock()
 			defer mu.Unlock()
@@ -227,9 +233,42 @@ func TestDescribe(t *testing.T) {
 		ViewVersion:     tesserav1.ViewVersion,
 		ConfigSchema:    greeterSchema,
 		DefaultSize:     &tesserav1.GridSize{Columns: 3, Rows: 2},
+		MinBody:         &tesserav1.BodySize{Width: 120, Height: 40},
 	}
 	if !proto.Equal(inst.Info, want) {
 		t.Errorf("Describe = %v, want %v", inst.Info, want)
+	}
+}
+
+// Configure passes the shown size on, and the size in its place from a
+// host that does not send one.
+func TestConfigureShownSize(t *testing.T) {
+	inst := launch(t, "greeter")
+	stream := watch(t, inst, time.Second)
+	settings, err := structpb.NewStruct(map[string]any{"greeting": "size"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		shown *tesserav1.GridSize
+		want  string
+	}{
+		{&tesserav1.GridSize{Columns: 1, Rows: 2}, "size {3 2} shown {1 2}"},
+		{nil, "size {3 2} shown {3 2}"},
+	} {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		_, err := inst.Client.Configure(ctx, &tesserav1.ConfigureRequest{
+			PanelId: "p1", Settings: settings, Size: &tesserav1.GridSize{Columns: 3, Rows: 2}, ShownSize: tc.shown,
+		})
+		cancel()
+		if err != nil {
+			t.Fatal(err)
+		}
+		for got := next(t, stream); got != tc.want; got = next(t, stream) {
+			if strings.HasPrefix(got, "size") {
+				t.Fatalf("view %q, want %q", got, tc.want)
+			}
+		}
 	}
 }
 
