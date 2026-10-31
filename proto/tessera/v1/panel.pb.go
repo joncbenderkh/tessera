@@ -108,7 +108,15 @@ type DescribeResponse struct {
 	ConfigSchema string `protobuf:"bytes,6,opt,name=config_schema,json=configSchema,proto3" json:"config_schema,omitempty"`
 	// The size, in grid cells, a new panel gets when the user adds it.
 	// Unset, or a zero dimension, means 1.
-	DefaultSize   *GridSize `protobuf:"bytes,7,opt,name=default_size,json=defaultSize,proto3" json:"default_size,omitempty"`
+	DefaultSize *GridSize `protobuf:"bytes,7,opt,name=default_size,json=defaultSize,proto3" json:"default_size,omitempty"`
+	// The least room, in dp, the panel's view needs below the tile's
+	// head, measured at the default text size. The host scales it with
+	// the user's text size, turns it into grid cells for the current row
+	// height and column width, and keeps a panel the user adds or resizes
+	// at least that large. Unset, or a zero dimension, means no minimum
+	// in that dimension; the host reads at most 600 in each, so a panel
+	// can always be made small enough to arrange.
+	MinBody       *BodySize `protobuf:"bytes,8,opt,name=min_body,json=minBody,proto3" json:"min_body,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -192,6 +200,68 @@ func (x *DescribeResponse) GetDefaultSize() *GridSize {
 	return nil
 }
 
+func (x *DescribeResponse) GetMinBody() *BodySize {
+	if x != nil {
+		return x.MinBody
+	}
+	return nil
+}
+
+// BodySize is the room a panel's view gets, in dp.
+type BodySize struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Width in dp.
+	Width uint32 `protobuf:"varint,1,opt,name=width,proto3" json:"width,omitempty"`
+	// Height in dp.
+	Height        uint32 `protobuf:"varint,2,opt,name=height,proto3" json:"height,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *BodySize) Reset() {
+	*x = BodySize{}
+	mi := &file_tessera_v1_panel_proto_msgTypes[2]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *BodySize) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*BodySize) ProtoMessage() {}
+
+func (x *BodySize) ProtoReflect() protoreflect.Message {
+	mi := &file_tessera_v1_panel_proto_msgTypes[2]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use BodySize.ProtoReflect.Descriptor instead.
+func (*BodySize) Descriptor() ([]byte, []int) {
+	return file_tessera_v1_panel_proto_rawDescGZIP(), []int{2}
+}
+
+func (x *BodySize) GetWidth() uint32 {
+	if x != nil {
+		return x.Width
+	}
+	return 0
+}
+
+func (x *BodySize) GetHeight() uint32 {
+	if x != nil {
+		return x.Height
+	}
+	return 0
+}
+
 // GridSize is a panel's size in grid cells.
 type GridSize struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
@@ -205,7 +275,7 @@ type GridSize struct {
 
 func (x *GridSize) Reset() {
 	*x = GridSize{}
-	mi := &file_tessera_v1_panel_proto_msgTypes[2]
+	mi := &file_tessera_v1_panel_proto_msgTypes[3]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -217,7 +287,7 @@ func (x *GridSize) String() string {
 func (*GridSize) ProtoMessage() {}
 
 func (x *GridSize) ProtoReflect() protoreflect.Message {
-	mi := &file_tessera_v1_panel_proto_msgTypes[2]
+	mi := &file_tessera_v1_panel_proto_msgTypes[3]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -230,7 +300,7 @@ func (x *GridSize) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GridSize.ProtoReflect.Descriptor instead.
 func (*GridSize) Descriptor() ([]byte, []int) {
-	return file_tessera_v1_panel_proto_rawDescGZIP(), []int{2}
+	return file_tessera_v1_panel_proto_rawDescGZIP(), []int{3}
 }
 
 func (x *GridSize) GetColumns() uint32 {
@@ -255,15 +325,20 @@ type ConfigureRequest struct {
 	// The panel's settings from the config file, unvalidated by the host
 	// until the configuration UI validates them against config_schema.
 	Settings *structpb.Struct `protobuf:"bytes,2,opt,name=settings,proto3" json:"settings,omitempty"`
-	// The panel's current size in grid cells.
-	Size          *GridSize `protobuf:"bytes,3,opt,name=size,proto3" json:"size,omitempty"`
+	// The panel's size in grid cells, as the config file has it.
+	Size *GridSize `protobuf:"bytes,3,opt,name=size,proto3" json:"size,omitempty"`
+	// The size the panel is shown at, in grid cells: size, unless a
+	// window too narrow for the config's columns flows the panel into
+	// fewer columns than it spans. Lay the view out for this one. A host
+	// that predates it leaves it unset; use size then.
+	ShownSize     *GridSize `protobuf:"bytes,4,opt,name=shown_size,json=shownSize,proto3" json:"shown_size,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *ConfigureRequest) Reset() {
 	*x = ConfigureRequest{}
-	mi := &file_tessera_v1_panel_proto_msgTypes[3]
+	mi := &file_tessera_v1_panel_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -275,7 +350,7 @@ func (x *ConfigureRequest) String() string {
 func (*ConfigureRequest) ProtoMessage() {}
 
 func (x *ConfigureRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_tessera_v1_panel_proto_msgTypes[3]
+	mi := &file_tessera_v1_panel_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -288,7 +363,7 @@ func (x *ConfigureRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ConfigureRequest.ProtoReflect.Descriptor instead.
 func (*ConfigureRequest) Descriptor() ([]byte, []int) {
-	return file_tessera_v1_panel_proto_rawDescGZIP(), []int{3}
+	return file_tessera_v1_panel_proto_rawDescGZIP(), []int{4}
 }
 
 func (x *ConfigureRequest) GetPanelId() string {
@@ -312,6 +387,13 @@ func (x *ConfigureRequest) GetSize() *GridSize {
 	return nil
 }
 
+func (x *ConfigureRequest) GetShownSize() *GridSize {
+	if x != nil {
+		return x.ShownSize
+	}
+	return nil
+}
+
 // ConfigureResponse acknowledges the settings.
 type ConfigureResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
@@ -321,7 +403,7 @@ type ConfigureResponse struct {
 
 func (x *ConfigureResponse) Reset() {
 	*x = ConfigureResponse{}
-	mi := &file_tessera_v1_panel_proto_msgTypes[4]
+	mi := &file_tessera_v1_panel_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -333,7 +415,7 @@ func (x *ConfigureResponse) String() string {
 func (*ConfigureResponse) ProtoMessage() {}
 
 func (x *ConfigureResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_tessera_v1_panel_proto_msgTypes[4]
+	mi := &file_tessera_v1_panel_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -346,7 +428,7 @@ func (x *ConfigureResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ConfigureResponse.ProtoReflect.Descriptor instead.
 func (*ConfigureResponse) Descriptor() ([]byte, []int) {
-	return file_tessera_v1_panel_proto_rawDescGZIP(), []int{4}
+	return file_tessera_v1_panel_proto_rawDescGZIP(), []int{5}
 }
 
 // WatchRequest opens the view stream.
@@ -363,7 +445,7 @@ type WatchRequest struct {
 
 func (x *WatchRequest) Reset() {
 	*x = WatchRequest{}
-	mi := &file_tessera_v1_panel_proto_msgTypes[5]
+	mi := &file_tessera_v1_panel_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -375,7 +457,7 @@ func (x *WatchRequest) String() string {
 func (*WatchRequest) ProtoMessage() {}
 
 func (x *WatchRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_tessera_v1_panel_proto_msgTypes[5]
+	mi := &file_tessera_v1_panel_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -388,7 +470,7 @@ func (x *WatchRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use WatchRequest.ProtoReflect.Descriptor instead.
 func (*WatchRequest) Descriptor() ([]byte, []int) {
-	return file_tessera_v1_panel_proto_rawDescGZIP(), []int{5}
+	return file_tessera_v1_panel_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *WatchRequest) GetHeartbeatInterval() *durationpb.Duration {
@@ -416,7 +498,7 @@ type WatchResponse struct {
 
 func (x *WatchResponse) Reset() {
 	*x = WatchResponse{}
-	mi := &file_tessera_v1_panel_proto_msgTypes[6]
+	mi := &file_tessera_v1_panel_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -428,7 +510,7 @@ func (x *WatchResponse) String() string {
 func (*WatchResponse) ProtoMessage() {}
 
 func (x *WatchResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_tessera_v1_panel_proto_msgTypes[6]
+	mi := &file_tessera_v1_panel_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -441,7 +523,7 @@ func (x *WatchResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use WatchResponse.ProtoReflect.Descriptor instead.
 func (*WatchResponse) Descriptor() ([]byte, []int) {
-	return file_tessera_v1_panel_proto_rawDescGZIP(), []int{6}
+	return file_tessera_v1_panel_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *WatchResponse) GetContent() isWatchResponse_Content {
@@ -480,7 +562,7 @@ type RenderRequest struct {
 
 func (x *RenderRequest) Reset() {
 	*x = RenderRequest{}
-	mi := &file_tessera_v1_panel_proto_msgTypes[7]
+	mi := &file_tessera_v1_panel_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -492,7 +574,7 @@ func (x *RenderRequest) String() string {
 func (*RenderRequest) ProtoMessage() {}
 
 func (x *RenderRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_tessera_v1_panel_proto_msgTypes[7]
+	mi := &file_tessera_v1_panel_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -505,7 +587,7 @@ func (x *RenderRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RenderRequest.ProtoReflect.Descriptor instead.
 func (*RenderRequest) Descriptor() ([]byte, []int) {
-	return file_tessera_v1_panel_proto_rawDescGZIP(), []int{7}
+	return file_tessera_v1_panel_proto_rawDescGZIP(), []int{8}
 }
 
 // RenderResponse is the current view.
@@ -527,7 +609,7 @@ type RenderResponse struct {
 
 func (x *RenderResponse) Reset() {
 	*x = RenderResponse{}
-	mi := &file_tessera_v1_panel_proto_msgTypes[8]
+	mi := &file_tessera_v1_panel_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -539,7 +621,7 @@ func (x *RenderResponse) String() string {
 func (*RenderResponse) ProtoMessage() {}
 
 func (x *RenderResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_tessera_v1_panel_proto_msgTypes[8]
+	mi := &file_tessera_v1_panel_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -552,7 +634,7 @@ func (x *RenderResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RenderResponse.ProtoReflect.Descriptor instead.
 func (*RenderResponse) Descriptor() ([]byte, []int) {
-	return file_tessera_v1_panel_proto_rawDescGZIP(), []int{8}
+	return file_tessera_v1_panel_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *RenderResponse) GetContent() isRenderResponse_Content {
@@ -605,7 +687,7 @@ type HandleEventRequest struct {
 
 func (x *HandleEventRequest) Reset() {
 	*x = HandleEventRequest{}
-	mi := &file_tessera_v1_panel_proto_msgTypes[9]
+	mi := &file_tessera_v1_panel_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -617,7 +699,7 @@ func (x *HandleEventRequest) String() string {
 func (*HandleEventRequest) ProtoMessage() {}
 
 func (x *HandleEventRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_tessera_v1_panel_proto_msgTypes[9]
+	mi := &file_tessera_v1_panel_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -630,7 +712,7 @@ func (x *HandleEventRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use HandleEventRequest.ProtoReflect.Descriptor instead.
 func (*HandleEventRequest) Descriptor() ([]byte, []int) {
-	return file_tessera_v1_panel_proto_rawDescGZIP(), []int{9}
+	return file_tessera_v1_panel_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *HandleEventRequest) GetEvent() isHandleEventRequest_Event {
@@ -688,7 +770,7 @@ type ActivateEvent struct {
 
 func (x *ActivateEvent) Reset() {
 	*x = ActivateEvent{}
-	mi := &file_tessera_v1_panel_proto_msgTypes[10]
+	mi := &file_tessera_v1_panel_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -700,7 +782,7 @@ func (x *ActivateEvent) String() string {
 func (*ActivateEvent) ProtoMessage() {}
 
 func (x *ActivateEvent) ProtoReflect() protoreflect.Message {
-	mi := &file_tessera_v1_panel_proto_msgTypes[10]
+	mi := &file_tessera_v1_panel_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -713,7 +795,7 @@ func (x *ActivateEvent) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ActivateEvent.ProtoReflect.Descriptor instead.
 func (*ActivateEvent) Descriptor() ([]byte, []int) {
-	return file_tessera_v1_panel_proto_rawDescGZIP(), []int{10}
+	return file_tessera_v1_panel_proto_rawDescGZIP(), []int{11}
 }
 
 func (x *ActivateEvent) GetActionId() string {
@@ -739,7 +821,7 @@ type ScrollEvent struct {
 
 func (x *ScrollEvent) Reset() {
 	*x = ScrollEvent{}
-	mi := &file_tessera_v1_panel_proto_msgTypes[11]
+	mi := &file_tessera_v1_panel_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -751,7 +833,7 @@ func (x *ScrollEvent) String() string {
 func (*ScrollEvent) ProtoMessage() {}
 
 func (x *ScrollEvent) ProtoReflect() protoreflect.Message {
-	mi := &file_tessera_v1_panel_proto_msgTypes[11]
+	mi := &file_tessera_v1_panel_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -764,7 +846,7 @@ func (x *ScrollEvent) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ScrollEvent.ProtoReflect.Descriptor instead.
 func (*ScrollEvent) Descriptor() ([]byte, []int) {
-	return file_tessera_v1_panel_proto_rawDescGZIP(), []int{11}
+	return file_tessera_v1_panel_proto_rawDescGZIP(), []int{12}
 }
 
 func (x *ScrollEvent) GetWidgetId() string {
@@ -797,7 +879,7 @@ type HandleEventResponse struct {
 
 func (x *HandleEventResponse) Reset() {
 	*x = HandleEventResponse{}
-	mi := &file_tessera_v1_panel_proto_msgTypes[12]
+	mi := &file_tessera_v1_panel_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -809,7 +891,7 @@ func (x *HandleEventResponse) String() string {
 func (*HandleEventResponse) ProtoMessage() {}
 
 func (x *HandleEventResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_tessera_v1_panel_proto_msgTypes[12]
+	mi := &file_tessera_v1_panel_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -822,7 +904,7 @@ func (x *HandleEventResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use HandleEventResponse.ProtoReflect.Descriptor instead.
 func (*HandleEventResponse) Descriptor() ([]byte, []int) {
-	return file_tessera_v1_panel_proto_rawDescGZIP(), []int{12}
+	return file_tessera_v1_panel_proto_rawDescGZIP(), []int{13}
 }
 
 var File_tessera_v1_panel_proto protoreflect.FileDescriptor
@@ -833,7 +915,7 @@ const file_tessera_v1_panel_proto_rawDesc = "" +
 	"tessera.v1\x1a\x1egoogle/protobuf/duration.proto\x1a\x1cgoogle/protobuf/struct.proto\x1a\x15tessera/v1/view.proto\"Y\n" +
 	"\x0fDescribeRequest\x12!\n" +
 	"\fhost_version\x18\x01 \x01(\tR\vhostVersion\x12#\n" +
-	"\rview_versions\x18\x02 \x03(\rR\fviewVersions\"\x8e\x02\n" +
+	"\rview_versions\x18\x02 \x03(\rR\fviewVersions\"\xbf\x02\n" +
 	"\x10DescribeResponse\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x18\n" +
 	"\aversion\x18\x02 \x01(\tR\aversion\x12 \n" +
@@ -841,14 +923,20 @@ const file_tessera_v1_panel_proto_rawDesc = "" +
 	"\x10protocol_version\x18\x04 \x01(\rR\x0fprotocolVersion\x12!\n" +
 	"\fview_version\x18\x05 \x01(\rR\vviewVersion\x12#\n" +
 	"\rconfig_schema\x18\x06 \x01(\tR\fconfigSchema\x127\n" +
-	"\fdefault_size\x18\a \x01(\v2\x14.tessera.v1.GridSizeR\vdefaultSize\"8\n" +
+	"\fdefault_size\x18\a \x01(\v2\x14.tessera.v1.GridSizeR\vdefaultSize\x12/\n" +
+	"\bmin_body\x18\b \x01(\v2\x14.tessera.v1.BodySizeR\aminBody\"8\n" +
+	"\bBodySize\x12\x14\n" +
+	"\x05width\x18\x01 \x01(\rR\x05width\x12\x16\n" +
+	"\x06height\x18\x02 \x01(\rR\x06height\"8\n" +
 	"\bGridSize\x12\x18\n" +
 	"\acolumns\x18\x01 \x01(\rR\acolumns\x12\x12\n" +
-	"\x04rows\x18\x02 \x01(\rR\x04rows\"\x8c\x01\n" +
+	"\x04rows\x18\x02 \x01(\rR\x04rows\"\xc1\x01\n" +
 	"\x10ConfigureRequest\x12\x19\n" +
 	"\bpanel_id\x18\x01 \x01(\tR\apanelId\x123\n" +
 	"\bsettings\x18\x02 \x01(\v2\x17.google.protobuf.StructR\bsettings\x12(\n" +
-	"\x04size\x18\x03 \x01(\v2\x14.tessera.v1.GridSizeR\x04size\"\x13\n" +
+	"\x04size\x18\x03 \x01(\v2\x14.tessera.v1.GridSizeR\x04size\x123\n" +
+	"\n" +
+	"shown_size\x18\x04 \x01(\v2\x14.tessera.v1.GridSizeR\tshownSize\"\x13\n" +
 	"\x11ConfigureResponse\"X\n" +
 	"\fWatchRequest\x12H\n" +
 	"\x12heartbeat_interval\x18\x01 \x01(\v2\x19.google.protobuf.DurationR\x11heartbeatInterval\"B\n" +
@@ -890,50 +978,53 @@ func file_tessera_v1_panel_proto_rawDescGZIP() []byte {
 	return file_tessera_v1_panel_proto_rawDescData
 }
 
-var file_tessera_v1_panel_proto_msgTypes = make([]protoimpl.MessageInfo, 13)
+var file_tessera_v1_panel_proto_msgTypes = make([]protoimpl.MessageInfo, 14)
 var file_tessera_v1_panel_proto_goTypes = []any{
 	(*DescribeRequest)(nil),     // 0: tessera.v1.DescribeRequest
 	(*DescribeResponse)(nil),    // 1: tessera.v1.DescribeResponse
-	(*GridSize)(nil),            // 2: tessera.v1.GridSize
-	(*ConfigureRequest)(nil),    // 3: tessera.v1.ConfigureRequest
-	(*ConfigureResponse)(nil),   // 4: tessera.v1.ConfigureResponse
-	(*WatchRequest)(nil),        // 5: tessera.v1.WatchRequest
-	(*WatchResponse)(nil),       // 6: tessera.v1.WatchResponse
-	(*RenderRequest)(nil),       // 7: tessera.v1.RenderRequest
-	(*RenderResponse)(nil),      // 8: tessera.v1.RenderResponse
-	(*HandleEventRequest)(nil),  // 9: tessera.v1.HandleEventRequest
-	(*ActivateEvent)(nil),       // 10: tessera.v1.ActivateEvent
-	(*ScrollEvent)(nil),         // 11: tessera.v1.ScrollEvent
-	(*HandleEventResponse)(nil), // 12: tessera.v1.HandleEventResponse
-	(*structpb.Struct)(nil),     // 13: google.protobuf.Struct
-	(*durationpb.Duration)(nil), // 14: google.protobuf.Duration
-	(*View)(nil),                // 15: tessera.v1.View
+	(*BodySize)(nil),            // 2: tessera.v1.BodySize
+	(*GridSize)(nil),            // 3: tessera.v1.GridSize
+	(*ConfigureRequest)(nil),    // 4: tessera.v1.ConfigureRequest
+	(*ConfigureResponse)(nil),   // 5: tessera.v1.ConfigureResponse
+	(*WatchRequest)(nil),        // 6: tessera.v1.WatchRequest
+	(*WatchResponse)(nil),       // 7: tessera.v1.WatchResponse
+	(*RenderRequest)(nil),       // 8: tessera.v1.RenderRequest
+	(*RenderResponse)(nil),      // 9: tessera.v1.RenderResponse
+	(*HandleEventRequest)(nil),  // 10: tessera.v1.HandleEventRequest
+	(*ActivateEvent)(nil),       // 11: tessera.v1.ActivateEvent
+	(*ScrollEvent)(nil),         // 12: tessera.v1.ScrollEvent
+	(*HandleEventResponse)(nil), // 13: tessera.v1.HandleEventResponse
+	(*structpb.Struct)(nil),     // 14: google.protobuf.Struct
+	(*durationpb.Duration)(nil), // 15: google.protobuf.Duration
+	(*View)(nil),                // 16: tessera.v1.View
 }
 var file_tessera_v1_panel_proto_depIdxs = []int32{
-	2,  // 0: tessera.v1.DescribeResponse.default_size:type_name -> tessera.v1.GridSize
-	13, // 1: tessera.v1.ConfigureRequest.settings:type_name -> google.protobuf.Struct
-	2,  // 2: tessera.v1.ConfigureRequest.size:type_name -> tessera.v1.GridSize
-	14, // 3: tessera.v1.WatchRequest.heartbeat_interval:type_name -> google.protobuf.Duration
-	15, // 4: tessera.v1.WatchResponse.view:type_name -> tessera.v1.View
-	15, // 5: tessera.v1.RenderResponse.view:type_name -> tessera.v1.View
-	14, // 6: tessera.v1.RenderResponse.poll_interval:type_name -> google.protobuf.Duration
-	10, // 7: tessera.v1.HandleEventRequest.activate:type_name -> tessera.v1.ActivateEvent
-	11, // 8: tessera.v1.HandleEventRequest.scroll:type_name -> tessera.v1.ScrollEvent
-	0,  // 9: tessera.v1.PanelService.Describe:input_type -> tessera.v1.DescribeRequest
-	3,  // 10: tessera.v1.PanelService.Configure:input_type -> tessera.v1.ConfigureRequest
-	5,  // 11: tessera.v1.PanelService.Watch:input_type -> tessera.v1.WatchRequest
-	7,  // 12: tessera.v1.PanelService.Render:input_type -> tessera.v1.RenderRequest
-	9,  // 13: tessera.v1.PanelService.HandleEvent:input_type -> tessera.v1.HandleEventRequest
-	1,  // 14: tessera.v1.PanelService.Describe:output_type -> tessera.v1.DescribeResponse
-	4,  // 15: tessera.v1.PanelService.Configure:output_type -> tessera.v1.ConfigureResponse
-	6,  // 16: tessera.v1.PanelService.Watch:output_type -> tessera.v1.WatchResponse
-	8,  // 17: tessera.v1.PanelService.Render:output_type -> tessera.v1.RenderResponse
-	12, // 18: tessera.v1.PanelService.HandleEvent:output_type -> tessera.v1.HandleEventResponse
-	14, // [14:19] is the sub-list for method output_type
-	9,  // [9:14] is the sub-list for method input_type
-	9,  // [9:9] is the sub-list for extension type_name
-	9,  // [9:9] is the sub-list for extension extendee
-	0,  // [0:9] is the sub-list for field type_name
+	3,  // 0: tessera.v1.DescribeResponse.default_size:type_name -> tessera.v1.GridSize
+	2,  // 1: tessera.v1.DescribeResponse.min_body:type_name -> tessera.v1.BodySize
+	14, // 2: tessera.v1.ConfigureRequest.settings:type_name -> google.protobuf.Struct
+	3,  // 3: tessera.v1.ConfigureRequest.size:type_name -> tessera.v1.GridSize
+	3,  // 4: tessera.v1.ConfigureRequest.shown_size:type_name -> tessera.v1.GridSize
+	15, // 5: tessera.v1.WatchRequest.heartbeat_interval:type_name -> google.protobuf.Duration
+	16, // 6: tessera.v1.WatchResponse.view:type_name -> tessera.v1.View
+	16, // 7: tessera.v1.RenderResponse.view:type_name -> tessera.v1.View
+	15, // 8: tessera.v1.RenderResponse.poll_interval:type_name -> google.protobuf.Duration
+	11, // 9: tessera.v1.HandleEventRequest.activate:type_name -> tessera.v1.ActivateEvent
+	12, // 10: tessera.v1.HandleEventRequest.scroll:type_name -> tessera.v1.ScrollEvent
+	0,  // 11: tessera.v1.PanelService.Describe:input_type -> tessera.v1.DescribeRequest
+	4,  // 12: tessera.v1.PanelService.Configure:input_type -> tessera.v1.ConfigureRequest
+	6,  // 13: tessera.v1.PanelService.Watch:input_type -> tessera.v1.WatchRequest
+	8,  // 14: tessera.v1.PanelService.Render:input_type -> tessera.v1.RenderRequest
+	10, // 15: tessera.v1.PanelService.HandleEvent:input_type -> tessera.v1.HandleEventRequest
+	1,  // 16: tessera.v1.PanelService.Describe:output_type -> tessera.v1.DescribeResponse
+	5,  // 17: tessera.v1.PanelService.Configure:output_type -> tessera.v1.ConfigureResponse
+	7,  // 18: tessera.v1.PanelService.Watch:output_type -> tessera.v1.WatchResponse
+	9,  // 19: tessera.v1.PanelService.Render:output_type -> tessera.v1.RenderResponse
+	13, // 20: tessera.v1.PanelService.HandleEvent:output_type -> tessera.v1.HandleEventResponse
+	16, // [16:21] is the sub-list for method output_type
+	11, // [11:16] is the sub-list for method input_type
+	11, // [11:11] is the sub-list for extension type_name
+	11, // [11:11] is the sub-list for extension extendee
+	0,  // [0:11] is the sub-list for field type_name
 }
 
 func init() { file_tessera_v1_panel_proto_init() }
@@ -942,13 +1033,13 @@ func file_tessera_v1_panel_proto_init() {
 		return
 	}
 	file_tessera_v1_view_proto_init()
-	file_tessera_v1_panel_proto_msgTypes[6].OneofWrappers = []any{
+	file_tessera_v1_panel_proto_msgTypes[7].OneofWrappers = []any{
 		(*WatchResponse_View)(nil),
 	}
-	file_tessera_v1_panel_proto_msgTypes[8].OneofWrappers = []any{
+	file_tessera_v1_panel_proto_msgTypes[9].OneofWrappers = []any{
 		(*RenderResponse_View)(nil),
 	}
-	file_tessera_v1_panel_proto_msgTypes[9].OneofWrappers = []any{
+	file_tessera_v1_panel_proto_msgTypes[10].OneofWrappers = []any{
 		(*HandleEventRequest_Activate)(nil),
 		(*HandleEventRequest_Scroll)(nil),
 	}
@@ -958,7 +1049,7 @@ func file_tessera_v1_panel_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_tessera_v1_panel_proto_rawDesc), len(file_tessera_v1_panel_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   13,
+			NumMessages:   14,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

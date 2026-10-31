@@ -96,6 +96,22 @@ message DescribeResponse {
   // The size, in grid cells, a new panel gets when the user adds it.
   // Unset, or a zero dimension, means 1.
   GridSize default_size = 7;
+  // The least room, in dp, the panel's view needs below the tile's
+  // head, measured at the default text size. The host scales it with
+  // the user's text size, turns it into grid cells for the current row
+  // height and column width, and keeps a panel the user adds or resizes
+  // at least that large. Unset, or a zero dimension, means no minimum
+  // in that dimension; the host reads at most 600 in each, so a panel
+  // can always be made small enough to arrange.
+  BodySize min_body = 8;
+}
+
+// BodySize is the room a panel's view gets, in dp.
+message BodySize {
+  // Width in dp.
+  uint32 width = 1;
+  // Height in dp.
+  uint32 height = 2;
 }
 
 // GridSize is a panel's size in grid cells.
@@ -113,8 +129,13 @@ message ConfigureRequest {
   // The panel's settings from the config file, unvalidated by the host
   // until the configuration UI validates them against config_schema.
   google.protobuf.Struct settings = 2;
-  // The panel's current size in grid cells.
+  // The panel's size in grid cells, as the config file has it.
   GridSize size = 3;
+  // The size the panel is shown at, in grid cells: size, unless a
+  // window too narrow for the config's columns flows the panel into
+  // fewer columns than it spans. Lay the view out for this one. A host
+  // that predates it leaves it unset; use size then.
+  GridSize shown_size = 4;
 }
 
 // ConfigureResponse acknowledges the settings.

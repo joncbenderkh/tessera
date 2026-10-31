@@ -116,16 +116,23 @@ picker, it may also launch a plugin that has no panel, call only
 ```
 host                                    plugin
  │── Describe(host version, [1]) ───────▶│  name, version, view_version,
- │◀──────────────────────────────────────│  config_schema, default_size
- │── Configure(panel id, settings, size)▶│  INVALID_ARGUMENT if rejected
+ │◀──────────────────────────────────────│  config_schema, default_size, min_body
+ │── Configure(panel id, settings, ─────▶│  INVALID_ARGUMENT if rejected
+ │     size, shown size)                 │
  │── Watch(heartbeat interval) ─────────▶│
  │◀──────── view ── view ── heartbeat ───│  first view right away
  │── HandleEvent(activate "pid:4821") ──▶│  effect arrives as a new view
 ```
 
 - **Configure** is called again whenever the panel's settings or size
-  change. The size is the panel's `w` and `h` in the config, which a
-  narrow window's layout does not change. A watching plugin then sends a
+  change. `size` is the panel's `w` and `h` in the config, which a
+  narrow window's layout does not change; `shown_size` is the size the
+  panel is shown at, as wide as `size` or as the window's columns,
+  whichever is less, and it changes as the window is resized across
+  a column count. That configures a live plugin again, but, unlike a
+  change to the config, restarts no panel that failed or whose views
+  went over a limit. A plugin should lay its view out for `shown_size`;
+  a host from before it leaves it unset. A watching plugin then sends a
   fresh view on its open stream, and a polled plugin is rendered again
   right away. If the plugin answers `INVALID_ARGUMENT`, the host shuts
   it down and shows the panel as crashed, with the message, until its
@@ -298,7 +305,17 @@ locale.
 
 How the host draws a view:
 - A view taller than its tile is cut off at the tile's edge, except
-  tables and lists, which scroll within the space they get. A table or
+  tables and lists, which scroll within the space they get. Where text
+  runs past the bottom, a widget gets no room in a stack, or a gauge's
+  smallest dial does not fit, that widget, or the stack whose items run
+  out of room, fades out into the tile where it is cut (at its bottom,
+  or the right end of a horizontal stack), so the cut shows. A plugin
+  avoids it with `min_body` in `DescribeResponse`: the host scales it
+  with the user's text size, as sp but never below its size in dp,
+  turns it into cells for the row height and column width at the
+  time, grows a panel the user adds to at least that once its plugin
+  has described itself, and stops edit mode's resizing there. A panel
+  the config makes smaller is shown at its size, faded. A table or
   list with an `id` keeps its scroll position across views and sends a
   `ScrollEvent` whenever its visible range changes, including the
   first time a plugin's view draws it and when it is empty. Visible
