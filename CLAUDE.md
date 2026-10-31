@@ -131,8 +131,9 @@ Use the local toolchain: `export PATH=/usr/local/go/bin:$PATH`.
   `go run ./cmd/build`. `--no-host` skips the host, `--dest` picks
   another plugins directory, and `--run` starts the host afterwards
   with that directory as its `--plugins` (arguments after `--` go
-  to it). A bare `go build` at the root builds the `tessera`
-  library package and writes nothing.
+  to it; Ctrl-\ still gives the host's goroutine dump, which does
+  not close its plugins). A bare `go build` at the root builds the
+  `tessera` library package and writes nothing.
 - Build the host alone: `go build ./cmd/tessera`; `./tessera --version`.
 - Test: `go test ./...`
 - Vet: `go vet ./...`

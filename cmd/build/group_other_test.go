@@ -7,3 +7,5 @@ package main
 import "testing"
 
 func checkOwnGroup(*testing.T, int) {}
+
+func backgroundSafe() bool { return true }

@@ -20,6 +20,7 @@ import (
 	"runtime"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -76,11 +77,13 @@ func checkArgs(run bool, dash int, args []string) error {
 func build(noHost, run bool, dest string, extra []string) {
 	log.SetFlags(0)
 	log.SetPrefix("build: ")
-	// A signal stops go build and leaves this to remove what it staged;
-	// one from the terminal reaches go build as well. Unlike Ignore, this
-	// does not pass on to it.
-	ctx, stop := signal.NotifyContext(context.Background(), stopSignals...)
-	defer stop()
+	// One channel takes every stop signal from the start. During the
+	// build the first stops go build and leaves this to remove what it
+	// staged; one from the terminal reaches go build as well. Unlike
+	// Ignore, this does not pass on to it. Later ones go to the host.
+	signals := make(chan os.Signal, len(stopSignals))
+	signal.Notify(signals, stopSignals...)
+	ctx, stopped := watch(signals)
 	root, err := moduleRoot()
 	if err != nil {
 		log.Fatal(err)
@@ -88,28 +91,61 @@ func build(noHost, run bool, dest string, extra []string) {
 	host := filepath.Join(root, "tessera"+exeSuffix())
 	if !noHost {
 		if err := goBuild(ctx, root, nil, "-o", host, "./cmd/tessera"); err != nil {
-			log.Fatalf("building the host: %v", err)
+			fatalUnlessStopped(ctx, "building the host", err)
 		}
 		log.Printf("host: %s", host)
 	}
 	names, err := installPlugins(ctx, root, dest)
 	if err != nil {
-		log.Fatalf("installing the plugins: %v", err)
+		fatalUnlessStopped(ctx, "installing the plugins", err)
 	}
 	log.Printf("plugins in %s: %s", dest, strings.Join(names, ", "))
+	// A signal during the renames, which it does not stop, stops this
+	// now; any later one goes to the host.
+	if stopped() {
+		log.Fatal("stopped by a signal")
+	}
 	if run {
-		// Signals from here on go to the host; one before the check
-		// stops this, as the renames do not.
-		signals := make(chan os.Signal, len(stopSignals))
-		signal.Notify(signals, stopSignals...)
-		if ctx.Err() != nil {
-			log.Fatal("stopped before starting the host")
-		}
 		args, err := hostArgs(dest, extra)
 		if err != nil {
 			log.Fatal(err)
 		}
 		os.Exit(runHost(host, args, signals))
+	}
+}
+
+// fatalUnlessStopped ends this after err in doing what, or says that a
+// signal stopped it, if one did.
+func fatalUnlessStopped(ctx context.Context, what string, err error) {
+	if ctx.Err() != nil {
+		log.Fatal("stopped by a signal")
+	}
+	log.Fatalf("%s: %v", what, err)
+}
+
+// watch returns a context cancelled by the first signal from signals,
+// and a function that ends the watch and reports whether one came,
+// taking any that waits in signals, so later ones stay there.
+func watch(signals chan os.Signal) (context.Context, func() bool) {
+	ctx, cancel := context.WithCancel(context.Background())
+	done, watched := make(chan struct{}), make(chan struct{})
+	go func() {
+		defer close(watched)
+		select {
+		case <-signals:
+			cancel()
+		case <-done:
+		}
+	}()
+	return ctx, func() bool {
+		close(done)
+		<-watched
+		select {
+		case <-signals:
+			cancel()
+		default:
+		}
+		return ctx.Err() != nil
 	}
 }
 
@@ -158,6 +194,12 @@ func goBuild(ctx context.Context, root string, env []string, args ...string) err
 	cmd.Dir = root
 	cmd.Env = append(os.Environ(), env...)
 	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
+	if runtime.GOOS != "windows" {
+		// Interrupted, go build finishes writing its output, which a
+		// kill could leave half copied; it is killed if it lingers.
+		cmd.Cancel = func() error { return cmd.Process.Signal(os.Interrupt) }
+		cmd.WaitDelay = 10 * time.Second
+	}
 	return cmd.Run()
 }
 
@@ -222,7 +264,7 @@ func hostArgs(dest string, extra []string) ([]string, error) {
 }
 
 // stopSignals are the signals that stop the build, and the host.
-var stopSignals = []os.Signal{os.Interrupt, syscall.SIGTERM, syscall.SIGHUP}
+var stopSignals = []os.Signal{os.Interrupt, syscall.SIGTERM, syscall.SIGHUP, syscall.SIGQUIT}
 
 // runHost runs the host with args until it exits, passing on each
 // signal from signals, and returns its exit code.

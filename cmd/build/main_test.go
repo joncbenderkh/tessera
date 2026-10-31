@@ -17,8 +17,15 @@ import (
 )
 
 // TestMain makes the test binary a host that exits with 7 on SIGTERM,
-// when TestRunHostPassesSignal runs it as one, or that kills itself.
+// when TestRunHostPassesSignal runs it as one, that kills itself, or
+// that tells whether the terminal can stop it.
 func TestMain(m *testing.M) {
+	if os.Getenv("BUILD_TEST_HOST_BACKGROUND") != "" {
+		if backgroundSafe() {
+			os.Exit(0)
+		}
+		os.Exit(4)
+	}
 	if os.Getenv("BUILD_TEST_HOST_KILLED") != "" {
 		self, _ := os.FindProcess(os.Getpid())
 		self.Kill()
@@ -27,7 +34,8 @@ func TestMain(m *testing.M) {
 	if ready := os.Getenv("BUILD_TEST_HOST_READY"); ready != "" {
 		terms := make(chan os.Signal, 1)
 		signal.Notify(terms, syscall.SIGTERM)
-		if err := os.WriteFile(ready, []byte(strconv.Itoa(os.Getpid())), 0o600); err != nil {
+		// Renamed into place, so the test never reads it half written.
+		if os.WriteFile(ready+".tmp", []byte(strconv.Itoa(os.Getpid())), 0o600) != nil || os.Rename(ready+".tmp", ready) != nil {
 			os.Exit(2)
 		}
 		select {
@@ -72,6 +80,36 @@ func TestRunHostPassesSignal(t *testing.T) {
 		}
 	case <-time.After(30 * time.Second):
 		t.Fatal("host still running after SIGTERM")
+	}
+}
+
+// A signal before the watch ends stops the build, even one still
+// waiting when it ends, and is not handed on; a later one is.
+func TestWatch(t *testing.T) {
+	signals := make(chan os.Signal, 1)
+	ctx, stop := watch(signals)
+	signals <- syscall.SIGTERM
+	<-ctx.Done()
+	if !stop() || len(signals) != 0 {
+		t.Errorf("signal during the build: stopped %v, %d left for the host", ctx.Err() != nil, len(signals))
+	}
+
+	// Queued as the watch ends, when its goroutine may not have run.
+	signals = make(chan os.Signal, 1)
+	_, stop = watch(signals)
+	signals <- syscall.SIGTERM
+	if !stop() || len(signals) != 0 {
+		t.Errorf("signal as the build ends: not stopped, or %d left for the host", len(signals))
+	}
+
+	signals = make(chan os.Signal, 1)
+	ctx, stop = watch(signals)
+	if stop() {
+		t.Error("stopped without a signal")
+	}
+	signals <- syscall.SIGTERM
+	if ctx.Err() != nil || len(signals) != 1 {
+		t.Errorf("signal after the build: stopped %v, %d left for the host", ctx.Err() != nil, len(signals))
 	}
 }
 
@@ -186,5 +224,14 @@ func TestRunHostSignalled(t *testing.T) {
 	t.Setenv("BUILD_TEST_HOST_KILLED", "1")
 	if got := runHost(os.Args[0], nil, nil); got != 128+9 {
 		t.Errorf("killed host gives %d, want %d", got, 128+9)
+	}
+}
+
+// The host, in the terminal's background, is not stopped there for
+// writing to it or reading from it.
+func TestRunHostInBackground(t *testing.T) {
+	t.Setenv("BUILD_TEST_HOST_BACKGROUND", "1")
+	if got := runHost(os.Args[0], nil, nil); got != 0 {
+		t.Errorf("host can be stopped by the terminal (exit %d)", got)
 	}
 }
