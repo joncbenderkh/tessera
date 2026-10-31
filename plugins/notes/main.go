@@ -36,6 +36,7 @@ func main() {
 		Description:  "A note you write in the panel's settings.",
 		ConfigSchema: schema,
 		DefaultSize:  sdk.Size{Columns: 2, Rows: 1},
+		MinBody:      minBody,
 		Views:        views,
 		Configure: func(_ context.Context, cfg sdk.Config) error {
 			var s settings
@@ -79,3 +80,7 @@ func trimBlankLines(s string) string {
 		s = rest
 	}
 }
+
+// minBody is the least room the panel's view needs, in dp: room for
+// a title and a line of the note.
+var minBody = sdk.BodySize{Width: 150, Height: 37}

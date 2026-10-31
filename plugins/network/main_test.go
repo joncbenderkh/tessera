@@ -7,6 +7,7 @@ package main
 import (
 	"context"
 	"errors"
+	"image"
 	"math"
 	"os"
 	"path/filepath"
@@ -19,6 +20,7 @@ import (
 	"google.golang.org/grpc/status"
 
 	"github.com/joncbenderkh/tessera/internal/plugintest"
+	"github.com/joncbenderkh/tessera/internal/ui"
 	"github.com/joncbenderkh/tessera/plugins/internal/metric"
 	tesserav1 "github.com/joncbenderkh/tessera/proto/tessera/v1"
 	"github.com/joncbenderkh/tessera/sdk"
@@ -223,4 +225,32 @@ func TestIsPhysicalHostSys(t *testing.T) {
 	if !isPhysical("nic9") || isPhysical("br9") {
 		t.Errorf("isPhysical under %s: nic9 %v, br9 %v; want true, false", sys, isPhysical("nic9"), isPhysical("br9"))
 	}
+}
+
+// The views fit the least body the plugin asks for, minBody, at the
+// default text size.
+func TestMinBody(t *testing.T) {
+	// From the narrowest body a tile has, or the least width it asks for.
+	for _, width := range []int{124, 168, 300, 432, 600, 900} {
+		testMinBodyAt(t, max(width, minBody.Width))
+	}
+}
+
+func testMinBodyAt(t *testing.T, width int) {
+	t.Helper()
+	for i, v := range minBodyViews() {
+		if !ui.ViewFits(v.Proto(), image.Pt(width, minBody.Height), 1) {
+			t.Errorf("view %d does not fit %d by %d dp", i, width, minBody.Height)
+		}
+	}
+}
+
+// minBodyViews are the views minBody is measured with.
+func minBodyViews() []sdk.View {
+	var down, up metric.History
+	for i := range 60 {
+		down.Add(float64(i) * 1e6)
+		up.Add(9e5)
+	}
+	return []sdk.View{view(state{iface: "eth0", interval: 2 * time.Second, down: down.Samples(), up: up.Samples()})}
 }

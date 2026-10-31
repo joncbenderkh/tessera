@@ -57,6 +57,7 @@ func main() {
 		Description:  "A greeting, with the name of this computer.",
 		ConfigSchema: schema,
 		DefaultSize:  sdk.Size{Columns: 4, Rows: 1},
+		MinBody:      minBody,
 		Views:        views,
 		Configure: func(_ context.Context, cfg sdk.Config) error {
 			s := defaults
@@ -87,3 +88,7 @@ func view(s settings, host string) sdk.View {
 	}
 	return sdk.View{Title: "Greeting", Body: body}
 }
+
+// minBody is the least room the panel's view needs, in dp: room for
+// the default greeting and its second line, each on one line.
+var minBody = sdk.BodySize{Width: 300, Height: 40}

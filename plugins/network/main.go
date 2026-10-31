@@ -89,6 +89,7 @@ func main() {
 		Description:  "Network throughput in and out, with its recent history.",
 		ConfigSchema: schema,
 		DefaultSize:  sdk.Size{Columns: 2, Rows: 2},
+		MinBody:      minBody,
 		Views:        views,
 		Configure:    n.configure,
 	})
@@ -376,3 +377,7 @@ func delta(last, previous float64) string {
 	}
 	return sign + value + " " + unit + " · last sample"
 }
+
+// minBody is the least room the panel's view needs, in dp: room for
+// both rates and their sparklines, in the narrowest column.
+var minBody = sdk.BodySize{Width: 168, Height: 175}

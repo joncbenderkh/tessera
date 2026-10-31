@@ -94,6 +94,7 @@ func main() {
 		Description:  "Up to four clocks, each in its own time zone.",
 		ConfigSchema: schema,
 		DefaultSize:  sdk.Size{Columns: 1, Rows: 1},
+		MinBody:      minBody,
 		Views:        views,
 		Configure:    c.configure,
 	})
@@ -109,7 +110,7 @@ func (c *worldClock) configure(_ context.Context, cfg sdk.Config) error {
 		return sdk.InvalidSettings("%v", err)
 	}
 	c.mu.Lock()
-	c.places, c.utcOffsets, c.size = places, s.UTCOffsets, cfg.Size
+	c.places, c.utcOffsets, c.size = places, s.UTCOffsets, cfg.Shown
 	c.show(time.Now())
 	c.mu.Unlock()
 	c.start.Do(func() { go c.tick() })
@@ -356,3 +357,7 @@ func perRow(n int, size sdk.Size) int {
 	}
 	return best
 }
+
+// minBody is the least room the panel's view needs, in dp: room for
+// four clocks in one cell, in the narrowest column.
+var minBody = sdk.BodySize{Width: 168, Height: 114}

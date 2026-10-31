@@ -94,9 +94,17 @@ at most six. Large text widens that minimum to what a failed panel's
 Restart and Logs buttons need side by side. With fewer columns than
 the config, the panels flow left to right and top to bottom in that
 order, each at most as wide as the window's columns, and keep their
-heights. Plugins are told the size in
-the config, not the size they get in a narrow window. Arranging panels
-freely is #36.
+heights. Plugins are told both the size in the config and the size
+they are shown at, and are configured again when a window's width
+changes the second. Arranging panels freely is #36.
+
+A plugin can ask for a least size: the room its view needs, which the
+host turns into cells for the row height and column width at the time.
+Edit mode keeps a panel at least that large (see below); a panel the
+file makes smaller is shown as it is, its view fading out where it is
+cut off. With the default row height of 180, the system, disk,
+network, calendar, and processes panels need two rows, as they have
+by default; at a row height of 150, the world clock panel does too.
 
 ### Editing the layout
 
@@ -121,6 +129,9 @@ freely is #36.
   sideways or growing wider, like dragging, moves the panels in its
   way below it, and the panel itself below one that starts above it
   in its new columns.
+- Neither a drag nor the keys make a panel smaller than its plugin
+  asks for; one smaller already, as the file can make it, can grow
+  but not shrink.
 - **Disable panel** in a panel's menu, in edit mode or not, sets
   `enabled: false`, with an Undo in the message that follows, for the
   panel disabled last. In edit mode, the bar above the grid has an
@@ -131,7 +142,11 @@ freely is #36.
 - **Add panel…** in that bar lists the plugins installed in the plugins
   directory; the one chosen gets a one-cell panel in the first free
   cell, with the plugin's name as its `id` (`clock`, then `clock-2`,
-  and so on).
+  and so on). Once its plugin has started, the panel grows to the
+  plugin's default size and the least size it asks for, moving left
+  if the grid's edge is in the way. It grows only while the window
+  shows all the grid's columns, as other resizing needs; one still
+  waiting when edit mode ends stays one cell.
 
 Moving and resizing need the window to show all the grid's columns;
 in a narrower window, edit mode can still disable, enable, and add

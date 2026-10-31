@@ -11,6 +11,7 @@ import (
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/types/known/structpb"
 
 	"github.com/joncbenderkh/tessera/internal/plugintest"
 	"github.com/joncbenderkh/tessera/internal/ui"
@@ -327,4 +328,61 @@ func TestWorldClock(t *testing.T) {
 		texts := plugintest.Texts(v.GetBody())
 		return len(texts) == 3 && texts[0] == "Office" && strings.Contains(texts[2], "JST")
 	})
+}
+
+// The views fit the least body the plugin asks for, minBody, at the
+// default text size.
+func TestMinBody(t *testing.T) {
+	// From the narrowest body a tile has, or the least width it asks for.
+	for _, width := range []int{124, 168, 300, 432, 600, 900} {
+		testMinBodyAt(t, max(width, minBody.Width))
+	}
+}
+
+func testMinBodyAt(t *testing.T, width int) {
+	t.Helper()
+	for i, v := range minBodyViews(t) {
+		if !ui.ViewFits(v.Proto(), image.Pt(width, minBody.Height), 1) {
+			t.Errorf("view %d does not fit %d by %d dp", i, width, minBody.Height)
+		}
+	}
+}
+
+// minBodyViews are the views minBody is measured with.
+func minBodyViews(t *testing.T) []sdk.View {
+	t.Helper()
+	chatham := zone(t, "Pacific/Chatham")
+	now := time.Date(2026, 1, 14, 23, 59, 0, 0, chatham)
+	var views []sdk.View
+	for n := 1; n <= maxClocks; n++ {
+		places := slices.Repeat([]place{{"Buenos Aires", chatham}}, n)
+		views = append(views, view(now, places, sdk.Size{Columns: 1, Rows: 1}, false))
+	}
+	return views
+}
+
+// The clocks are laid out for the size the panel is shown at, not its
+// size in the config: three in a panel three wide shown in one column
+// take two rows, as in one cell.
+func TestShownSize(t *testing.T) {
+	p := plugintest.Launch(t, "worldclock")
+	clocks := []any{map[string]any{"timezone": "UTC"}, map[string]any{"timezone": "Asia/Tokyo"}, map[string]any{"timezone": "Europe/Berlin"}}
+	settings, err := structpb.NewStruct(map[string]any{"clocks": clocks})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		shown *tesserav1.GridSize
+		rows  int
+	}{
+		{&tesserav1.GridSize{Columns: 1, Rows: 1}, 2},
+		{&tesserav1.GridSize{Columns: 3, Rows: 1}, 1},
+	} {
+		if _, err := p.Client.Configure(p.Context(), &tesserav1.ConfigureRequest{
+			PanelId: "p", Settings: settings, Size: &tesserav1.GridSize{Columns: 3, Rows: 1}, ShownSize: tc.shown,
+		}); err != nil {
+			t.Fatal(err)
+		}
+		p.Await(func(v *tesserav1.View) bool { return len(v.GetBody().GetStack().GetItems()) == tc.rows })
+	}
 }

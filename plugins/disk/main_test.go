@@ -5,6 +5,7 @@
 package main
 
 import (
+	"image"
 	"os"
 	"path/filepath"
 	"slices"
@@ -15,7 +16,9 @@ import (
 	"google.golang.org/grpc/status"
 
 	"github.com/joncbenderkh/tessera/internal/plugintest"
+	"github.com/joncbenderkh/tessera/internal/ui"
 	tesserav1 "github.com/joncbenderkh/tessera/proto/tessera/v1"
+	"github.com/joncbenderkh/tessera/sdk"
 )
 
 func TestMain(m *testing.M) { plugintest.Main(m, main) }
@@ -87,4 +90,28 @@ func TestDisk(t *testing.T) {
 		t.Fatal(err)
 	}
 	p.Await(func(v *tesserav1.View) bool { return gauge(v) != nil && v.GetTitle() == "Disk "+link })
+}
+
+// The views fit the least body the plugin asks for, minBody, at the
+// default text size.
+func TestMinBody(t *testing.T) {
+	// From the narrowest body a tile has, or the least width it asks for.
+	for _, width := range []int{124, 168, 300, 432, 600, 900} {
+		testMinBodyAt(t, max(width, minBody.Width))
+	}
+}
+
+func testMinBodyAt(t *testing.T, width int) {
+	t.Helper()
+	for i, v := range minBodyViews() {
+		if !ui.ViewFits(v.Proto(), image.Pt(width, minBody.Height), 1) {
+			t.Errorf("view %d does not fit %d by %d dp", i, width, minBody.Height)
+		}
+	}
+}
+
+// minBodyViews are the views minBody is measured with.
+func minBodyViews() []sdk.View {
+	u := &disk.UsageStat{Fstype: "ext4", Total: 1 << 40, Free: 320 << 30, UsedPercent: 68.04}
+	return []sdk.View{view("/", "/dev/nvme0n1p2", u), failed("/mnt/data", true)}
 }

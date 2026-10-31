@@ -196,6 +196,7 @@ func main() {
 		Description:  "The processes using the most CPU or memory.",
 		ConfigSchema: schema,
 		DefaultSize:  sdk.Size{Columns: 2, Rows: 2},
+		MinBody:      minBody,
 		Views:        views,
 		Configure:    p.configure,
 		Activate:     p.activate,
@@ -656,3 +657,7 @@ func failed(title string) sdk.View {
 		).Gap(sdk.SpacingSmall),
 	}
 }
+
+// minBody is the least room the panel's view needs, in dp: room for
+// the caption, the table's head and three of its rows.
+var minBody = sdk.BodySize{Width: 300, Height: 152}

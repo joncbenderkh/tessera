@@ -214,7 +214,10 @@ disk, network, and processes (#20), Linux-only, read /proc directly
 and through gopsutil. Edit mode moves and resizes panels by dragging
 or with the arrow keys, disables them with an Undo, re-enables them
 and adds panels from a bar above the grid, and saves each change at
-once (#15).
+once (#15). Plugins declare the least body their views need, which
+edit mode keeps panels to and Add panel grows them to, alongside the
+default size; plugins are told the size they are shown at, and a
+view that does not fit fades out where it is cut (#52).
 
 ## Git workflow
 
