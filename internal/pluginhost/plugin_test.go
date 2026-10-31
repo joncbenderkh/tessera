@@ -369,8 +369,8 @@ func (s *server) Configure(ctx context.Context, req *tesserav1.ConfigureRequest)
 			freeze()
 		}()
 	}
-	fmt.Fprintf(os.Stderr, "configured %s %v %dx%d\n", req.GetPanelId(), req.GetSettings().AsMap(),
-		req.GetSize().GetColumns(), req.GetSize().GetRows())
+	fmt.Fprintf(os.Stderr, "configured %s %v %dx%d shown %dx%d\n", req.GetPanelId(), req.GetSettings().AsMap(),
+		req.GetSize().GetColumns(), req.GetSize().GetRows(), req.GetShownSize().GetColumns(), req.GetShownSize().GetRows())
 	return &tesserav1.ConfigureResponse{}, nil
 }
 

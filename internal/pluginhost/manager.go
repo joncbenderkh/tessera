@@ -160,6 +160,7 @@ type Manager struct {
 
 	mu          sync.Mutex
 	panels      []*panel
+	columns     int                        // the grid columns the window shows; 0 until SetColumns
 	dropped     map[string]<-chan struct{} // by id: done of a dropped panel whose supervisor runs
 	viewSignal  time.Time                  // the last Changed signal for a view
 	viewPending bool                       // one is scheduled
@@ -172,6 +173,7 @@ type panel struct {
 	done    chan struct{} // closed once its supervisor, and any before it for the id, returned
 	cfg     config.Panel  // under mu
 	changed chan struct{} // Apply changed cfg's settings or size; buffered, coalesced
+	reshown chan struct{} // SetColumns changed the size it is shown at; buffered, coalesced
 	inst    *Instance     // the live one, if any; under mu; read by tests
 	logs    *ring
 	restart chan struct{}                      // a manual Restart; buffered, coalesced
@@ -231,10 +233,7 @@ func (m *Manager) Apply(cfg config.Config) {
 		if pn := old[p.ID]; pn != nil && pn.Plugin == p.Plugin {
 			delete(old, p.ID)
 			if !sameSettings(pn.cfg.Settings, p.Settings) || pn.cfg.W != p.W || pn.cfg.H != p.H {
-				select {
-				case pn.changed <- struct{}{}:
-				default: // one is already pending; it reads the latest cfg
-				}
+				pn.notify()
 			}
 			pn.cfg = p
 			next = append(next, pn)
@@ -286,6 +285,7 @@ func (m *Manager) newPanel(p config.Panel) *panel {
 		done:       make(chan struct{}),
 		cfg:        p,
 		changed:    make(chan struct{}, 1),
+		reshown:    make(chan struct{}, 1),
 		logs:       newRing(logLines),
 		restart:    make(chan struct{}, 1),
 		events:     make(chan *tesserav1.HandleEventRequest, maxEvents),
@@ -293,11 +293,52 @@ func (m *Manager) newPanel(p config.Panel) *panel {
 	}
 }
 
-// config is pn's latest panel config.
-func (m *Manager) config(pn *panel) config.Panel {
+// notify tells pn's supervisor that its settings or size changed.
+func (pn *panel) notify() {
+	select {
+	case pn.changed <- struct{}{}:
+	default: // one is already pending; it reads the latest cfg
+	}
+}
+
+// SetColumns tells m how many grid columns the window shows, which
+// decides the size each panel is shown at: as wide as in the config,
+// or as the window's columns, whichever is less. A live panel whose
+// shown size changes is configured again; unlike a change in Apply, it
+// relaunches no failed panel, nor one whose views were over a limit.
+// Until it is first called, each panel is shown at its size in the
+// config.
+func (m *Manager) SetColumns(columns int) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return pn.cfg
+	if columns == m.columns || m.ctx.Err() != nil {
+		return
+	}
+	for _, pn := range m.panels {
+		if shownWidth(pn.cfg.W, columns) != shownWidth(pn.cfg.W, m.columns) {
+			select {
+			case pn.reshown <- struct{}{}:
+			default: // one is already pending; it reads the latest columns
+			}
+		}
+	}
+	m.columns = columns
+}
+
+// shownWidth is the width of a panel w columns wide in a window that
+// shows columns of them, or all if columns is 0.
+func shownWidth(w, columns int) int {
+	if columns > 0 {
+		return min(w, columns)
+	}
+	return w
+}
+
+// config is pn's latest panel config, and the columns the window shows.
+func (m *Manager) config(pn *panel) (config.Panel, int) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return pn.cfg, m.columns
 }
 
 // supervise runs one panel's plugin until Close, or until Apply drops
@@ -499,7 +540,12 @@ func (m *Manager) launch(pn *panel) (*Instance, string, error) {
 	case <-pn.changed: // this Configure sends the latest
 	default:
 	}
-	if err := configure(pn.ctx, inst, m.config(pn), m.opts.CallTimeout); err != nil {
+	select {
+	case <-pn.reshown: // and the latest shown size
+	default:
+	}
+	p, columns := m.config(pn)
+	if err := configure(pn.ctx, inst, p, columns, m.opts.CallTimeout); err != nil {
 		if pn.ctx.Err() == nil {
 			m.stopping(pn, err)
 		}
@@ -612,7 +658,9 @@ func answered(err error) bool {
 	return ok && s.Code() != codes.Unavailable && s.Code() != codes.Canceled
 }
 
-func configure(ctx context.Context, inst *Instance, p config.Panel, timeout time.Duration) error {
+// configure sends p's settings and size to inst, shown in a window
+// columns wide (see SetColumns).
+func configure(ctx context.Context, inst *Instance, p config.Panel, columns int, timeout time.Duration) error {
 	settings, err := toStruct(p.Settings)
 	if err != nil {
 		return permanent(fmt.Errorf("plugin %q: settings: %w", p.Plugin, err))
@@ -620,9 +668,10 @@ func configure(ctx context.Context, inst *Instance, p config.Panel, timeout time
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	_, err = inst.Client.Configure(ctx, &tesserav1.ConfigureRequest{
-		PanelId:  p.ID,
-		Settings: settings,
-		Size:     &tesserav1.GridSize{Columns: uint32(p.W), Rows: uint32(p.H)},
+		PanelId:   p.ID,
+		Settings:  settings,
+		Size:      &tesserav1.GridSize{Columns: uint32(p.W), Rows: uint32(p.H)},
+		ShownSize: &tesserav1.GridSize{Columns: uint32(shownWidth(p.W, columns)), Rows: uint32(p.H)},
 	})
 	if err == nil {
 		return nil // even if the deadline passes right after the answer
