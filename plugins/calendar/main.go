@@ -105,6 +105,7 @@ func main() {
 		Description:  "The rest of today's events in iCalendar feeds.",
 		ConfigSchema: schema,
 		DefaultSize:  sdk.Size{Columns: 1, Rows: 2},
+		MinBody:      minBody,
 		Views:        views,
 		Configure:    c.configure,
 		Activate:     c.activate,
@@ -386,3 +387,7 @@ func (c *calendar) show(now time.Time) {
 	}
 	c.views <- view(now, a, c.selected)
 }
+
+// minBody is the least room the panel's view needs, in dp: room for
+// the date, the count, and two events of the list.
+var minBody = sdk.BodySize{Width: 168, Height: 209}

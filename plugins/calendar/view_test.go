@@ -3,6 +3,7 @@
 package main
 
 import (
+	"image"
 	"slices"
 	"strconv"
 	"strings"
@@ -10,7 +11,9 @@ import (
 	"time"
 
 	"github.com/joncbenderkh/tessera/internal/plugintest"
+	"github.com/joncbenderkh/tessera/internal/ui"
 	tesserav1 "github.com/joncbenderkh/tessera/proto/tessera/v1"
+	"github.com/joncbenderkh/tessera/sdk"
 )
 
 // items returns the list in v's body as "leading|title|detail|action".
@@ -136,4 +139,31 @@ func TestViewTooMany(t *testing.T) {
 	if texts := plugintest.Texts(v.GetBody()); !slices.Contains(texts, "100 of 105 events") || len(items(v.GetBody())) != maxItems {
 		t.Errorf("texts %q, %d items", texts, len(items(v.GetBody())))
 	}
+}
+
+// The views fit the least body the plugin asks for, minBody, at the
+// default text size.
+// Its list scrolls, so it fits any room left; minBody keeps room for
+// two events (57 dp each) besides.
+func TestMinBody(t *testing.T) {
+	// From the narrowest body a tile has, or the least width it asks for.
+	for _, width := range []int{124, 168, 300, 432, 600, 900} {
+		testMinBodyAt(t, max(width, minBody.Width))
+	}
+}
+
+func testMinBodyAt(t *testing.T, width int) {
+	t.Helper()
+	for i, v := range minBodyViews() {
+		if !ui.ViewFits(v.Proto(), image.Pt(width, minBody.Height), 1) {
+			t.Errorf("view %d does not fit %d by %d dp", i, width, minBody.Height)
+		}
+	}
+}
+
+// minBodyViews are the views minBody is measured with.
+func minBodyViews() []sdk.View {
+	now := time.Date(2026, 10, 14, 10, 15, 0, 0, time.UTC)
+	e := event{key: "a", title: "Design review", start: now.Add(time.Hour), end: now.Add(2 * time.Hour), location: "Room 4"}
+	return []sdk.View{view(now, agenda{title: "Today", loaded: true, events: []event{e}}, ""), view(now, agenda{loaded: true}, "")}
 }

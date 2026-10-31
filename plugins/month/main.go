@@ -63,6 +63,7 @@ func main() {
 		Description:  "The current month, with today highlighted.",
 		ConfigSchema: schema,
 		DefaultSize:  sdk.Size{Columns: 1, Rows: 2},
+		MinBody:      minBody,
 		Views:        views,
 		Configure:    m.configure,
 	})
@@ -219,3 +220,7 @@ func weeks(y int, mo time.Month, first time.Weekday) [][7]int {
 	}
 	return ws
 }
+
+// minBody is the least room the panel's view needs, in dp: room for a
+// month of six weeks.
+var minBody = sdk.BodySize{Width: 168, Height: 150}

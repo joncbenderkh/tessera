@@ -82,6 +82,7 @@ func main() {
 		Description:  "How full a file system is.",
 		ConfigSchema: schema,
 		DefaultSize:  sdk.Size{Columns: 1, Rows: 2},
+		MinBody:      minBody,
 		Views:        views,
 		Configure:    d.configure,
 	})
@@ -220,3 +221,7 @@ func failed(mount string, notMounted bool) sdk.View {
 		).Gap(sdk.SpacingSmall),
 	}
 }
+
+// minBody is the least room the panel's view needs, in dp: room for
+// the dial at its least size, its caption, and the device line.
+var minBody = sdk.BodySize{Width: 120, Height: 144}
