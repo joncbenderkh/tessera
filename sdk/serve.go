@@ -43,6 +43,13 @@ type Plugin struct {
 	ConfigSchema string
 	// DefaultSize is the size a new panel gets. A zero dimension means 1.
 	DefaultSize Size
+	// MinBody is the least room, in dp at the default text size, the
+	// panel's view needs below the tile's head. The host keeps a panel
+	// the user adds or resizes at least that large, in cells of the
+	// current grid. A zero dimension means no minimum in it; the host
+	// reads at most 600 in each. Measure it with the views the panel
+	// sends at its smallest (see docs/plugins.md).
+	MinBody BodySize
 
 	// Views carries the panel's views; each one replaces the last. The
 	// host is sent the newest, so a plugin need not wait for one to go out
@@ -79,6 +86,11 @@ type Size struct {
 	Columns, Rows int
 }
 
+// BodySize is room for a panel's view, in dp.
+type BodySize struct {
+	Width, Height int
+}
+
 // Config is a panel's settings and size, as the host passes them to
 // [Plugin.Configure].
 type Config struct {
@@ -88,8 +100,13 @@ type Config struct {
 	// objects are map[string]any, arrays []any, and every number a
 	// float64. The host does not validate them against the schema yet.
 	Settings map[string]any
-	// Size is the panel's size in grid cells.
+	// Size is the panel's size in grid cells, as the config file has
+	// it.
 	Size Size
+	// Shown is the size the panel is shown at: Size, unless a window too
+	// narrow for the grid flows the panel into fewer columns. Lay the
+	// view out for this one. Configure is called again when it changes.
+	Shown Size
 }
 
 // Decode stores the settings in the struct v points to, as
@@ -398,6 +415,7 @@ func (s *server) Describe(context.Context, *tesserav1.DescribeRequest) (*tessera
 		ViewVersion:     tesserav1.ViewVersion,
 		ConfigSchema:    s.plugin.ConfigSchema,
 		DefaultSize:     s.plugin.DefaultSize.proto(),
+		MinBody:         s.plugin.MinBody.proto(),
 	}, nil
 }
 
@@ -409,6 +427,10 @@ func (s *server) Configure(ctx context.Context, req *tesserav1.ConfigureRequest)
 		PanelID:  req.GetPanelId(),
 		Settings: req.GetSettings().AsMap(),
 		Size:     Size{Columns: int(req.GetSize().GetColumns()), Rows: int(req.GetSize().GetRows())},
+		Shown:    Size{Columns: int(req.GetShownSize().GetColumns()), Rows: int(req.GetShownSize().GetRows())},
+	}
+	if req.GetShownSize() == nil { // from a host older than shown_size
+		c.Shown = c.Size
 	}
 	err := s.plugin.Configure(ctx, c)
 	if se := (settingsError{}); errors.As(err, &se) {
@@ -530,6 +552,13 @@ func (s Size) proto() *tesserav1.GridSize {
 		return nil
 	}
 	return &tesserav1.GridSize{Columns: clampUint32(s.Columns), Rows: clampUint32(s.Rows)}
+}
+
+func (b BodySize) proto() *tesserav1.BodySize {
+	if b == (BodySize{}) {
+		return nil
+	}
+	return &tesserav1.BodySize{Width: clampUint32(b.Width), Height: clampUint32(b.Height)}
 }
 
 func clampUint32(n int) uint32 {

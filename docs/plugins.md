@@ -80,6 +80,17 @@ can start it.
 - `ConfigSchema` is a JSON Schema (draft 2020-12) for the panel's
   settings, if it takes any.
 - `DefaultSize` is the size, in grid cells, a new panel gets.
+- `MinBody` is the least room, in dp at the default text size, the
+  view needs below the tile's head. The host scales it with the
+  user's text size, turns it into cells for the current grid, and
+  keeps a panel the user adds or resizes at least that large. Measure
+  it from the views the panel sends at its smallest: in a first-party
+  plugin's tests, `ui.ViewFits` reports whether a view fits a body
+  without a cut, and `ui.TileBodySize` gives the body of a tile. A
+  table or list scrolls, so leave room for a few of its rows besides.
+  A zero dimension means no minimum in it; the host reads at most
+  600 dp in each, so a panel can always be made small enough to
+  arrange.
 
 ## Views
 
@@ -146,11 +157,17 @@ plugin, and the host restarts it.
 ## Settings
 
 `Configure` is called with the panel's settings and size when the
-plugin starts and again whenever they change. `Config.Decode` reads
-the settings into a struct as `encoding/json` would, but rejects a
-setting the struct has no field for, and matches names exactly: a
-setting's name must equal the field's `json` tag, or else its Go name,
-so `Step:` in the config does not fill a field tagged `json:"step"`.
+plugin starts and again whenever they change. `Config.Size` is the
+size in the config file, and `Config.Shown` the size the panel is
+shown at, which is narrower in a window that shows fewer columns than
+the grid has; lay the view out for `Shown`. A window resized across a
+column count changes only `Shown`, and calls `Configure` again, so
+keep it cheap: refetch data only when the settings change.
+`Config.Decode` reads the settings into a struct as `encoding/json`
+would, but rejects a setting the struct has no field for, and matches
+names exactly: a setting's name must equal the field's `json` tag, or
+else its Go name, so `Step:` in the config does not fill a field
+tagged `json:"step"`.
 
 ```go
 func (c *counter) configure(_ context.Context, cfg sdk.Config) error {
