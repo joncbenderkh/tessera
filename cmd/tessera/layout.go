@@ -57,8 +57,12 @@ func changeFor(a ui.Action, cfg config.Config) layoutChange {
 		return func(c *config.Config) error { return c.SetEnabled(a.Panel, on) }
 	case ui.ActionAdd:
 		// The id the window shows, which a panel added to the file
-		// meanwhile may have taken: Add refuses it then.
-		id := cfg.NewID(a.Plugin)
+		// meanwhile may have taken: Add refuses it then. Panel, if
+		// set, is the one picked already.
+		id := a.Panel
+		if id == "" {
+			id = cfg.NewID(a.Plugin)
+		}
 		return func(c *config.Config) error { return c.Add(id, a.Plugin) }
 	}
 	return nil
@@ -261,6 +265,7 @@ type windowConfig struct {
 	toast    *ui.Toaster
 	apply    func(config.Config) // gives the plugins a config
 	redraw   func()              // asks for a frame
+	added    func(id string)     // is told the id of each panel Add panel makes, if set
 }
 
 // takeReload takes a reload of the config file, if one is waiting.
@@ -309,7 +314,10 @@ func (w *windowConfig) change(a ui.Action) bool {
 	applyMu.Lock()
 	defer applyMu.Unlock()
 	w.takeReloadLocked()
-	c := changeFor(a, w.cfg) // after the reload, so Add picks an id it has free
+	if a.Kind == ui.ActionAdd {
+		a.Panel = w.cfg.NewID(a.Plugin) // after the reload, so it is free
+	}
+	c := changeFor(a, w.cfg)
 	next, err := edited(w.cfg, c)
 	if err != nil {
 		w.toast.Show("Layout not changed: " + err.Error())
@@ -321,6 +329,9 @@ func (w *windowConfig) change(a ui.Action) bool {
 	w.cfg = next
 	w.layouts.save(c)
 	w.apply(w.cfg)
+	if a.Kind == ui.ActionAdd && w.added != nil {
+		w.added(a.Panel)
+	}
 	// The frame under way drew the old layout, and a change that starts
 	// or stops no plugin brings no other frame.
 	w.redraw()

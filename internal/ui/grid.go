@@ -107,15 +107,20 @@ type Grid struct {
 	// arrow keys move no panel behind it.
 	Covered bool
 
-	fits   bool   // the last Layout showed all the config's columns
-	wide   bool   // the last Layout's config has more columns than any window shows
-	opened bool   // the last Layout opened a tile's menu
-	follow string // the panel the keyboard moved last frame, kept in view
-	tiles  map[string]*tile
-	scroll gesture.Scroll
-	offset int                        // px scrolled down
-	placed map[string]image.Rectangle // each tile's bounds, for tests
-	sizes  tileSizes                  // minTile's last result
+	fits    bool   // the last Layout showed all the config's columns
+	columns int    // the columns the last Layout showed
+	wide    bool   // the last Layout's config has more columns than any window shows
+	opened  bool   // the last Layout opened a tile's menu
+	follow  string // the panel the keyboard moved last frame, kept in view
+	tiles   map[string]*tile
+	scroll  gesture.Scroll
+	offset  int                        // px scrolled down
+	placed  map[string]image.Rectangle // each tile's bounds, for tests
+	sizes   tileSizes                  // minTile's last result
+	// grow holds the panels Add panel made in this edit mode, until
+	// their plugins describe themselves while the panels can move, and
+	// they grow to their default and least sizes.
+	grow map[string]bool
 }
 
 // tileSizes caches minTile for a text size and head.
@@ -125,17 +130,34 @@ type tileSizes struct {
 	narrow, ok bool
 	least      image.Point
 	stacked    int
+	head       int
 }
 
 // minTile is minTile, measured again only when the text size, the
 // theme or the head changes.
-func (g *Grid) minTile(gtx layout.Context, th *theme.Theme, narrow bool) (image.Point, int) {
+func (g *Grid) minTile(gtx layout.Context, th *theme.Theme, narrow bool) (image.Point, int, int) {
 	if s := g.sizes; !s.ok || s.metric != gtx.Metric || s.th != th || s.narrow != narrow {
-		least, stacked := minTile(gtx, th, narrow)
-		g.sizes = tileSizes{metric: gtx.Metric, th: th, narrow: narrow, ok: true, least: least, stacked: stacked}
+		least, stacked, head := minTile(gtx, th, narrow)
+		g.sizes = tileSizes{metric: gtx.Metric, th: th, narrow: narrow, ok: true, least: least, stacked: stacked, head: head}
 	}
-	return g.sizes.least, g.sizes.stacked
+	return g.sizes.least, g.sizes.stacked, g.sizes.head
 }
+
+// Added tells the grid that Add panel made panel id. Once its plugin
+// has described itself, while the panels can move (see Movable), the
+// grid asks, with an ActionPlace, to make it as large as the plugin's
+// default size and its least size, moved left if the grid's edge is in
+// the way. Leaving edit mode first forgets it.
+func (g *Grid) Added(id string) {
+	if g.grow == nil {
+		g.grow = map[string]bool{}
+	}
+	g.grow[id] = true
+}
+
+// ShownColumns is how many columns the last Layout showed, or 0 before
+// the first.
+func (g *Grid) ShownColumns() int { return g.columns }
 
 // MinHeight is the shortest content area, at gtx's width and text size,
 // that shows a whole tile of the smallest size: one whose menu, or
@@ -143,7 +165,7 @@ func (g *Grid) minTile(gtx layout.Context, th *theme.Theme, narrow bool) (image.
 // room below its header.
 func (g *Grid) MinHeight(gtx layout.Context, th *theme.Theme) int {
 	width := widthDp(gtx)
-	least, stacked := g.minTile(gtx, th, width <= Narrow)
+	least, stacked, _ := g.minTile(gtx, th, width <= Narrow)
 	return 2*gtx.Dp(contentPadding(width)) + max(least.Y, stacked)
 }
 
@@ -162,7 +184,8 @@ const (
 	// ActionEvent is input for the panel's plugin, in Event.
 	ActionEvent
 	// ActionPlace moves or resizes the panel to Cell, from a drag in
-	// edit mode.
+	// edit mode, or to the size a panel Add panel made needs (see
+	// Grid.Added).
 	ActionPlace
 	// ActionStep moves the panel by Step, from an arrow key in edit
 	// mode: a column sideways, or past the next panel up or down, as
@@ -264,13 +287,16 @@ func contentPadding(width unit.Dp) unit.Dp {
 // Layout draws cfg's enabled panels, with the state of each from states,
 // over gtx's constraints, and returns what the user asked for from them.
 func (g *Grid) Layout(gtx layout.Context, th *theme.Theme, cfg config.Config, states []pluginhost.PanelState) (layout.Dimensions, []Action) {
+	if !g.Edit {
+		g.grow = nil // panels added in edit mode grow only there
+	}
 	area := gtx.Constraints.Max
 	width := widthDp(gtx)
 	pad := gtx.Dp(contentPadding(width))
 	content := max(min(area.X-2*pad, gtx.Dp(maxContent)), 0)
 	// Large text takes fewer columns and taller rows: a tile never gets
 	// too small for a failed panel's buttons.
-	least, stacked := g.minTile(gtx, th, width <= Narrow)
+	least, stacked, headH := g.minTile(gtx, th, width <= Narrow)
 	gap := gtx.Dp(gridGap)
 	columns := max(min(Columns(width, cfg.Grid.Columns), (content+gap)/(least.X+gap)), 1)
 	cells := Arrange(cfg.Panels, cfg.Grid.Columns, columns)
@@ -327,6 +353,9 @@ func (g *Grid) Layout(gtx layout.Context, th *theme.Theme, cfg config.Config, st
 		gtx.Execute(op.InvalidateCmd{})
 	}
 	g.fits, g.wide = fits, wide
+	if area.X > 0 { // a window with no room, as while minimized, shows none
+		g.columns = columns
+	}
 	mode := editOff
 	switch {
 	case g.Movable():
@@ -335,6 +364,7 @@ func (g *Grid) Layout(gtx layout.Context, th *theme.Theme, cfg config.Config, st
 		mode = editOn
 	}
 	step := image.Pt(colW+gap, rowH+gap)
+	var growth []Action         // panels Add panel made, grown
 	var preview image.Rectangle // where a dragged tile would go
 	refused := false            // and it cannot go there
 	for _, c := range cells {
@@ -347,6 +377,20 @@ func (g *Grid) Layout(gtx layout.Context, th *theme.Theme, cfg config.Config, st
 		if !ok { // just added; Apply has not reported it yet
 			s = pluginhost.PanelState{ID: c.ID, Plugin: plugins[c.ID], State: pluginhost.Starting}
 		}
+		// The least size the plugin asks for, at most the grid.
+		fewest := minCells(gtx, s.Info.GetMinBody(), colW, rowH, gap, headH)
+		fewest.X = min(fewest.X, cfg.Grid.Columns)
+		// A panel Add panel made grows, but not while its tile is
+		// dragged: the drop would place it at its old size.
+		grow := func() {
+			if mode == editMove && g.grow[c.ID] && s.Info != nil && t.drag == dragNone {
+				if a, ok := grown(c, cfg.Grid.Columns, s.Info, fewest); ok {
+					growth = append(growth, a)
+				} else {
+					delete(g.grow, c.ID)
+				}
+			}
+		}
 		r := image.Rectangle{
 			Min: origin.Add(image.Pt(c.X*(colW+gap), c.Y*(rowH+gap))),
 		}
@@ -356,6 +400,7 @@ func (g *Grid) Layout(gtx layout.Context, th *theme.Theme, cfg config.Config, st
 		// than the window. One that was open closes.
 		if !r.Overlaps(image.Rectangle{Max: area}) {
 			t.open = false
+			grow()
 			continue
 		}
 		t.view = image.Rectangle{Max: area}.Sub(r.Min)
@@ -375,21 +420,18 @@ func (g *Grid) Layout(gtx layout.Context, th *theme.Theme, cfg config.Config, st
 		if mode == editMove {
 			if t.drag != dragNone {
 				var to Cell
-				to, refused = landing(cfg, dragTarget(c, t.drag, t.dragBy, step, columns))
+				to, refused = landing(cfg, dragTarget(c, t.drag, t.dragBy, step, columns, fewest))
 				preview = image.Rectangle{Min: origin.Add(image.Pt(to.X*step.X, to.Y*step.Y))}
 				preview.Max = preview.Min.Add(image.Pt(to.W*step.X-gap, to.H*step.Y-gap))
 			}
 			if t.dropped != dragNone {
-				if to := dragTarget(c, t.dropped, t.dragBy, step, columns); to != c {
+				if to := dragTarget(c, t.dropped, t.dragBy, step, columns, fewest); to != c {
 					actions = append(actions, Action{Kind: ActionPlace, Panel: c.ID, Cell: to})
 				}
 			}
-			for _, a := range t.keys {
-				a.Panel = c.ID
-				actions = append(actions, a)
-				g.follow = c.ID
-			}
+			g.keyActions(&actions, cfg, c, t.keys, fewest)
 		}
+		grow()
 		if t.open && !wasOpen {
 			opened = t
 		}
@@ -414,6 +456,26 @@ func (g *Grid) Layout(gtx layout.Context, th *theme.Theme, cfg config.Config, st
 	}
 	g.opened = opened != nil
 	g.tiles = seen
+	// Each growth is worked out from this frame's layout, so it waits
+	// for a frame that moves nothing else: a drop or a key, of its own
+	// tile or another, or another growth, would undo it or land off.
+	// One a frame, then, and the next frame is asked for.
+	moved := slices.ContainsFunc(actions, func(a Action) bool {
+		return a.Kind == ActionPlace || a.Kind == ActionStep || a.Kind == ActionResize
+	})
+	if len(growth) > 0 && !moved {
+		actions = append(actions, growth[0])
+		delete(g.grow, growth[0].Panel)
+		growth = growth[1:]
+	}
+	if len(growth) > 0 {
+		gtx.Execute(op.InvalidateCmd{})
+	}
+	for id := range g.grow {
+		if seen[id] == nil { // gone, as when its save failed
+			delete(g.grow, id)
+		}
+	}
 	return layout.Dimensions{Size: area}, actions
 }
 
@@ -431,10 +493,76 @@ func landing(cfg config.Config, to Cell) (_ Cell, refused bool) {
 	return Cell{ID: p.ID, X: p.X, Y: p.Y, W: p.W, H: p.H}, false
 }
 
+// keyActions adds to actions those of keys, the arrow keys pressed on
+// cell c's tile this frame. They are carried out on a copy of cfg, as
+// the host would, so each resize is held to fewest cells from where the
+// keys before it leave the panel. A change the host would refuse, as
+// past the last row, leaves the copy as it was, as it leaves the
+// layout; a resize that changes nothing, so, or at the grid's edge, is
+// dropped.
+func (g *Grid) keyActions(actions *[]Action, cfg config.Config, c Cell, keys []Action, fewest image.Point) {
+	if len(keys) == 0 {
+		return
+	}
+	sim := cfg
+	sim.Panels = slices.Clone(cfg.Panels)
+	at := slices.IndexFunc(sim.Panels, func(p config.Panel) bool { return p.ID == c.ID })
+	for _, a := range keys {
+		a.Panel = c.ID
+		was := sim.Panels[at]
+		if a.Kind == ActionResize {
+			// Never below the least size, or below the panel's size
+			// if it is less already.
+			floor := image.Pt(min(fewest.X, was.W), min(fewest.Y, was.H))
+			a.Step = image.Pt(max(a.Step.X, floor.X-was.W), max(a.Step.Y, floor.Y-was.H))
+		}
+		if change := keyChange(a); change != nil {
+			next := sim
+			next.Panels = slices.Clone(sim.Panels)
+			if change(&next) == nil {
+				sim = next
+			}
+		}
+		if p := sim.Panels[at]; a.Kind == ActionResize && p.W == was.W && p.H == was.H {
+			continue
+		}
+		*actions = append(*actions, a)
+		g.follow = c.ID
+	}
+}
+
+// keyChange is what a, an ActionStep or ActionResize, does to a
+// config, as the host carries it out.
+func keyChange(a Action) func(*config.Config) error {
+	switch a.Kind {
+	case ActionStep:
+		return func(c *config.Config) error { return c.Step(a.Panel, a.Step.X, a.Step.Y) }
+	case ActionResize:
+		return func(c *config.Config) error { return c.Resize(a.Panel, a.Step.X, a.Step.Y) }
+	}
+	return nil
+}
+
+// grown is the ActionPlace that makes cell c, on a grid columns wide,
+// as large as its plugin's default size, from info, and fewest cells,
+// if it is smaller in either dimension. It moves left as far as the
+// grid's right edge needs.
+func grown(c Cell, columns int, info *tesserav1.DescribeResponse, fewest image.Point) (Action, bool) {
+	def := image.Pt(int(min(info.GetDefaultSize().GetColumns(), 24)), int(min(info.GetDefaultSize().GetRows(), 1000)))
+	w := min(max(c.W, def.X, fewest.X), columns)
+	h := max(c.H, def.Y, fewest.Y)
+	if w == c.W && h == c.H {
+		return Action{}, false
+	}
+	to := Cell{ID: c.ID, X: min(c.X, columns-w), Y: c.Y, W: w, H: h}
+	return Action{Kind: ActionPlace, Panel: c.ID, Cell: to}, true
+}
+
 // dragTarget is where cell c goes when its tile is dragged by by px, by
 // the head to move it or by the corner to resize it, on a grid columns
-// wide whose cells are step px apart.
-func dragTarget(c Cell, kind dragKind, by f32.Point, step image.Point, columns int) Cell {
+// wide whose cells are step px apart. A resize stops at fewest cells,
+// or at c's size if that is less.
+func dragTarget(c Cell, kind dragKind, by f32.Point, step image.Point, columns int, fewest image.Point) Cell {
 	dx := int(math.Round(float64(by.X) / float64(max(step.X, 1))))
 	dy := int(math.Round(float64(by.Y) / float64(max(step.Y, 1))))
 	switch kind {
@@ -442,8 +570,8 @@ func dragTarget(c Cell, kind dragKind, by f32.Point, step image.Point, columns i
 		c.X = min(max(c.X+dx, 0), columns-c.W)
 		c.Y = max(c.Y+dy, 0)
 	case dragResize:
-		c.W = min(max(c.W+dx, 1), columns-c.X)
-		c.H = max(c.H+dy, 1)
+		c.W = min(max(c.W+dx, min(fewest.X, c.W), 1), columns-c.X)
+		c.H = max(c.H+dy, min(fewest.Y, c.H), 1)
 	}
 	return c
 }
