@@ -19,6 +19,7 @@ and units.
 | `notes` | A note | `title` and `body`; a body keeps its line breaks |
 | `calendar` | The rest of today's events in iCalendar feeds, including those under way; activating one shows its details below the list, which a Hide details item closes | `sources` (required): feeds, each an `http`, `https`, or `webcal` URL, an absolute path, or a path starting with `~/`; `refresh` (`1m`–`24h`, default `15m`); `title` (default `Next events`; empty keeps it) |
 | `worldclock` | Up to four clocks to the minute, each with its label, its time zone's abbreviation, how far it is ahead of or behind local time, and its day when that is not today's | `clocks`: a list of 1 to 4, each with a `timezone` (as for `clock`; `Local` if left out) and a `label`, on one line (if left out, the city in the zone's name, or the UTC offset for a numbered `Etc/GMT` zone such as `Etc/GMT+5`, or `GMT` at zero); one local clock if `clocks` is left out or empty (`clocks:`), while `clocks: []` is rejected. `utc_offsets` (default `false`) names a zone with no letter abbreviation by its UTC offset, such as `UTC+7`, on a clock that is not compact (below) |
+| `month` | The current month as a grid of weeks, with today in the accent colour; it turns over at midnight | `first_weekday`: `monday` (the default) or `sunday`, in any case; `timezone`, as for `clock` |
 | `system` | CPU utilization and memory in use, each with a sparkline of the last 60 samples | `interval` (default `2s`) |
 | `disk` | How full a file system is, on a gauge (warning from 80%, error from 95%), with the space free, its device, and its file system type | `mount` (default `/`); `interval` (default `30s`) |
 | `network` | Download and upload rates, in bits per second, each with a sparkline | `interface` (default: the physical interfaces added up, or every one but loopback if there is none); `interval` (default `2s`) |
@@ -134,3 +135,16 @@ narrow window. With larger text, give them a taller panel. A label too
 wide for one line, such as the default `Santo Domingo`, can push the
 last line out of a column narrower than 220 dp, which grids of 5 or more
 columns have at some window widths.
+
+## month
+
+Give the month panel two rows (`h: 2`): six weeks fit one row only from
+a `row_height` of about 210 at the default text size. Its date follows
+the `timezone` setting; with `Local`, it also follows a change to the
+system's time zone in `/etc/localtime` within a minute, unless the `TZ`
+variable sets the zone; on Windows, which has no such file, only after
+the panel restarts. It looks at the clock at least once a minute, so a
+clock that is set or a computer that resumes shows the right day within
+a minute. View schema v1 has no cell background or centred text, so
+today is marked by colour alone, and each day is right-aligned in two
+characters.
