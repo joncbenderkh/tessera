@@ -1175,3 +1175,101 @@ func TestTileBodySize(t *testing.T) {
 		t.Errorf("view size %v, want the text's", got)
 	}
 }
+
+// A view that does not fit its body is noted as cut; one that scrolls
+// is not.
+func TestViewCut(t *testing.T) {
+	stack := func(axis tesserav1.Axis, ws ...*tesserav1.Widget) *tesserav1.Widget {
+		var items []*tesserav1.StackItem
+		for _, w := range ws {
+			items = append(items, &tesserav1.StackItem{Widget: w})
+		}
+		return &tesserav1.Widget{Kind: &tesserav1.Widget_Stack{Stack: &tesserav1.Stack{Axis: axis, Items: items}}}
+	}
+	long := strings.Repeat("A line of text that wraps. ", 20)
+	var items []*tesserav1.ListItem
+	for i := range 30 {
+		items = append(items, &tesserav1.ListItem{Title: fmt.Sprint("Item ", i)})
+	}
+	gauge := &tesserav1.Widget{Kind: &tesserav1.Widget_Gauge{Gauge: &tesserav1.Gauge{Value: 5, Label: "CPU"}}}
+	for _, tc := range []struct {
+		name string
+		body *tesserav1.Widget
+		want bool
+	}{
+		{"short text", textW("Fits"), false},
+		{"long text", textW(long), true},
+		{"texts in a column", stack(tesserav1.Axis_AXIS_UNSPECIFIED, textW("One"), textW(long), textW("Three")), true},
+		{"texts in a row", stack(tesserav1.Axis_AXIS_HORIZONTAL, textW(long[:60]), textW(long[:60]), textW(long[:60])), true},
+		{"a gauge with no room", gauge, true},
+		{"a long list", listOf("l", items...), false},
+	} {
+		var r input.Router
+		var v viewState
+		viewFrame(&r, &v, &tesserav1.View{Body: tc.body}, image.Pt(200, 80))
+		if v.cut != tc.want {
+			t.Errorf("%s: cut %v, want %v", tc.name, v.cut, tc.want)
+		}
+	}
+}
+
+// A gauge whose least dial is wider than its room, and a placeholder
+// or sparkline taller than its room, are cut too.
+func TestViewCutDial(t *testing.T) {
+	gauge := &tesserav1.Widget{Kind: &tesserav1.Widget_Gauge{Gauge: &tesserav1.Gauge{Value: 5}}}
+	loading := &tesserav1.Widget{Loading: true, Kind: &tesserav1.Widget_Gauge{Gauge: &tesserav1.Gauge{Value: 5}}}
+	spark := &tesserav1.Widget{Kind: &tesserav1.Widget_Sparkline{Sparkline: &tesserav1.Sparkline{Samples: []float64{0, 1}}}}
+	for _, tc := range []struct {
+		name string
+		body *tesserav1.Widget
+		size image.Point
+		want bool
+	}{
+		{"a gauge with room", gauge, image.Pt(200, 200), false},
+		{"a narrow gauge", gauge, image.Pt(50, 200), true},
+		{"a loading gauge with room", loading, image.Pt(200, 200), false},
+		{"a short loading gauge", loading, image.Pt(200, 20), true},
+		{"a narrow loading gauge", loading, image.Pt(50, 200), true},
+		{"a sparkline with room", spark, image.Pt(200, 200), false},
+		{"a short sparkline", spark, image.Pt(200, 10), true},
+	} {
+		var r input.Router
+		var v viewState
+		viewFrame(&r, &v, &tesserav1.View{Body: tc.body}, tc.size)
+		if v.cut != tc.want {
+			t.Errorf("%s: cut %v, want %v", tc.name, v.cut, tc.want)
+		}
+	}
+}
+
+// An item that draws nothing, left without room, is no cut.
+func TestViewCutBlank(t *testing.T) {
+	h := ViewSize(&tesserav1.View{Body: textW("Fits")}, 200, 1).Y
+	stack := func(ws ...*tesserav1.Widget) *tesserav1.Widget {
+		var items []*tesserav1.StackItem
+		for _, w := range ws {
+			items = append(items, &tesserav1.StackItem{Widget: w})
+		}
+		return &tesserav1.Widget{Kind: &tesserav1.Widget_Stack{Stack: &tesserav1.Stack{Items: items}}}
+	}
+	// A loading one draws a placeholder for an empty text too.
+	loadingStack := func(ws ...*tesserav1.Widget) *tesserav1.Widget {
+		w := stack(ws...)
+		w.Loading = true
+		return w
+	}
+	for _, tc := range []struct {
+		name string
+		body *tesserav1.Widget
+		want bool
+	}{
+		{"an empty text", stack(textW("Fits"), textW("")), false},
+		{"a stack of empty texts", stack(textW("Fits"), stack(textW(""), textW(""))), false},
+		{"a text", stack(textW("Fits"), textW("More")), true},
+		{"an empty text in a loading stack", loadingStack(textW("Fits"), textW("")), true},
+	} {
+		if got := !ViewFits(&tesserav1.View{Body: tc.body}, image.Pt(200, h), 1); got != tc.want {
+			t.Errorf("%s after one that fills: cut %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}

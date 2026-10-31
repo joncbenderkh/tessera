@@ -227,6 +227,10 @@ func (v *viewState) gaugeTrack(gtx layout.Context, th *theme.Theme, g *tesserav1
 		width = min(int(u*dialW), width)
 	}
 	x := (width - int(u*dialW)) / 2
+	if x < 0 { // the least dial is wider than the room
+		v.cut = true
+		defer fadeOut(gtx, th, image.Rect(0, 0, width, min(int(u*dialH), gtx.Constraints.Max.Y)), true)
+	}
 	defer op.Offset(image.Pt(max(x, 0), 0)).Push(gtx.Ops).Pop()
 	strokeArc(gtx, u, 0, 1, th.Border)
 	dialLimits(gtx, th, u, readGauge(g).limits)
@@ -307,6 +311,14 @@ func (v *viewState) gauge(gtx layout.Context, th *theme.Theme, g *tesserav1.Gaug
 		y += gap
 		b.at(gtx, image.Pt(max((width-b.dims.Size.X)/2, 0), y))
 		y += b.dims.Size.Y
+	}
+	if y > gtx.Constraints.Max.Y { // even at the dial's least size
+		v.cut = true
+		fadeOut(gtx, th, image.Rect(0, 0, width, gtx.Constraints.Max.Y), false)
+	}
+	if dw > width { // as wide
+		v.cut = true
+		fadeOut(gtx, th, image.Rect(0, 0, width, min(y, gtx.Constraints.Max.Y)), true)
 	}
 	return layout.Dimensions{Size: image.Pt(width, y)}
 }
