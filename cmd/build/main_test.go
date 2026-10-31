@@ -135,9 +135,13 @@ func TestInstallPlugins(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"calendar", "clock", "disk", "greeting", "network", "notes", "processes", "system", "worldclock"} {
-		if !slices.Contains(names, want) {
-			t.Errorf("installed %q, missing %q", names, want)
+	want := []string{"calendar", "clock", "greeting", "notes", "worldclock"}
+	if runtime.GOOS == "linux" {
+		want = append(want, "disk", "network", "processes", "system")
+	}
+	for _, name := range want {
+		if !slices.Contains(names, name) {
+			t.Errorf("installed %q, missing %q", names, name)
 		}
 	}
 	if !slices.Equal(names, listed) {

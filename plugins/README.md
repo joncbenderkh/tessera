@@ -13,8 +13,8 @@ only: they read the system through `/proc` and
 and units.
 
 `go run ./cmd/build --no-host`, from the repository root, builds them all
-and installs them into the plugins directory; without `--no-host` it
-builds the host as well.
+(the system panels on Linux only) and installs them into the plugins
+directory; without `--no-host` it builds the host as well.
 
 | Plugin | Shows | Settings |
 |---|---|---|
