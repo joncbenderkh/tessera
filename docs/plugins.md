@@ -53,7 +53,8 @@ mv my-clock.new ~/.local/share/tessera/plugins/my-clock
 The plugins directory is `tessera/plugins` under the user data
 directory: `$XDG_DATA_HOME` (or `~/.local/share`) on Linux,
 `~/Library/Application Support` on macOS, and `%LOCALAPPDATA%` on
-Windows, where the file is `my-clock.exe`. Then add a panel to the config
+Windows, where the file is `my-clock.exe`; `tessera --plugins <dir>`
+loads another one. Then add a panel to the config
 (see [config.md](config.md)):
 
 ```yaml

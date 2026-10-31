@@ -12,6 +12,10 @@ only: they read the system through `/proc` and
 `internal/metric`: the `interval` setting, sample history, polling,
 and units.
 
+`go run ./cmd/build --no-host`, from the repository root, builds them all
+(the system panels on Linux only) and installs them into the plugins
+directory; without `--no-host` it builds the host as well.
+
 | Plugin | Shows | Settings |
 |---|---|---|
 | `clock` | The time to the second, the date, and the time zone | `timezone`: an IANA name such as `Europe/Berlin`, in any case, or `Local` (the default) |
