@@ -3,15 +3,14 @@
 // Command build builds the tessera host and installs the first-party
 // plugins into the plugins directory the host loads them from.
 //
-//	go run ./cmd/build                 # the host, as ./tessera, and every plugin
-//	go run ./cmd/build -plugins        # the plugins only
-//	go run ./cmd/build -run [-- flags] # both, then start the host with flags
+//	go run ./cmd/build                  # the host, as ./tessera, and every plugin
+//	go run ./cmd/build --no-host        # the plugins only
+//	go run ./cmd/build --run [-- flags] # both, then start the host with flags
 package main
 
 import (
 	"context"
 	"errors"
-	"flag"
 	"fmt"
 	"log"
 	"os"
@@ -22,14 +21,59 @@ import (
 	"strings"
 	"syscall"
 
+	"github.com/spf13/cobra"
+
 	"github.com/joncbenderkh/tessera/internal/pluginhost"
 )
 
 func main() {
-	pluginsOnly := flag.Bool("plugins", false, "build and install the plugins only, not the host")
-	run := flag.Bool("run", false, "start the host, with -dest as its plugins directory, once everything is built; arguments after -- go to it")
-	dest := flag.String("dest", pluginhost.DefaultDir(), "the plugins directory to install into")
-	flag.Parse()
+	var noHost, run bool
+	var dest string
+	cmd := &cobra.Command{
+		Use:   "build [flags] [-- host flags]",
+		Short: "Build the tessera host and install the first-party plugins",
+		Args: func(cmd *cobra.Command, args []string) error {
+			return checkArgs(run, cmd.ArgsLenAtDash(), args)
+		},
+		SilenceUsage: true,
+		RunE: func(_ *cobra.Command, args []string) error {
+			if dest == "" {
+				// Abs would read it as the working directory.
+				return errors.New("--dest is empty")
+			}
+			if noHost && run {
+				return errors.New("--run needs the host, which --no-host leaves out")
+			}
+			build(noHost, run, dest, args)
+			return nil
+		},
+	}
+	cmd.Flags().BoolVar(&noHost, "no-host", false, "build and install the plugins only, not the host")
+	cmd.Flags().BoolVar(&run, "run", false, "start the host, with --dest as its plugins directory, once everything is built; arguments after -- go to it")
+	cmd.Flags().StringVar(&dest, "dest", pluginhost.DefaultDir(), "the plugins directory to install into")
+	if cmd.Execute() != nil {
+		os.Exit(1)
+	}
+}
+
+// checkArgs accepts arguments only for the host, after --, which is at
+// dash in them (-1 if absent).
+func checkArgs(run bool, dash int, args []string) error {
+	if dash != 0 && len(args) > 0 {
+		if dash > 0 {
+			args = args[:dash]
+		}
+		return fmt.Errorf("unexpected arguments %q: those for the host go after -- (--dest takes the plugins directory)", args)
+	}
+	if len(args) > 0 && !run {
+		return fmt.Errorf("unexpected arguments %q: only --run passes arguments on, to the host", args)
+	}
+	return nil
+}
+
+// build builds the host unless noHost, installs the plugins into
+// dest, and with run starts the host on them with extra arguments.
+func build(noHost, run bool, dest string, extra []string) {
 	log.SetFlags(0)
 	log.SetPrefix("build: ")
 	// A signal stops go build and leaves this to remove what it staged;
@@ -37,33 +81,23 @@ func main() {
 	// does not pass on to it.
 	ctx, stop := signal.NotifyContext(context.Background(), stopSignals...)
 	defer stop()
-	if *dest == "" {
-		// Abs would read it as the working directory.
-		log.Fatal("-dest is empty")
-	}
-	if *pluginsOnly && *run {
-		log.Fatal("-run needs the host, which -plugins leaves out")
-	}
-	if flag.NArg() > 0 && !*run {
-		log.Fatalf("unexpected arguments %q: only -run passes arguments on, to the host (-dest takes the plugins directory)", flag.Args())
-	}
 	root, err := moduleRoot()
 	if err != nil {
 		log.Fatal(err)
 	}
 	host := filepath.Join(root, "tessera"+exeSuffix())
-	if !*pluginsOnly {
+	if !noHost {
 		if err := goBuild(ctx, root, nil, "-o", host, "./cmd/tessera"); err != nil {
 			log.Fatalf("building the host: %v", err)
 		}
 		log.Printf("host: %s", host)
 	}
-	names, err := installPlugins(ctx, root, *dest)
+	names, err := installPlugins(ctx, root, dest)
 	if err != nil {
 		log.Fatalf("installing the plugins: %v", err)
 	}
-	log.Printf("plugins in %s: %s", *dest, strings.Join(names, ", "))
-	if *run {
+	log.Printf("plugins in %s: %s", dest, strings.Join(names, ", "))
+	if run {
 		// Signals from here on go to the host; one before the check
 		// stops this, as the renames do not.
 		signals := make(chan os.Signal, len(stopSignals))
@@ -71,7 +105,7 @@ func main() {
 		if ctx.Err() != nil {
 			log.Fatal("stopped before starting the host")
 		}
-		args, err := hostArgs(*dest, flag.Args())
+		args, err := hostArgs(dest, extra)
 		if err != nil {
 			log.Fatal(err)
 		}
@@ -184,7 +218,7 @@ func hostArgs(dest string, extra []string) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	return append([]string{"-plugins", abs}, extra...), nil
+	return append([]string{"--plugins", abs}, extra...), nil
 }
 
 // stopSignals are the signals that stop the build, and the host.

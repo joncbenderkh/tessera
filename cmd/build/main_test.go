@@ -136,10 +136,33 @@ func TestInstallReplaces(t *testing.T) {
 func TestHostArgs(t *testing.T) {
 	dir := t.TempDir()
 	t.Chdir(dir)
-	got, err := hostArgs("plugins", []string{"-config", "x.yaml"})
-	want := []string{"-plugins", filepath.Join(dir, "plugins"), "-config", "x.yaml"}
+	got, err := hostArgs("plugins", []string{"--config", "x.yaml"})
+	want := []string{"--plugins", filepath.Join(dir, "plugins"), "--config", "x.yaml"}
 	if err != nil || !slices.Equal(got, want) {
 		t.Errorf("hostArgs: %q, %v; want %q", got, err, want)
+	}
+}
+
+// Only --run takes arguments, and only after --, so a mistyped one is
+// not passed on to the host, which would refuse it.
+func TestCheckArgs(t *testing.T) {
+	for _, c := range []struct {
+		run  bool
+		dash int
+		args []string
+		ok   bool
+	}{
+		{false, -1, nil, true},
+		{true, -1, nil, true},
+		{true, 0, []string{"--config", "x.yaml"}, true},
+		{true, -1, []string{"foo"}, false},
+		{true, 1, []string{"foo", "--config", "x.yaml"}, false},
+		{false, 0, []string{"--config", "x.yaml"}, false},
+		{false, -1, []string{"plugins"}, false},
+	} {
+		if err := checkArgs(c.run, c.dash, c.args); (err == nil) != c.ok {
+			t.Errorf("checkArgs(%v, %d, %q) = %v, want ok %v", c.run, c.dash, c.args, err, c.ok)
+		}
 	}
 }
 

@@ -69,6 +69,9 @@ dialogs). Edit mode must be able to re-enable any disabled panel.
   own emitter. It is saved atomically (temp file and rename) and watched
   for changes through `fsnotify`. Rewrites by the host drop comments.
   The schema is versioned (`version: 1`); see `docs/config.md`.
+- **Command lines:** the host and `cmd/build` parse theirs with
+  `github.com/spf13/cobra` (GNU-style `--flags`; stray arguments are
+  errors), the owner's choice.
 - **Module path:** `github.com/joncbenderkh/tessera`.
 
 ## Layout
@@ -125,8 +128,8 @@ Use the local toolchain: `export PATH=/usr/local/go/bin:$PATH`.
 
 - Build the host as `./tessera` and install every plugin in
   `plugins/` into the plugins directory, each renamed into place:
-  `go run ./cmd/build`. `-plugins` skips the host, `-dest` picks
-  another plugins directory, and `-run` starts the host afterwards
+  `go run ./cmd/build`. `--no-host` skips the host, `--dest` picks
+  another plugins directory, and `--run` starts the host afterwards
   with that directory as its `--plugins` (arguments after `--` go
   to it). A bare `go build` at the root builds the `tessera`
   library package and writes nothing.
@@ -223,7 +226,9 @@ disk, network, and processes (#20), Linux-only, read /proc directly
 and through gopsutil. Edit mode moves and resizes panels by dragging
 or with the arrow keys, disables them with an Undo, re-enables them
 and adds panels from a bar above the grid, and saves each change at
-once (#15).
+once (#15). `go run ./cmd/build` builds the host and installs every
+plugin, and the host's `--plugins` flag loads them from another
+directory.
 
 ## Git workflow
 
