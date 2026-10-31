@@ -49,6 +49,7 @@ type viewState struct {
 	keys    map[*tesserav1.Widget]string
 	used    map[string]bool // the lists and rows drawn
 	events  []*tesserav1.HandleEventRequest
+	cut     bool // some of the view did not fit
 }
 
 // activation is a row or item activated, and the event that told the
@@ -66,7 +67,8 @@ type digitKey struct {
 }
 
 // Layout draws view's body over gtx's constraints, clipped to them, and
-// returns the input the user gave it, for the plugin.
+// returns the input the user gave it, for the plugin. Where a widget
+// does not fit, it fades out into the tile at the edge it is cut at.
 func (v *viewState) Layout(gtx layout.Context, th *theme.Theme, view *tesserav1.View) []*tesserav1.HandleEventRequest {
 	if v.lists == nil {
 		v.lists = map[string]*layout.List{}
@@ -84,6 +86,7 @@ func (v *viewState) Layout(gtx layout.Context, th *theme.Theme, view *tesserav1.
 	v.used = map[string]bool{}
 	v.events = nil
 	v.history = v.history[:0]
+	v.cut = false
 
 	defer clip.Rect{Max: gtx.Constraints.Max}.Push(gtx.Ops).Pop()
 	gtx.Constraints.Min = image.Point{}
@@ -197,17 +200,23 @@ func (v *viewState) widget(gtx layout.Context, th *theme.Theme, w *tesserav1.Wid
 		if k, ok := v.keys[w]; ok {
 			v.used[k] = true
 		}
-		return v.skeleton(gtx, th, w)
+		dims := v.skeleton(gtx, th, w)
+		if room := gtx.Constraints.Max.Y; dims.Size.Y > room {
+			v.cut = true
+			dims.Size.Y = room
+			fadeOut(gtx, th, image.Rectangle{Max: dims.Size}, false)
+		}
+		return dims
 	}
 	switch k := w.GetKind().(type) {
 	case *tesserav1.Widget_Text:
-		return v.text(gtx, th, k.Text)
+		return v.whole(gtx, th, func(gtx layout.Context) layout.Dimensions { return v.text(gtx, th, k.Text) })
 	case *tesserav1.Widget_Stat:
-		return v.stat(gtx, th, k.Stat)
+		return v.whole(gtx, th, func(gtx layout.Context) layout.Dimensions { return v.stat(gtx, th, k.Stat) })
 	case *tesserav1.Widget_Gauge:
 		return v.gauge(gtx, th, k.Gauge)
 	case *tesserav1.Widget_Sparkline:
-		return v.sparkline(gtx, th, k.Sparkline)
+		return v.whole(gtx, th, func(gtx layout.Context) layout.Dimensions { return v.sparkline(gtx, th, k.Sparkline) })
 	case *tesserav1.Widget_Table:
 		return v.table(gtx, th, w, k.Table)
 	case *tesserav1.Widget_List:
@@ -216,6 +225,45 @@ func (v *viewState) widget(gtx layout.Context, th *theme.Theme, w *tesserav1.Wid
 		return v.stack(gtx, th, k.Stack)
 	}
 	return layout.Dimensions{}
+}
+
+// whole draws w, whose height does not depend on the room it gets, at
+// its full height, and cuts it at gtx's, fading out there: a label told
+// its room would stop drawing there unnoticed.
+func (v *viewState) whole(gtx layout.Context, th *theme.Theme, w layout.Widget) layout.Dimensions {
+	room := gtx.Constraints.Max.Y
+	gtx.Constraints.Max.Y = 1 << 24
+	cl := clip.Rect{Max: image.Pt(gtx.Constraints.Max.X, room)}.Push(gtx.Ops)
+	dims := w(gtx)
+	cl.Pop()
+	if over := dims.Size.Y - room; over > 0 {
+		v.cut = true
+		dims.Size.Y, dims.Baseline = room, max(dims.Baseline-over, 0)
+		fadeOut(gtx, th, image.Rectangle{Max: dims.Size}, false)
+	}
+	return dims
+}
+
+// fadeHeight is how far a view that does not fit fades out.
+const fadeHeight = theme.Space24
+
+// fadeOut fades the end of r, its bottom or, across, its right edge,
+// into the tile's surface, where what r holds is cut off, so the cut
+// shows.
+func fadeOut(gtx layout.Context, th *theme.Theme, r image.Rectangle, across bool) {
+	transparent := th.Surface
+	transparent.A = 0
+	f := min(gtx.Dp(fadeHeight), r.Dx(), r.Dy())
+	from, to := f32.Pt(0, float32(r.Max.Y-f)), f32.Pt(0, float32(r.Max.Y))
+	if across {
+		from, to = f32.Pt(float32(r.Max.X-f), 0), f32.Pt(float32(r.Max.X), 0)
+		r.Min.X = r.Max.X - f
+	} else {
+		r.Min.Y = r.Max.Y - f
+	}
+	defer clip.Rect(r).Push(gtx.Ops).Pop()
+	paint.LinearGradientOp{Stop1: from, Color1: transparent, Stop2: to, Color2: th.Surface}.Add(gtx.Ops)
+	paint.PaintOp{}.Add(gtx.Ops)
 }
 
 // textSize is the type scale step for size.
@@ -531,6 +579,7 @@ func (v *viewState) stack(gtx layout.Context, th *theme.Theme, s *tesserav1.Stac
 
 	parts := make([]recorded, len(items))
 	shown := make([]bool, len(items)) // false for an item with no room
+	short := false                    // an item that draws had no room
 	used, drawn := 0, 0
 	for i, it := range items {
 		if it.GetWeight() > 0 {
@@ -541,6 +590,7 @@ func (v *viewState) stack(gtx layout.Context, th *theme.Theme, s *tesserav1.Stac
 		room := main(gtx.Constraints.Max) - used - gap*drawn
 		if room <= 0 {
 			v.hidden(it.GetWidget())
+			short = v.left(it.GetWidget()) || short
 			continue
 		}
 		cgtx := gtx
@@ -594,6 +644,7 @@ func (v *viewState) stack(gtx layout.Context, th *theme.Theme, s *tesserav1.Stac
 		share := shares[i]
 		if share <= 0 {
 			v.hidden(it.GetWidget())
+			short = v.left(it.GetWidget()) || short
 			continue
 		}
 		cgtx := gtx
@@ -638,7 +689,43 @@ func (v *viewState) stack(gtx layout.Context, th *theme.Theme, s *tesserav1.Stac
 			fillRect(gtx, image.Rectangle{Min: pt(d, 0), Max: pt(d+line, size)}, th.Border)
 		}
 	}
-	return layout.Dimensions{Size: pt(min(at, main(gtx.Constraints.Max)), min(size, crossMax))}
+	dims := layout.Dimensions{Size: pt(min(at, main(gtx.Constraints.Max)), min(size, crossMax))}
+	if short { // the stack's end shows that items after it are cut
+		fadeOut(gtx, th, image.Rectangle{Max: dims.Size}, horizontal)
+	}
+	return dims
+}
+
+// left notes w, a stack item with no room, as a cut, and reports it,
+// unless it would draw nothing anyway.
+func (v *viewState) left(w *tesserav1.Widget) bool {
+	if !v.loading && blank(w) { // a loading one draws its placeholder
+		return false
+	}
+	v.cut = true
+	return true
+}
+
+// blank reports whether w draws nothing: it is unset, an empty text, or
+// a stack of such widgets. A loading one draws its placeholder.
+func blank(w *tesserav1.Widget) bool {
+	if w.GetLoading() {
+		return false
+	}
+	switch k := w.GetKind().(type) {
+	case nil:
+		return true
+	case *tesserav1.Widget_Text:
+		return k.Text.GetValue() == ""
+	case *tesserav1.Widget_Stack:
+		for _, it := range k.Stack.GetItems() {
+			if !blank(it.GetWidget()) {
+				return false
+			}
+		}
+		return true
+	}
+	return false
 }
 
 // hidden keeps the state of a widget with no room to draw in, without

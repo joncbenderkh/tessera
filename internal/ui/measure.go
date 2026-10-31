@@ -16,7 +16,7 @@ import (
 	tesserav1 "github.com/joncbenderkh/tessera/proto/tessera/v1"
 )
 
-// First-party plugins' tests use TileBodySize and ViewSize to check that
+// First-party plugins' tests use TileBodySize, ViewSize and ViewFits to check that
 // their views fit a tile, at one pixel per dp with text scaled by
 // textScale.
 
@@ -68,4 +68,16 @@ func ViewSize(view *tesserav1.View, width int, textScale float32) image.Point {
 	v.Layout(gtx, th, view) // sets up the state widget reads
 	gtx.Ops = new(op.Ops)
 	return v.widget(gtx, th, view.GetBody()).Size
+}
+
+// ViewFits reports whether view's body fits in body: laid out there, no
+// text is cut short and no widget is left out for lack of room, so the
+// tile shows it without a fade. Tables and lists scroll, so any height
+// that shows them at all holds them.
+func ViewFits(view *tesserav1.View, body image.Point, textScale float32) bool {
+	gtx, th := measuring(body, textScale)
+	defer measure.Unlock()
+	var v viewState
+	v.Layout(gtx, th, view)
+	return !v.cut
 }
