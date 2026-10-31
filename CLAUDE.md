@@ -209,7 +209,8 @@ and callbacks, with builders for every widget (#18).
 The first first-party plugins are the text panels clock, greeting,
 and notes (#19). The calendar panel lists the rest of today's events
 from iCalendar feeds, from URLs or files, read-only (#21), and a world
-clock shows up to four time zones (#50). The system panels system,
+clock shows up to four time zones (#50). The month panel shows the
+current month with today highlighted (#51). The system panels system,
 disk, network, and processes (#20), Linux-only, read /proc directly
 and through gopsutil. Edit mode moves and resizes panels by dragging
 or with the arrow keys, disables them with an Undo, re-enables them
