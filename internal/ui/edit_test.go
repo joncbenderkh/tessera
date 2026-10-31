@@ -18,6 +18,8 @@ import (
 	"gioui.org/op/clip"
 
 	"github.com/joncbenderkh/tessera/internal/config"
+	"github.com/joncbenderkh/tessera/internal/pluginhost"
+	tesserav1 "github.com/joncbenderkh/tessera/proto/tessera/v1"
 )
 
 func pt(p image.Point) f32.Point { return f32.Pt(float32(p.X), float32(p.Y)) }
@@ -63,7 +65,7 @@ func TestEditDragShowsWhereTheTileGoes(t *testing.T) {
 	head := g.placed["a"].Min.Add(image.Pt(60, 22))
 	events := drag(head, head.Add(image.Pt(349, 0)))
 	frame(&r, g, cfg, live("a"), time.Now(), events[:2]...)
-	if tl := g.tiles["a"]; tl.drag != dragMove || dragTarget(cell("a", 0, 0, 1, 1), tl.drag, tl.dragBy, image.Pt(349, 204), 4) != cell("a", 1, 0, 1, 1) {
+	if tl := g.tiles["a"]; tl.drag != dragMove || dragTarget(cell("a", 0, 0, 1, 1), tl.drag, tl.dragBy, image.Pt(349, 204), 4, image.Pt(1, 1)) != cell("a", 1, 0, 1, 1) {
 		t.Errorf("dragging: %v by %v, want a move one column right", tl.drag, tl.dragBy)
 	}
 }
@@ -193,6 +195,164 @@ func TestEditKeys(t *testing.T) {
 	}
 	if !slices.Equal(actions, want) {
 		t.Errorf("actions %v, want %v", actions, want)
+	}
+}
+
+// needing is live(ids...) with plugins whose views need at least a 400
+// by 200 dp body: 2 by 2 cells of editGrid's.
+func needing(ids ...string) []pluginhost.PanelState {
+	states := live(ids...)
+	for i := range states {
+		states[i].Info = &tesserav1.DescribeResponse{Name: states[i].Plugin, MinBody: &tesserav1.BodySize{Width: 400, Height: 200}}
+	}
+	return states
+}
+
+func TestMinCells(t *testing.T) {
+	var r input.Router
+	gtx := context(&r, image.Pt(1440, 900), time.Now())
+	for _, tc := range []struct {
+		body *tesserav1.BodySize
+		want image.Point
+	}{
+		{nil, image.Pt(1, 1)},
+		{&tesserav1.BodySize{}, image.Pt(1, 1)},
+		{&tesserav1.BodySize{Width: 303, Height: 130}, image.Pt(1, 1)}, // all a 1 by 1 tile leaves
+		{&tesserav1.BodySize{Width: 304, Height: 131}, image.Pt(2, 2)},
+		{&tesserav1.BodySize{Width: 652, Height: 334}, image.Pt(2, 2)},
+		{&tesserav1.BodySize{Width: 653, Height: 335}, image.Pt(2, 3)},         // its width read as 600
+		{&tesserav1.BodySize{Width: 1 << 31, Height: 1 << 31}, image.Pt(2, 4)}, // read as 600
+	} {
+		if got := minCells(gtx, tc.body, 335, 190, 14, 44); got != tc.want {
+			t.Errorf("minCells(%v) = %v, want %v", tc.body, got, tc.want)
+		}
+	}
+	// Large text needs more, and small text no less.
+	gtx.Metric.PxPerSp = 2
+	if got := minCells(gtx, &tesserav1.BodySize{Width: 303, Height: 130}, 335, 190, 14, 44); got != image.Pt(2, 2) {
+		t.Errorf("at twice the text size: %v, want (2,2)", got)
+	}
+	gtx.Metric.PxPerSp = 0.5
+	if got := minCells(gtx, &tesserav1.BodySize{Width: 304, Height: 131}, 335, 190, 14, 44); got != image.Pt(2, 2) {
+		t.Errorf("at half the text size: %v, want (2,2)", got)
+	}
+}
+
+// Resizing stops at the size the plugin needs, and a panel smaller
+// than that already can still grow but not shrink.
+func TestEditResizeKeepsTheLeastSize(t *testing.T) {
+	var r input.Router
+	cfg := gridConfig([]config.Panel{panel("a", 0, 0, 2, 2), panel("b", 2, 0, 1, 1)})
+	g := &Grid{Edit: true}
+	states := needing("a", "b")
+	frame(&r, g, cfg, states, time.Now())
+	keys := func(id string, names ...key.Name) []Action {
+		t.Helper()
+		frame(&r, g, cfg, states, time.Now(), click(g.placed[id].Min.Add(image.Pt(60, 22)))...)
+		var events []event.Event
+		for _, n := range names {
+			events = append(events, key.Event{Name: n, State: key.Press, Modifiers: key.ModShift})
+		}
+		return frame(&r, g, cfg, states, time.Now(), events...)
+	}
+	if got := keys("a", key.NameLeftArrow, key.NameUpArrow); len(got) != 0 {
+		t.Errorf("a at its least size shrank: %v", got)
+	}
+	want := []Action{{Kind: ActionResize, Panel: "a", Step: image.Pt(1, 0)}, {Kind: ActionResize, Panel: "a", Step: image.Pt(-1, 0)}}
+	if got := keys("a", key.NameRightArrow, key.NameLeftArrow, key.NameLeftArrow); !slices.Equal(got, want) {
+		t.Errorf("a grown and shrunk: %v, want %v", got, want)
+	}
+	if got := keys("b", key.NameLeftArrow, key.NameUpArrow); len(got) != 0 {
+		t.Errorf("b, below its least size, shrank: %v", got)
+	}
+	want = []Action{{Kind: ActionResize, Panel: "b", Step: image.Pt(0, 1)}}
+	if got := keys("b", key.NameDownArrow); !slices.Equal(got, want) {
+		t.Errorf("b grown: %v, want %v", got, want)
+	}
+
+	// The corner, dragged a cell in, leaves a as it is.
+	corner := g.placed["a"].Max.Sub(image.Pt(9, 9))
+	if got := frame(&r, g, cfg, states, time.Now(), drag(corner, corner.Sub(image.Pt(349, 204)))...); len(got) != 0 {
+		t.Errorf("a dragged smaller: %v", got)
+	}
+	corner = g.placed["b"].Max.Sub(image.Pt(9, 9))
+	want = []Action{{Kind: ActionPlace, Panel: "b", Cell: cell("b", 2, 0, 1, 2)}}
+	if got := frame(&r, g, cfg, states, time.Now(), drag(corner, corner.Add(image.Pt(-349, 204)))...); !slices.Equal(got, want) {
+		t.Errorf("b dragged a row taller and a column narrower: %v, want %v", got, want)
+	}
+}
+
+// A panel Add panel made grows to its plugin's default size and the
+// size its view needs, once the plugin has described itself, and only
+// once: moved left where the grid's edge is in the way, only while the
+// panels can move, and not at all once edit mode is over.
+func TestAddedPanelGrows(t *testing.T) {
+	var r input.Router
+	cfg := gridConfig([]config.Panel{panel("a", 0, 0, 1, 1), panel("b", 3, 0, 1, 1)})
+	g := &Grid{Edit: true}
+	g.Added("a")
+	g.Added("b")
+	g.Added("gone")
+	starting := live("a", "b")
+	for i := range starting {
+		starting[i].State = pluginhost.Starting
+	}
+	if got := frame(&r, g, cfg, starting, time.Now()); len(got) != 0 {
+		t.Errorf("before the plugins describe themselves: %v", got)
+	}
+	states := needing("a", "b")
+	states[1].Info.MinBody = nil
+	states[1].Info.DefaultSize = &tesserav1.GridSize{Columns: 3, Rows: 1}
+	// A window too narrow for the grid's columns leaves them waiting.
+	narrow := context(&r, image.Pt(560, 900), time.Now())
+	if _, got := g.Layout(narrow, testTheme, cfg, states); len(got) != 0 {
+		t.Errorf("in a narrow window: %v", got)
+	}
+	r.Frame(narrow.Ops)
+	// One a frame, each from the layout the one before left.
+	want := []Action{{Kind: ActionPlace, Panel: "a", Cell: cell("a", 0, 0, 2, 2)}}
+	if got := frame(&r, g, cfg, states, time.Now()); !slices.Equal(got, want) {
+		t.Errorf("once described: %v, want %v", got, want)
+	}
+	if _, ok := r.WakeupTime(); !ok {
+		t.Error("no frame asked for to grow b")
+	}
+	cfg = gridConfig([]config.Panel{panel("a", 0, 0, 2, 2), panel("b", 3, 0, 1, 1)})
+	want = []Action{{Kind: ActionPlace, Panel: "b", Cell: cell("b", 1, 0, 3, 1)}}
+	if got := frame(&r, g, cfg, states, time.Now()); !slices.Equal(got, want) {
+		t.Errorf("the frame after: %v, want %v", got, want)
+	}
+	if got := frame(&r, g, cfg, states, time.Now()); len(got) != 0 {
+		t.Errorf("grown again: %v", got)
+	}
+	if len(g.grow) != 0 {
+		t.Errorf("still to grow: %v", g.grow)
+	}
+
+	g.Added("a")
+	g.Edit = false
+	frame(&r, g, cfg, starting, time.Now())
+	g.Edit = true
+	if got := frame(&r, g, cfg, states, time.Now()); len(got) != 0 {
+		t.Errorf("grown after edit mode ended: %v", got)
+	}
+}
+
+// Keys in one frame each start from the size the one before leaves:
+// a Shift+Right at the grid's edge does nothing, so a Shift+Left after
+// it is still refused at the least size.
+func TestEditResizeKeysAtTheEdge(t *testing.T) {
+	var r input.Router
+	cfg := gridConfig([]config.Panel{panel("a", 2, 0, 2, 2)})
+	g := &Grid{Edit: true}
+	states := needing("a")
+	frame(&r, g, cfg, states, time.Now())
+	frame(&r, g, cfg, states, time.Now(), click(g.placed["a"].Min.Add(image.Pt(60, 22)))...)
+	got := frame(&r, g, cfg, states, time.Now(),
+		key.Event{Name: key.NameRightArrow, State: key.Press, Modifiers: key.ModShift},
+		key.Event{Name: key.NameLeftArrow, State: key.Press, Modifiers: key.ModShift})
+	if len(got) != 0 {
+		t.Errorf("actions %v, want none", got)
 	}
 }
 
@@ -834,5 +994,181 @@ func TestToasterTakesPresses(t *testing.T) {
 	layoutAll()
 	if below != 1 {
 		t.Errorf("%d presses reached the area below, want 1", below)
+	}
+}
+
+// A move among the keys of a frame counts too: a panel moved to the
+// grid's edge cannot grow there, so a shrink after is still refused.
+func TestEditResizeKeysAfterAMove(t *testing.T) {
+	var r input.Router
+	cfg := gridConfig([]config.Panel{panel("a", 1, 0, 2, 2)})
+	g := &Grid{Edit: true}
+	states := needing("a")
+	frame(&r, g, cfg, states, time.Now())
+	frame(&r, g, cfg, states, time.Now(), click(g.placed["a"].Min.Add(image.Pt(60, 22)))...)
+	got := frame(&r, g, cfg, states, time.Now(),
+		key.Event{Name: key.NameRightArrow, State: key.Press},
+		key.Event{Name: key.NameRightArrow, State: key.Press, Modifiers: key.ModShift},
+		key.Event{Name: key.NameLeftArrow, State: key.Press, Modifiers: key.ModShift})
+	want := []Action{{Kind: ActionStep, Panel: "a", Step: image.Pt(1, 0)}}
+	if !slices.Equal(got, want) {
+		t.Errorf("actions %v, want %v", got, want)
+	}
+}
+
+// A panel dragged when its plugin describes itself grows after the
+// drop, which would otherwise place it at its old size.
+func TestAddedPanelGrowsAfterADrag(t *testing.T) {
+	var r input.Router
+	cfg := gridConfig([]config.Panel{panel("a", 0, 0, 1, 1)})
+	g := &Grid{Edit: true}
+	g.Added("a")
+	starting := live("a")
+	starting[0].State = pluginhost.Starting
+	frame(&r, g, cfg, starting, time.Now())
+	head := g.placed["a"].Min.Add(image.Pt(60, 22))
+	events := drag(head, head.Add(image.Pt(349, 0)))
+	frame(&r, g, cfg, starting, time.Now(), events[:2]...)
+	states := needing("a")
+	want := []Action{{Kind: ActionPlace, Panel: "a", Cell: cell("a", 1, 0, 1, 1)}}
+	if got := frame(&r, g, cfg, states, time.Now(), events[2:]...); !slices.Equal(got, want) {
+		t.Errorf("at the drop: %v, want %v", got, want)
+	}
+	cfg = gridConfig([]config.Panel{panel("a", 1, 0, 1, 1)})
+	want = []Action{{Kind: ActionPlace, Panel: "a", Cell: cell("a", 1, 0, 2, 2)}}
+	if got := frame(&r, g, cfg, states, time.Now()); !slices.Equal(got, want) {
+		t.Errorf("after it: %v, want %v", got, want)
+	}
+}
+
+// A resize the host would refuse, past the last row, leaves the panel
+// as it is, so a shrink after it in the frame is still held to the
+// least size.
+func TestEditResizeKeysPastTheLastRow(t *testing.T) {
+	var r input.Router
+	cfg := gridConfig([]config.Panel{panel("a", 0, 0, 2, 2), panel("b", 0, 2, 1, 998)})
+	g := &Grid{Edit: true}
+	states := needing("a", "b")
+	frame(&r, g, cfg, states, time.Now())
+	frame(&r, g, cfg, states, time.Now(), click(g.placed["a"].Min.Add(image.Pt(60, 22)))...)
+	got := frame(&r, g, cfg, states, time.Now(),
+		key.Event{Name: key.NameDownArrow, State: key.Press, Modifiers: key.ModShift},
+		key.Event{Name: key.NameUpArrow, State: key.Press, Modifiers: key.ModShift})
+	if len(got) != 0 {
+		t.Errorf("actions %v, want none", got)
+	}
+}
+
+// A whole drag in one frame, as a stalled frame can bring, delays the
+// growth too.
+func TestAddedPanelGrowsAfterAQuickDrag(t *testing.T) {
+	var r input.Router
+	cfg := gridConfig([]config.Panel{panel("a", 0, 0, 1, 1)})
+	g := &Grid{Edit: true}
+	g.Added("a")
+	starting := live("a")
+	starting[0].State = pluginhost.Starting
+	frame(&r, g, cfg, starting, time.Now())
+	head := g.placed["a"].Min.Add(image.Pt(60, 22))
+	states := needing("a")
+	want := []Action{{Kind: ActionPlace, Panel: "a", Cell: cell("a", 1, 0, 1, 1)}}
+	if got := frame(&r, g, cfg, states, time.Now(), drag(head, head.Add(image.Pt(349, 0)))...); !slices.Equal(got, want) {
+		t.Errorf("at the drop: %v, want %v", got, want)
+	}
+	cfg = gridConfig([]config.Panel{panel("a", 1, 0, 1, 1)})
+	want = []Action{{Kind: ActionPlace, Panel: "a", Cell: cell("a", 1, 0, 2, 2)}}
+	if got := frame(&r, g, cfg, states, time.Now()); !slices.Equal(got, want) {
+		t.Errorf("after it: %v, want %v", got, want)
+	}
+}
+
+// Keys on the tile in the frame its plugin describes itself delay the
+// growth, which would put the panel back where it was.
+func TestAddedPanelGrowsAfterKeys(t *testing.T) {
+	var r input.Router
+	cfg := gridConfig([]config.Panel{panel("a", 0, 0, 1, 1)})
+	g := &Grid{Edit: true}
+	g.Added("a")
+	starting := live("a")
+	starting[0].State = pluginhost.Starting
+	frame(&r, g, cfg, starting, time.Now())
+	frame(&r, g, cfg, starting, time.Now(), click(g.placed["a"].Min.Add(image.Pt(60, 22)))...)
+	states := needing("a")
+	want := []Action{{Kind: ActionStep, Panel: "a", Step: image.Pt(1, 0)}}
+	if got := frame(&r, g, cfg, states, time.Now(), key.Event{Name: key.NameRightArrow, State: key.Press}); !slices.Equal(got, want) {
+		t.Errorf("with the key: %v, want %v", got, want)
+	}
+	cfg = gridConfig([]config.Panel{panel("a", 1, 0, 1, 1)})
+	want = []Action{{Kind: ActionPlace, Panel: "a", Cell: cell("a", 1, 0, 2, 2)}}
+	if got := frame(&r, g, cfg, states, time.Now()); !slices.Equal(got, want) {
+		t.Errorf("after it: %v, want %v", got, want)
+	}
+}
+
+// Another tile's drop in the frame a new panel's plugin describes
+// itself delays the growth to the next frame, which it asks for.
+func TestAddedPanelGrowsAfterAnotherDrop(t *testing.T) {
+	var r input.Router
+	cfg := gridConfig([]config.Panel{panel("a", 0, 0, 1, 1), panel("b", 1, 0, 1, 1)})
+	g := &Grid{Edit: true}
+	g.Added("b")
+	starting := live("a", "b")
+	starting[1].State = pluginhost.Starting
+	frame(&r, g, cfg, starting, time.Now())
+	head := g.placed["a"].Min.Add(image.Pt(60, 22))
+	events := drag(head, head.Add(image.Pt(0, 204)))
+	frame(&r, g, cfg, starting, time.Now(), events[:2]...)
+	states := needing("a", "b")
+	states[0].Info = nil
+	want := []Action{{Kind: ActionPlace, Panel: "a", Cell: cell("a", 0, 1, 1, 1)}}
+	if got := frame(&r, g, cfg, states, time.Now(), events[2:]...); !slices.Equal(got, want) {
+		t.Errorf("at the drop: %v, want %v", got, want)
+	}
+	if _, ok := r.WakeupTime(); !ok {
+		t.Error("no frame asked for to grow b")
+	}
+	cfg = gridConfig([]config.Panel{panel("a", 0, 1, 1, 1), panel("b", 1, 0, 1, 1)})
+	want = []Action{{Kind: ActionPlace, Panel: "b", Cell: cell("b", 1, 0, 2, 2)}}
+	if got := frame(&r, g, cfg, states, time.Now()); !slices.Equal(got, want) {
+		t.Errorf("the frame after: %v, want %v", got, want)
+	}
+}
+
+// A new panel's own tile dropped where it was, which moves nothing,
+// grows at the drop.
+func TestAddedPanelGrowsAfterADropInPlace(t *testing.T) {
+	var r input.Router
+	cfg := gridConfig([]config.Panel{panel("a", 0, 0, 1, 1)})
+	g := &Grid{Edit: true}
+	g.Added("a")
+	starting := live("a")
+	starting[0].State = pluginhost.Starting
+	frame(&r, g, cfg, starting, time.Now())
+	head := g.placed["a"].Min.Add(image.Pt(60, 22))
+	events := drag(head, head.Add(image.Pt(5, 5)))
+	states := needing("a")
+	if got := frame(&r, g, cfg, states, time.Now(), events[:2]...); len(got) != 0 {
+		t.Errorf("while dragged: %v", got)
+	}
+	want := []Action{{Kind: ActionPlace, Panel: "a", Cell: cell("a", 0, 0, 2, 2)}}
+	if got := frame(&r, g, cfg, states, time.Now(), events[2:]...); !slices.Equal(got, want) {
+		t.Errorf("at the drop: %v, want %v", got, want)
+	}
+}
+
+// A frame with no room, as while the window is minimized, leaves the
+// columns shown as they were.
+func TestShownColumnsKeptWithNoRoom(t *testing.T) {
+	var r input.Router
+	cfg := gridConfig([]config.Panel{panel("a", 0, 0, 3, 1)})
+	var g Grid
+	frame(&r, &g, cfg, live("a"), time.Now())
+	if got := g.ShownColumns(); got != 4 {
+		t.Fatalf("shown columns %d, want 4", got)
+	}
+	gtx := context(&r, image.Pt(0, 0), time.Now())
+	g.Layout(gtx, testTheme, cfg, live("a"))
+	if got := g.ShownColumns(); got != 4 {
+		t.Errorf("after a frame with no room: %d, want 4", got)
 	}
 }

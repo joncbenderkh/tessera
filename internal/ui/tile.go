@@ -561,8 +561,8 @@ func headHeight(gtx layout.Context, nameH, menuH int, narrow bool) int {
 // menu, at gtx's text size, and the height that holds the buttons one
 // above the other, as a narrower tile has them. No column is narrower,
 // if the window allows, and no row shorter, so all of them stay in
-// reach.
-func minTile(gtx layout.Context, th *theme.Theme, narrow bool) (least image.Point, stacked int) {
+// reach. head is the head's height.
+func minTile(gtx layout.Context, th *theme.Theme, narrow bool) (least image.Point, stacked, head int) {
 	gtx.Constraints = layout.Constraints{Max: image.Pt(1<<20, 1<<20)}
 	var restart, logs, menu Button
 	menu.Icon, menu.Bare = true, true
@@ -577,8 +577,33 @@ func minTile(gtx layout.Context, th *theme.Theme, narrow bool) (least image.Poin
 	}
 	name := record(gtx, titleLabel(th, "Ag").Layout).dims.Size
 	pad, space := gtx.Dp(theme.Space16), gtx.Dp(theme.Space8)
-	head := headHeight(gtx, name.Y, m.Y, narrow)
-	return image.Pt(2*pad+r.X+space+l.X, max(head+max(r.Y, l.Y)+pad, head+items)), max(head+r.Y+space+l.Y+pad, head+items)
+	head = headHeight(gtx, name.Y, m.Y, narrow)
+	return image.Pt(2*pad+r.X+space+l.X, max(head+max(r.Y, l.Y)+pad, head+items)), max(head+r.Y+space+l.Y+pad, head+items), head
+}
+
+// maxMinBody is the most of a plugin's min_body the host reads, in dp,
+// in each dimension.
+const maxMinBody = 600
+
+// minCells is the fewest columns and rows a panel spans for its tile to
+// leave body, the plugin's min_body, to its view below a head headH
+// tall, on a grid of columns colW wide and rows rowH tall, gap apart.
+// Body is in dp at the default text size, so it grows with larger text,
+// but not below its size in dp with smaller text, since the view's
+// gaps and dials stay in dp. A dimension of body that is zero needs
+// one cell.
+func minCells(gtx layout.Context, body *tesserav1.BodySize, colW, rowH, gap, headH int) image.Point {
+	pad := gtx.Dp(theme.Space16)
+	need := func(dp uint32, around, cell int) int {
+		if dp == 0 {
+			return 1
+		}
+		// n cells span n*cell + (n-1)*gap px.
+		dp = min(dp, maxMinBody)
+		px := max(gtx.Sp(unit.Sp(dp)), gtx.Dp(unit.Dp(dp))) + around
+		return max((px+gap+cell+gap-1)/max(cell+gap, 1), 1)
+	}
+	return image.Pt(need(body.GetWidth(), 2*pad, colW), need(body.GetHeight(), headH+pad, rowH))
 }
 
 // menuPad is the padding around the tile menu's items.

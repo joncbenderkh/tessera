@@ -149,6 +149,7 @@ func run(window *app.Window, plugins *pluginhost.Manager, pluginDir string, cfg 
 		editing   bool
 		installed []string // the plugins Add panel offers
 	)
+	w.added = grid.Added // grown once its plugin says what it needs
 	// listPlugins lists the plugins installed, for Add panel….
 	listPlugins := func() {
 		var err error
@@ -246,6 +247,7 @@ func run(window *app.Window, plugins *pluginhost.Manager, pluginDir string, cfg 
 				gtx.Execute(op.InvalidateCmd{})
 			}
 			actions = append(actions, chosen...)
+			plugins.SetColumns(grid.ShownColumns())
 			for _, a := range actions {
 				if changeFor(a, w.cfg) != nil {
 					switch changed := w.change(a); {
