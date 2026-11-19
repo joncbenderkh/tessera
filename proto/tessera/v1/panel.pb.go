@@ -321,8 +321,10 @@ type ConfigureRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// The panel's id from the config file. Unique within a layout.
 	PanelId string `protobuf:"bytes,1,opt,name=panel_id,json=panelId,proto3" json:"panel_id,omitempty"`
-	// The panel's settings from the config file, unvalidated by the host
-	// until the configuration UI validates them against config_schema.
+	// The panel's settings from the config file, less those set to null,
+	// which the host has checked against config_schema if it compiles,
+	// or settings the Configure dialog is about to save, which the
+	// plugin may refuse with INVALID_ARGUMENT.
 	Settings *structpb.Struct `protobuf:"bytes,2,opt,name=settings,proto3" json:"settings,omitempty"`
 	// The panel's size in grid cells, as the config file has it.
 	Size *GridSize `protobuf:"bytes,3,opt,name=size,proto3" json:"size,omitempty"`

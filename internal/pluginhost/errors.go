@@ -2,7 +2,10 @@
 
 package pluginhost
 
-import "errors"
+import (
+	"errors"
+	"fmt"
+)
 
 // permanentError marks a launch error that restarting the plugin cannot
 // fix: it is missing, misnamed, speaks another version, or rejects its
@@ -13,6 +16,17 @@ func (e permanentError) Error() string { return e.err.Error() }
 func (e permanentError) Unwrap() error { return e.err }
 
 func permanent(err error) error { return permanentError{err} }
+
+// RejectedError is a plugin's answer to Configure that the settings are
+// invalid, with the plugin's own message.
+type RejectedError struct {
+	Plugin  string
+	Message string
+}
+
+func (e *RejectedError) Error() string {
+	return fmt.Sprintf("plugin %q rejected the settings: %s", e.Plugin, e.Message)
+}
 
 // execError marks the error of starting the plugin's process, as
 // against one from go-plugin's setup around it, such as its socket

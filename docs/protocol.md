@@ -266,9 +266,34 @@ settings to `Configure` as a `google.protobuf.Struct`, which has the
 JSON data model: mappings become structs, sequences lists, and every
 number a double, so integers beyond ±2^53 lose precision (quote them as
 strings). How the host reads YAML values into settings is in
-`docs/config.md`. Checking settings against the schema, and building a
-form from it, is #16; until then, the plugin validates them and answers
-`INVALID_ARGUMENT` with a readable message.
+`docs/config.md`.
+
+A top-level setting whose value is null (a blank value in YAML) means
+the plugin's default: the host leaves it out, as if it were missing.
+
+The host checks the settings against the schema before every
+`Configure`, so a plugin only ever receives settings that pass it. An
+empty schema means the panel takes no settings: any are refused. Settings
+that fail keep the plugin from being configured; the panel shows an
+error tile listing the problems, and is not restarted until its
+settings change. `format` is not checked.
+
+A schema the host cannot compile checks nothing: the panel's logs say
+why, the plugin is configured with its settings unchecked, and the
+Configure dialog edits them as YAML. That includes a schema that refers
+to another document (`$ref` to a URL or file; nothing is fetched), and
+a `pattern` Go's `regexp` package cannot read, such as one with
+lookahead or backreferences.
+
+A schema cannot say everything, such as which time zone names exist,
+so the plugin still checks what it needs to and answers
+`INVALID_ARGUMENT` with a readable message, which the host shows.
+Before the Configure dialog saves new settings for a live panel, it
+sends them in a `Configure` first: if the plugin answers
+`INVALID_ARGUMENT`, the dialog shows the message, nothing is saved, and
+the host configures the plugin again with the settings it had. The
+schema also gives the dialog its form: see
+[plugins.md](plugins.md#settings-form).
 
 ## View schema v1
 

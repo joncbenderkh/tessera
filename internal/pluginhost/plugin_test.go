@@ -227,6 +227,12 @@ func (testPlugin) GRPCClient(context.Context, *plugin.GRPCBroker, *grpc.ClientCo
 //     first.
 //   - hangs-configure-later: each Configure after the first never
 //     answers.
+//   - schema: declares a config schema with one string setting,
+//     timezone, and rejects the timezone "Mars" in Configure. The
+//     rejects modes declare it too.
+//   - bad-schema: declares a config schema that does not compile.
+//   - no-schema: declares no config schema, so it takes no settings.
+//     The other modes take any.
 //
 // Any other name is a well-behaved plugin of that name, which reports
 // each Configure on stderr, and whose Watch sends a view naming it,
@@ -243,20 +249,30 @@ type server struct {
 	deep    bool     // polled-event-deep: an event came since the last Render
 }
 
+// testSchema is the schema plugin's config schema.
+const testSchema = `{"type": "object", "properties": {"timezone": {"type": "string"}}, "additionalProperties": false}`
+
 func (s *server) Describe(ctx context.Context, _ *tesserav1.DescribeRequest) (*tesserav1.DescribeResponse, error) {
 	resp := &tesserav1.DescribeResponse{
 		Name:            s.mode,
 		Version:         "0.0.0",
 		ProtocolVersion: tesserav1.ProtocolVersion,
 		ViewVersion:     tesserav1.ViewVersion,
+		ConfigSchema:    `{"type": "object"}`,
 	}
 	switch s.mode {
+	case "no-schema":
+		resp.ConfigSchema = ""
 	case "unimplemented":
 		return s.UnimplementedPanelServiceServer.Describe(ctx, nil)
 	case "misnamed", "misnamed-fails-shutdown":
 		resp.Name = "other"
 	case "view-nine":
 		resp.ViewVersion = 9
+	case "schema", "rejects", "rejects-later":
+		resp.ConfigSchema = testSchema
+	case "bad-schema":
+		resp.ConfigSchema = `{"type": 3}`
 	case "slow-describe":
 		<-ctx.Done()
 		return nil, ctx.Err()
@@ -305,6 +321,10 @@ func (s *server) Configure(ctx context.Context, req *tesserav1.ConfigureRequest)
 	switch s.mode {
 	case "rejects":
 		return nil, status.Error(codes.InvalidArgument, "timezone: unknown")
+	case "schema":
+		if req.GetSettings().GetFields()["timezone"].GetStringValue() == "Mars" {
+			return nil, status.Error(codes.InvalidArgument, "timezone: unknown")
+		}
 	case "rejects-later":
 		s.mu.Lock()
 		s.configs++

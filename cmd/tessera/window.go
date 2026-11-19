@@ -3,6 +3,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"image"
@@ -147,6 +148,8 @@ func run(window *app.Window, plugins *pluginhost.Manager, pluginDir string, cfg 
 		grid      ui.Grid
 		bar       ui.EditBar
 		dialog    ui.Dialog
+		configure ui.ConfigDialog
+		answers   = make(chan tried, 1) // TrySettings' answers for the Configure dialog
 		editing   bool
 		installed []string // the plugins Add panel offers
 	)
@@ -180,12 +183,12 @@ func run(window *app.Window, plugins *pluginhost.Manager, pluginDir string, cfg 
 			}
 			select {
 			case err := <-layouts.done:
-				toast.Show("Layout not saved: " + err.Error())
+				toast.Show("Change not saved to the config file: " + err.Error())
 			default:
 			}
 			w.takeReload()
 			behind := gtx
-			if dialog.IsOpen() {
+			if dialog.IsOpen() || configure.IsOpen() {
 				behind = gtx.Disabled()
 			}
 			if header.Theme.Clicked(behind) {
@@ -259,17 +262,36 @@ func run(window *app.Window, plugins *pluginhost.Manager, pluginDir string, cfg 
 					}
 					continue
 				}
+				if a.Kind == ui.ActionConfigure {
+					openConfigure(&configure, &toast, w.cfg, states, a.Panel)
+					continue
+				}
 				if act(a, plugins, states, &grid, &toast, &dialog) {
 					// A scroll range the plugin's queue refused goes
 					// again in a moment.
 					gtx.Execute(op.InvalidateCmd{At: gtx.Now.Add(scrollRetry)})
 				}
 			}
+			select {
+			case t := <-answers:
+				if configure.IsOpen() && configure.Panel == t.panel {
+					w.settingsTried(&configure, t)
+				}
+			default:
+			}
 			// Deferred after the tiles' popovers, which are deferred too, so
-			// the toast and the dialog stay on top of them.
+			// the toast and the dialogs stay on top of them.
 			over := op.Record(gtx.Ops)
-			toast.Inert = dialog.IsOpen()
+			toast.Inert = dialog.IsOpen() || configure.IsOpen()
 			toast.Layout(gtx, th)
+			configure.Layout(gtx, th)
+			if s, ok := configure.Submitted(); ok {
+				id := configure.Panel
+				go func() {
+					answers <- tried{id, s, plugins.TrySettings(context.Background(), id, s)}
+					window.Invalidate()
+				}()
+			}
 			dialog.Layout(gtx, th)
 			op.Defer(gtx.Ops, over.Stop())
 			debug.Frame(gtx.Ops, e.Size)
@@ -320,8 +342,6 @@ const scrollRetry = 100 * time.Millisecond
 // whether a frame soon should send a refused scroll range again.
 func act(a ui.Action, plugins *pluginhost.Manager, states []pluginhost.PanelState, grid *ui.Grid, toast *ui.Toaster, dialog *ui.Dialog) bool {
 	switch a.Kind {
-	case ui.ActionConfigure:
-		toast.Show("Configuring panels is not available yet")
 	case ui.ActionRestart:
 		switch err := plugins.Restart(a.Panel); {
 		case errors.Is(err, pluginhost.ErrStarting):

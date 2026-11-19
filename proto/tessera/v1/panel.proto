@@ -125,8 +125,10 @@ message GridSize {
 message ConfigureRequest {
   // The panel's id from the config file. Unique within a layout.
   string panel_id = 1;
-  // The panel's settings from the config file, unvalidated by the host
-  // until the configuration UI validates them against config_schema.
+  // The panel's settings from the config file, less those set to null,
+  // which the host has checked against config_schema if it compiles,
+  // or settings the Configure dialog is about to save, which the
+  // plugin may refuse with INVALID_ARGUMENT.
   google.protobuf.Struct settings = 2;
   // The panel's size in grid cells, as the config file has it.
   GridSize size = 3;

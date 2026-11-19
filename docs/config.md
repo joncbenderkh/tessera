@@ -164,6 +164,29 @@ the window takes the file's layout when it reads the edit.
 
 ### Settings
 
+**Configure…** in a panel's menu, in edit mode or not, opens a form
+for the panel's settings, made from the config schema its plugin
+declares: a text field, number field, toggle, or set of choices per
+setting, a list with Add and Remove for one that holds several, and
+YAML text for anything else. A setting stays out of the file, so the
+plugin's default applies, until it is given a value; **Default**
+beside a setting leaves it out again. An emptied text field holds
+`""`, and an emptied list `[]`. **Save** checks the settings
+against the schema, and, if the panel is running, gives them to its
+plugin first; if either refuses them, the form says why, at the
+setting where it can, and nothing is saved. Otherwise the settings are
+saved at once, like a layout change, and the panel shows them. The
+form needs the plugin to have started at least once; for a panel whose
+plugin is missing, edit the file.
+
+Settings in the file are checked against the plugin's schema too,
+whenever the plugin starts or the file changes. A panel whose settings
+fail it is not configured: it shows an error tile listing the problems
+(**Logs** has them too), and starts again once its settings are fixed,
+from the form or in the file. A plugin that declares no schema takes no
+settings. A setting left blank, such as `title:`, is null, which means
+the plugin's default, as a missing one does.
+
 A panel's settings reach its plugin as JSON-model values, so tessera
 reads them strictly by YAML 1.2's core schema, whatever the rest of the
 YAML tooling does: `017` is 17, `1e5` is a number, `1_000`, `0b101`,

@@ -11,6 +11,7 @@ import (
 
 	"gioui.org/io/input"
 	"gioui.org/io/semantic"
+	"gioui.org/layout"
 	"gioui.org/op"
 
 	"github.com/joncbenderkh/tessera/internal/config"
@@ -136,5 +137,30 @@ func TestDialogModalSeenByAnotherRouter(t *testing.T) {
 	}
 	if restart < 0 || modal < 0 || modal < restart {
 		t.Errorf("Restart at %d, modal layer at %d; want the layer after the button", restart, modal)
+	}
+}
+
+// The Configure dialog's text fields are editors another router reads,
+// with their text as the label and their hint as the description, over
+// a modal layer.
+func TestConfigDialogEditorsSeenByAnotherRouter(t *testing.T) {
+	var r input.Router
+	var d ConfigDialog
+	d.Open("wc", "worldclock", `{"type": "object", "properties": {"timezone": {"type": "string", "default": "Local"}}}`,
+		config.Settings{"timezone": "Asia/Tokyo"})
+	var gtx layout.Context
+	for range 2 {
+		gtx = context(&r, image.Pt(1000, 700), time.Now())
+		d.Layout(gtx, testTheme)
+		r.Frame(gtx.Ops)
+	}
+	nodes := foreignSemantics(gtx.Ops)
+	if _, ok := findSemantic(nodes, func(d input.SemanticDesc) bool { return d.Description == uimark.Modal }); !ok {
+		t.Error("no modal layer")
+	}
+	if _, ok := findSemantic(nodes, func(d input.SemanticDesc) bool {
+		return d.Class == semantic.Editor && d.Label == "Asia/Tokyo" && !d.Bounds.Empty()
+	}); !ok {
+		t.Error("no editor holding Asia/Tokyo")
 	}
 }

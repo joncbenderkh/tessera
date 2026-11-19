@@ -173,7 +173,8 @@ func (g *Grid) MinHeight(gtx layout.Context, th *theme.Theme) int {
 type ActionKind int
 
 const (
-	// ActionConfigure is the menu's Configure… (#16).
+	// ActionConfigure is the menu's Configure…, which opens the
+	// panel's settings.
 	ActionConfigure ActionKind = iota
 	// ActionDisable is the menu's Disable panel.
 	ActionDisable

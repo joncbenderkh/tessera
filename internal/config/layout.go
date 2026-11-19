@@ -223,3 +223,27 @@ func (c *Config) Resize(id string, dw, dh int) error {
 	p := c.Panels[i]
 	return c.Place(id, p.X, p.Y, min(max(p.W+dw, 1), c.Grid.Columns-p.X), p.H+dh)
 }
+
+// CheckValues reports whether settings hold only values the config
+// file can hold (see Validate), as SetSettings requires.
+func CheckValues(settings Settings) error {
+	return checkSettings(settings, "settings")
+}
+
+// SetSettings replaces the settings of the panel id. They must be
+// values the config file can hold (see Validate); none, or empty ones,
+// drop the panel's settings.
+func (c *Config) SetSettings(id string, settings Settings) error {
+	i := slices.IndexFunc(c.Panels, func(p Panel) bool { return p.ID == id })
+	if i < 0 {
+		return fmt.Errorf("%w: %q", ErrNoPanel, id)
+	}
+	if err := CheckValues(settings); err != nil {
+		return err
+	}
+	if len(settings) == 0 {
+		settings = nil
+	}
+	c.Panels[i].Settings = settings
+	return nil
+}

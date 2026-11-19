@@ -14,6 +14,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/goccy/go-yaml/ast"
+	"github.com/goccy/go-yaml/parser"
 	"github.com/goccy/go-yaml/token"
 )
 
@@ -433,4 +434,33 @@ func parseInt(text, digits string, base, line int) (any, error) {
 		return nil, fmt.Errorf("line %d: %w", line, errInexact(text))
 	}
 	return i, nil
+}
+
+// ParseValue reads one settings value written in YAML, as the Configure
+// dialog's text fields hold them, by the rules settings in the config
+// file follow. Blank text is nil.
+func ParseValue(text string) (any, error) {
+	if strings.TrimSpace(text) == "" {
+		return nil, nil
+	}
+	file, err := parser.ParseBytes([]byte(text), 0)
+	if err != nil {
+		return nil, err
+	}
+	if len(file.Docs) != 1 || file.Docs[0].Body == nil {
+		return nil, errors.New("want one YAML value")
+	}
+	if err := rejectSharing(file); err != nil {
+		return nil, err
+	}
+	return resolve(file.Docs[0].Body)
+}
+
+// FormatValue writes v in YAML, as ParseValue reads it back.
+func FormatValue(v any) (string, error) {
+	var b strings.Builder
+	if err := writeValue(&b, v, -2, "settings"); err != nil {
+		return "", err
+	}
+	return strings.TrimSuffix(strings.TrimPrefix(strings.TrimPrefix(b.String(), " "), "\n"), "\n"), nil
 }

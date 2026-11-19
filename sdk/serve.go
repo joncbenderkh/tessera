@@ -97,7 +97,8 @@ type Config struct {
 	PanelID string
 	// Settings is the panel's settings block, with the JSON data model:
 	// objects are map[string]any, arrays []any, and every number a
-	// float64. The host does not validate them against the schema yet.
+	// float64. The host has left out those set to null and, if it
+	// could compile the schema, checked them against it.
 	Settings map[string]any
 	// Size is the panel's size in grid cells, as the config file has
 	// it.
