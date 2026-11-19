@@ -2,8 +2,7 @@
 
 // Package zones loads the time zones the first-party plugins' settings
 // name, from one list, so a setting means the same on every system. It
-// embeds the time zone database, for systems without one, such as
-// Windows.
+// embeds the time zone database, for systems without one.
 package zones
 
 import (
@@ -38,7 +37,7 @@ func Names() []string {
 // names maps the zones in zoneList, in lower case, to their IANA
 // spelling. The system's zone database would otherwise accept names
 // that others reject: misspelt ones on file systems that ignore case,
-// as macOS's do by default, and its own extras such as posix/ paths.
+// and its own extras such as posix/ paths.
 var names = func() map[string]string {
 	names := map[string]string{}
 	for name := range strings.Lines(zoneList) {

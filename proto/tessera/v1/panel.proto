@@ -73,10 +73,9 @@ message DescribeRequest {
 message DescribeResponse {
   // Stable plugin name, such as "clock". Config files refer to it. It is
   // 1 to 64 lowercase letters, digits, and hyphens, starting with a
-  // letter or digit, and must equal the executable's file name (the name
-  // itself on Unix, the name plus ".exe" on Windows; the host ignores
-  // other files in the plugins directory). Otherwise the host stops the
-  // plugin and shows an error tile.
+  // letter or digit, and must equal the executable's file name (the host
+  // ignores other files in the plugins directory). Otherwise the host
+  // stops the plugin and shows an error tile.
   string name = 1;
   // Plugin version in semver form, such as "0.1.0".
   string version = 2;

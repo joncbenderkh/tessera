@@ -11,7 +11,6 @@ import (
 	"log"
 	"os"
 	"path/filepath"
-	"runtime"
 	"slices"
 	"testing"
 	"time"
@@ -54,11 +53,7 @@ func Launch(t testing.TB, name string) *Plugin {
 		t.Fatal(err)
 	}
 	dir := t.TempDir()
-	file := name
-	if runtime.GOOS == "windows" {
-		file += ".exe"
-	}
-	if err := os.WriteFile(filepath.Join(dir, file), data, 0o755); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, name), data, 0o755); err != nil {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)

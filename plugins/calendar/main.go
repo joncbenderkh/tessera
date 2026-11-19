@@ -16,7 +16,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
-	// The time zone database, for systems without one, such as Windows.
+	// The time zone database, for systems without one.
 	_ "time/tzdata"
 
 	"github.com/joncbenderkh/tessera"

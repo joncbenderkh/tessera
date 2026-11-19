@@ -125,10 +125,8 @@ func (r *procRunner) Start(context.Context) error {
 			r.killed, r.killedAs = true, as
 		}
 	}
-	if canAwaitExit {
-		r.watched = make(chan struct{})
-		go r.watch()
-	}
+	r.watched = make(chan struct{})
+	go r.watch()
 	return nil
 }
 
@@ -240,7 +238,7 @@ func (r *procRunner) kill() {
 	case r.proc == nil || r.exited:
 	case r.reaping:
 		if r.proc.Kill() == nil {
-			r.killed, r.killedAs = true, procKillStatus
+			r.killed, r.killedAs = true, killStatus
 		}
 	default:
 		if as := killGroup(r.proc); as != "" && !r.exitSeen {
@@ -264,16 +262,14 @@ func (r *procRunner) ownExit(status string) bool {
 	return !r.killed || status != "" && status != r.killedAs
 }
 
-// Wait reaps the plugin. When watch saw it exit (Linux, macOS, the
-// BSDs, and Windows), its group has been killed (on Windows, which has
-// no groups, the plugin alone), so it is marked exited before the reap
-// and kill never reaches a released group ID. Otherwise
-// (other Unix systems, where children it left in its group are killed
-// only by a forced Close; or watch could not watch) Wait cannot know the
-// plugin has exited before reaping it, so from the start of the reap
-// kill signals only the plugin.
+// Wait reaps the plugin. When watch saw it exit, its group has been
+// killed, so it is marked exited before the reap and kill never
+// reaches a released group ID. Otherwise (watch could not watch) Wait
+// cannot know the plugin has exited before reaping it, so from the
+// start of the reap kill signals only the plugin.
 func (r *procRunner) Wait(context.Context) error {
 	close(r.drained) // go-plugin calls Wait once its pipe readers are done
+	// watched is nil when Start failed.
 	if r.watched != nil {
 		<-r.watched
 	}
@@ -357,9 +353,9 @@ func (l *lineLimiter) Read(p []byte) (int, error) {
 var awaitExitHook = awaitExit
 
 // startOnOwnThread starts cmd from a goroutine locked to an OS thread,
-// which it keeps until reaped is closed. On Linux a plugin's Pdeathsig
-// fires when the thread that started it exits, not only the host, and
-// Go ends a thread when a goroutine locked to it exits (Gio's window
+// which it keeps until reaped is closed. A plugin's Pdeathsig fires
+// when the thread that started it exits, not only the host, and Go
+// ends a thread when a goroutine locked to it exits (Gio's window
 // goroutine locks one), so no other goroutine may run, and exit, on the
 // starting thread while the plugin lives. One thread per plugin also
 // keeps a start that hangs from holding up the others.

@@ -19,8 +19,10 @@ import (
 
 var update = flag.Bool("update", false, "rewrite zones.go from the Go toolchain's lib/time/zoneinfo.zip")
 
-// TestZoneList checks that every zone in zoneList loads; with -update
-// it first rewrites zones.go from the toolchain's time zone database.
+// TestZoneList checks that every zone in zoneList loads, and is in the
+// toolchain's time zone database, which time/tzdata embeds: the system's,
+// which time reads first, may know zones a system without one would not.
+// With -update it first rewrites zones.go from that database.
 func TestZoneList(t *testing.T) {
 	if *update {
 		writeZones(t)
@@ -28,30 +30,45 @@ func TestZoneList(t *testing.T) {
 	if len(names) < 500 {
 		t.Fatalf("%d zones, want the whole database", len(names))
 	}
+	embedded := map[string]bool{}
+	for _, name := range toolchainZones(t) {
+		embedded[name] = true
+	}
 	for _, name := range names {
 		if _, err := time.LoadLocation(name); err != nil {
 			t.Errorf("zone %q: %v", name, err)
 		}
+		if !embedded[name] {
+			t.Errorf("zone %q is not in %s's database", name, runtime.Version())
+		}
 	}
 }
 
-func writeZones(t *testing.T) {
+// toolchainZones returns the names in the Go toolchain's
+// lib/time/zoneinfo.zip.
+func toolchainZones(t *testing.T) []string {
 	r, err := zip.OpenReader(filepath.Join(build.Default.GOROOT, "lib", "time", "zoneinfo.zip"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer r.Close()
 	var names []string
-	seen := map[string]string{}
 	for _, f := range r.File {
-		if strings.HasSuffix(f.Name, "/") {
-			continue
+		if !strings.HasSuffix(f.Name, "/") {
+			names = append(names, f.Name)
 		}
-		if other, ok := seen[strings.ToLower(f.Name)]; ok {
-			t.Fatalf("zones %q and %q differ only in case", other, f.Name)
+	}
+	return names
+}
+
+func writeZones(t *testing.T) {
+	names := toolchainZones(t)
+	seen := map[string]string{}
+	for _, name := range names {
+		if other, ok := seen[strings.ToLower(name)]; ok {
+			t.Fatalf("zones %q and %q differ only in case", other, name)
 		}
-		seen[strings.ToLower(f.Name)] = f.Name
-		names = append(names, f.Name)
+		seen[strings.ToLower(name)] = name
 	}
 	slices.Sort(names)
 	var b bytes.Buffer

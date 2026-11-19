@@ -8,8 +8,6 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	"runtime"
-	"strings"
 	"syscall"
 
 	"github.com/adrg/xdg"
@@ -18,17 +16,9 @@ import (
 )
 
 // DefaultDir is the plugins directory: tessera/plugins under the user data
-// directory ($XDG_DATA_HOME, or ~/.local/share, on Linux).
+// directory ($XDG_DATA_HOME, or ~/.local/share).
 func DefaultDir() string {
 	return filepath.Join(xdg.DataHome, "tessera", "plugins")
-}
-
-// exeSuffix is what an executable's file name adds to its plugin name.
-func exeSuffix() string {
-	if runtime.GOOS == "windows" {
-		return ".exe"
-	}
-	return ""
 }
 
 // List returns the names of the plugins installed in dir, sorted. Files
@@ -44,8 +34,8 @@ func List(dir string) ([]string, error) {
 	}
 	var names []string
 	for _, e := range entries {
-		name, ok := cutExeSuffix(e.Name())
-		if !ok || config.ValidPluginName(name) != nil {
+		name := e.Name()
+		if config.ValidPluginName(name) != nil {
 			continue
 		}
 		if _, err := find(dir, name); err == nil {
@@ -53,16 +43,6 @@ func List(dir string) ([]string, error) {
 		}
 	}
 	return names, nil
-}
-
-// cutExeSuffix strips exeSuffix from a file name, ignoring case on
-// Windows, whose file names are case-insensitive.
-func cutExeSuffix(file string) (string, bool) {
-	suffix := exeSuffix()
-	if len(file) < len(suffix) || !strings.EqualFold(file[len(file)-len(suffix):], suffix) {
-		return file, false
-	}
-	return file[:len(file)-len(suffix)], true
 }
 
 // find returns the path of the plugin called name in dir, or an error
@@ -73,14 +53,12 @@ func find(dir, name string) (string, error) {
 	if err := config.ValidPluginName(name); err != nil {
 		return "", permanent(err)
 	}
-	path := filepath.Join(dir, name+exeSuffix())
+	path := filepath.Join(dir, name)
 	info, err := os.Stat(path)
 	if errors.Is(err, fs.ErrNotExist) {
 		return "", permanent(fmt.Errorf("plugin %q is not installed in %s", name, dir))
 	}
-	// On Windows an antivirus scan of a new .exe can deny access for a
-	// moment, so there it is retried, as a denied launch is.
-	if errors.Is(err, fs.ErrPermission) && runtime.GOOS != "windows" || errors.Is(err, syscall.ENOTDIR) {
+	if errors.Is(err, fs.ErrPermission) || errors.Is(err, syscall.ENOTDIR) {
 		return "", permanent(fmt.Errorf("plugin %q: %w", name, err))
 	}
 	if err != nil {
@@ -89,7 +67,7 @@ func find(dir, name string) (string, error) {
 	if !info.Mode().IsRegular() {
 		return "", permanent(fmt.Errorf("plugin %q: %s is not a regular file", name, path))
 	}
-	if runtime.GOOS != "windows" && info.Mode().Perm()&0o111 == 0 {
+	if info.Mode().Perm()&0o111 == 0 {
 		return "", permanent(fmt.Errorf("plugin %q: %s is not executable", name, path))
 	}
 	return path, nil

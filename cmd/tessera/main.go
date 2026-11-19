@@ -24,9 +24,6 @@ import (
 )
 
 func main() {
-	// tessera is a window, so it may well be started from Explorer,
-	// which cobra would refuse on Windows.
-	cobra.MousetrapHelpText = ""
 	var configPath, pluginsDir string
 	cmd := &cobra.Command{
 		Use:          "tessera",

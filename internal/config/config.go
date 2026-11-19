@@ -82,7 +82,7 @@ func Default() Config {
 }
 
 // DefaultPath is config.yaml in the tessera directory under the user config
-// directory ($XDG_CONFIG_HOME, or ~/.config, on Linux).
+// directory ($XDG_CONFIG_HOME, or ~/.config).
 func DefaultPath() (string, error) {
 	dir, err := os.UserConfigDir()
 	if err != nil {

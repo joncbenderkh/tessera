@@ -97,7 +97,7 @@ func TestFailingRenderIsStale(t *testing.T) {
 	if viewText(s) != "render 0" || s.ViewErr == nil || !strings.Contains(s.ViewErr.Error(), "source down") {
 		t.Errorf("Stale without the last view and the error: %+v", s)
 	}
-	if err := os.WriteFile(filepath.Join(dir, "polled-failing"+exeSuffix()+".open"), nil, 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "polled-failing.open"), nil, 0o644); err != nil {
 		t.Fatal(err)
 	}
 	s = waitFor(t, m, "p0", "live again", showing("render 1"))

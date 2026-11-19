@@ -6,15 +6,14 @@ as third-party plugins; the host treats them no differently.
 
 Each one's version is tessera's, from `./VERSION`. Their tests run the
 test binary as the plugin through `internal/plugintest`. The system
-panels (`system`, `disk`, `network`, and `processes`) run on Linux
-only: they read the system through `/proc` and
-`github.com/shirou/gopsutil/v4`, which needs no cgo, and share
-`internal/metric`: the `interval` setting, sample history, polling,
-and units.
+panels (`system`, `disk`, `network`, and `processes`) read the system
+through `/proc` and `github.com/shirou/gopsutil/v4`, which needs no
+cgo, and share `internal/metric`: the `interval` setting, sample
+history, polling, and units.
 
 `go run ./cmd/build --no-host`, from the repository root, builds them all
-(the system panels on Linux only) and installs them into the plugins
-directory; without `--no-host` it builds the host as well.
+and installs them into the plugins directory; without `--no-host` it
+builds the host as well.
 
 | Plugin | Shows | Settings |
 |---|---|---|
@@ -146,8 +145,7 @@ Give the month panel two rows (`h: 2`): six weeks fit one row only from
 a `row_height` of about 210 at the default text size. Its date follows
 the `timezone` setting; with `Local`, it also follows a change to the
 system's time zone in `/etc/localtime` within a minute, unless the `TZ`
-variable sets the zone; on Windows, which has no such file, only after
-the panel restarts. It looks at the clock at least once a minute, so a
+variable sets the zone. It looks at the clock at least once a minute, so a
 clock that is set or a computer that resumes shows the right day within
 a minute. View schema v1 has no cell background or centred text, so
 today is marked by colour alone, and each day is right-aligned in two

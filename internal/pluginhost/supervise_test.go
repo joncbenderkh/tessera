@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -260,7 +259,7 @@ func TestDoubleRestartRelaunchesOnce(t *testing.T) {
 	if err := m.Restart("p0"); !errors.Is(err, ErrStarting) { // while starting: the same relaunch
 		t.Errorf("Restart while starting: got %v, want ErrStarting", err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, "gated"+exeSuffix()+".open"), nil, 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "gated.open"), nil, 0o644); err != nil {
 		t.Fatal(err)
 	}
 	waitFor(t, m, "p0", "live again", func(s PanelState) bool {
@@ -306,9 +305,6 @@ func TestExitStatusIsThisAttempts(t *testing.T) {
 }
 
 func TestLivenessCheckCatchesFrozenPlugin(t *testing.T) {
-	if !canFreeze {
-		t.Skip("cannot stop a process on this OS")
-	}
 	dir := install(t, "freezes-live")
 	logger, _ := newLogger()
 	opts := fast
@@ -410,8 +406,6 @@ func TestExitStatusOfStartupCrash(t *testing.T) {
 	opts.MaxAttempts = 1
 	m := StartWith(panels("dies-at-start", "fails-at-start"), dir, logger, opts)
 	defer m.Close()
-	// Status 1 is also what Windows's fallback kill gives: a kill that
-	// hits the exited plugin must not be taken for its cause.
 	if s := waitFor(t, m, "p1", "crashed", is(Crashed)); s.ExitStatus != "exit status 1" {
 		t.Errorf("got exit status %q, want exit status 1", s.ExitStatus)
 	}
@@ -502,9 +496,6 @@ func TestQueuedRestartResetsFailures(t *testing.T) {
 }
 
 func TestRestartLeavesLiveAtOnce(t *testing.T) {
-	if !canFreeze {
-		t.Skip("cannot stop a process on this OS")
-	}
 	dir := install(t, "freezes-live") // never answers Shutdown, so Close takes seconds
 	logger, _ := newLogger()
 	m := StartWith(panels("freezes-live"), dir, logger, fast) // no health check in the test's time
@@ -529,9 +520,6 @@ func TestRestartLeavesLiveAtOnce(t *testing.T) {
 }
 
 func TestRestartEndsHealthCheck(t *testing.T) {
-	if !canFreeze {
-		t.Skip("cannot stop a process on this OS")
-	}
 	dir := install(t, "freezes-live")
 	logger, _ := newLogger()
 	opts := fast
@@ -555,9 +543,6 @@ func TestRestartEndsHealthCheck(t *testing.T) {
 // group holds its stderr, so the reap that gives its status waits
 // pipeGrace.
 func TestExitLeavesLiveAtOnce(t *testing.T) {
-	if !canFreeze || !canAwaitExit {
-		t.Skip("needs process groups and an exit watcher")
-	}
 	dir := install(t, "escapes")
 	logger, _ := newLogger()
 	opts := fast
@@ -587,9 +572,6 @@ func TestExitLeavesLiveAtOnce(t *testing.T) {
 }
 
 func TestMissingInterpreterIsPermanent(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("no #! scripts on Windows")
-	}
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "clock"), []byte("#!/nonexistent/interpreter\n"), 0o755); err != nil {
 		t.Fatal(err)
@@ -613,9 +595,6 @@ func TestUnimplementedConfigureIsPermanent(t *testing.T) {
 }
 
 func TestUnstartedLaunchIsNoStuckPlugin(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("no #! scripts on Windows")
-	}
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "clock"), []byte("#!/nonexistent/interpreter\n"), 0o755); err != nil {
 		t.Fatal(err)
@@ -630,7 +609,7 @@ func TestUnstartedLaunchIsNoStuckPlugin(t *testing.T) {
 }
 
 func TestUnreadableDirIsPermanent(t *testing.T) {
-	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
+	if os.Geteuid() == 0 {
 		t.Skip("needs Unix permissions that bind")
 	}
 	dir := t.TempDir()
@@ -645,9 +624,6 @@ func TestUnreadableDirIsPermanent(t *testing.T) {
 }
 
 func TestFailedLaunchShowsStopping(t *testing.T) {
-	if !canFreeze {
-		t.Skip("cannot stop a process on this OS")
-	}
 	dir := install(t, "freezes-configuring") // so Close takes seconds
 	logger, _ := newLogger()
 	m := StartWith(panels("freezes-configuring"), dir, logger, fast)
@@ -716,9 +692,6 @@ func TestRing(t *testing.T) {
 }
 
 func TestFrozenBeforeResetAfterIsCounted(t *testing.T) {
-	if !canFreeze {
-		t.Skip("cannot stop a process on this OS")
-	}
 	dir := install(t, "freezes-live") // freezes 200ms in, found out after ResetAfter
 	logger, _ := newLogger()
 	opts := fast

@@ -141,7 +141,7 @@ func TestStartReportsFailures(t *testing.T) {
 
 func TestLaunchRejects(t *testing.T) {
 	dir := install(t, "misnamed", "unimplemented", "proto-two", "core-two", "plaintext", "view-nine", "slow-describe")
-	if err := os.WriteFile(filepath.Join(dir, "noexec"+exeSuffix()), nil, 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "noexec"), nil, 0o644); err != nil {
 		t.Fatal(err)
 	}
 	logger, _ := newLogger()
@@ -157,9 +157,6 @@ func TestLaunchRejects(t *testing.T) {
 		{"Bad", `plugin "Bad" must be lowercase`},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			if tt.name == "noexec" && exeSuffix() != "" {
-				t.Skip("no executable bit on Windows")
-			}
 			t.Parallel()
 			inst, err := Launch(context.Background(), dir, tt.name, ignore, logger)
 			if err == nil {
@@ -174,9 +171,6 @@ func TestLaunchRejects(t *testing.T) {
 }
 
 func TestCloseKillsUnresponsivePlugin(t *testing.T) {
-	if !canFreeze {
-		t.Skip("cannot stop a process or reach its children on this OS")
-	}
 	dir := install(t, "frozen", "forks")
 	logger, _ := newLogger()
 	for _, name := range []string{"frozen", "forks"} {
@@ -265,9 +259,6 @@ func gone(pid int) bool {
 }
 
 func TestExitKillsChildren(t *testing.T) {
-	if !canFreeze || !canAwaitExit {
-		t.Skip("children of an exited plugin are killed only by a forced Close on this OS")
-	}
 	dir := install(t, "exits")
 	logger, _ := newLogger()
 	var child childPID
@@ -287,13 +278,9 @@ func TestExitKillsChildren(t *testing.T) {
 	}
 }
 
-// TestExitSeenWhileChildHoldsStderr runs wherever an exit watcher
-// does, Windows included: there a child is never killed with its
-// plugin, so a plain child holds the plugin's stderr after it exits.
+// TestExitSeenWhileChildHoldsStderr checks that the exit is seen while
+// a plain child holds the plugin's stderr.
 func TestExitSeenWhileChildHoldsStderr(t *testing.T) {
-	if !canAwaitExit {
-		t.Skip("no exit watcher on this OS")
-	}
 	dir := install(t, "exits")
 	logger, _ := newLogger()
 	var child childPID
@@ -319,9 +306,6 @@ func TestExitSeenWhileChildHoldsStderr(t *testing.T) {
 }
 
 func TestExitSeenDespiteEscapedChild(t *testing.T) {
-	if !canFreeze || !canAwaitExit {
-		t.Skip("needs process groups and an exit watcher")
-	}
 	dir := install(t, "escapes")
 	logger, _ := newLogger()
 	var child childPID
@@ -360,9 +344,6 @@ func TestExitSeenDespiteEscapedChild(t *testing.T) {
 }
 
 func TestCloseEndsEscapedPipesWhenWatchFails(t *testing.T) {
-	if !canFreeze {
-		t.Skip("needs process groups")
-	}
 	defer func(f func(*os.Process) bool) { awaitExitHook = f }(awaitExitHook)
 	awaitExitHook = func(*os.Process) bool { return false }
 	dir := install(t, "escapes")
@@ -391,9 +372,6 @@ func TestCloseEndsEscapedPipesWhenWatchFails(t *testing.T) {
 }
 
 func TestCancelWithEscapedChild(t *testing.T) {
-	if !canFreeze || !canAwaitExit {
-		t.Skip("needs process groups and an exit watcher")
-	}
 	dir := install(t, "escapes-early")
 	logger, _ := newLogger()
 	var child childPID
@@ -418,9 +396,6 @@ func TestCancelWithEscapedChild(t *testing.T) {
 // plugin's stderr past pipeGrace, so watch reaps the plugin while its
 // last line is still unread.
 func TestEarlyReapKeepsOutput(t *testing.T) {
-	if !canFreeze || !canAwaitExit {
-		t.Skip("needs process groups and an exit watcher")
-	}
 	dir := install(t, "escapes")
 	logger, _ := newLogger()
 	var child childPID
@@ -451,9 +426,6 @@ func TestEarlyReapKeepsOutput(t *testing.T) {
 }
 
 func TestCloseKillsDetachedChildren(t *testing.T) {
-	if !canFreeze || !canAwaitExit {
-		t.Skip("children of a plugin that exits on Shutdown survive on this OS")
-	}
 	dir := install(t, "detached")
 	logger, _ := newLogger()
 	var child childPID
@@ -468,9 +440,6 @@ func TestCloseKillsDetachedChildren(t *testing.T) {
 }
 
 func TestCloseKillsPluginWhenWatchFails(t *testing.T) {
-	if !canFreeze {
-		t.Skip("cannot stop a process on this OS")
-	}
 	defer func(f func(*os.Process) bool) { awaitExitHook = f }(awaitExitHook)
 	awaitExitHook = func(*os.Process) bool { return false }
 	dir := install(t, "mute-frozen")
@@ -508,9 +477,6 @@ func TestCanceledStartClosesPipes(t *testing.T) {
 }
 
 func TestCloseDespiteStalledOutput(t *testing.T) {
-	if !canFreeze {
-		t.Skip("needs process groups")
-	}
 	dir := install(t, "detached")
 	logger, _ := newLogger()
 	stall := make(chan struct{})
@@ -537,10 +503,8 @@ func TestCloseDespiteStalledOutput(t *testing.T) {
 func TestFailedStartCleansUp(t *testing.T) {
 	tmp := t.TempDir()
 	t.Setenv("TMPDIR", tmp)
-	t.Setenv("TMP", tmp) // Windows
-	t.Setenv("TEMP", tmp)
 	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "junk"+exeSuffix()), []byte("not a program\n"), 0o755); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "junk"), []byte("not a program\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	logger, _ := newLogger()
@@ -557,8 +521,6 @@ func TestMissingTempDirIsRetried(t *testing.T) {
 	dir := install(t, "clock")
 	missing := filepath.Join(t.TempDir(), "gone")
 	t.Setenv("TMPDIR", missing)
-	t.Setenv("TMP", missing) // Windows
-	t.Setenv("TEMP", missing)
 	logger, _ := newLogger()
 	_, err := Launch(context.Background(), dir, "clock", ignore, logger)
 	if err == nil || !Retryable(err) || strings.Contains(err.Error(), "cannot be run") {
@@ -587,9 +549,6 @@ func TestStdoutFloodDoesNotBlock(t *testing.T) {
 }
 
 func TestPluginDiesWithHost(t *testing.T) {
-	if runtime.GOOS != "linux" {
-		t.Skip("only Linux kills a plugin when its host dies")
-	}
 	dir := install(t, "clock")
 	self, err := os.Executable()
 	if err != nil {
@@ -714,27 +673,20 @@ func TestDescribe(t *testing.T) {
 func TestList(t *testing.T) {
 	dir := t.TempDir()
 	for name, mode := range map[string]os.FileMode{
-		"clock" + exeSuffix():   0o755,
-		"weather" + exeSuffix(): 0o755,
-		"clock.py":              0o755,
-		"Bad" + exeSuffix():     0o755,
-		"notes" + exeSuffix():   0o644,
+		"clock":    0o755,
+		"weather":  0o755,
+		"clock.py": 0o755,
+		"Bad":      0o755,
+		"notes":    0o644,
 	} {
 		if err := os.WriteFile(filepath.Join(dir, name), nil, mode); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if err := os.Mkdir(filepath.Join(dir, "sub"+exeSuffix()), 0o755); err != nil {
+	if err := os.Mkdir(filepath.Join(dir, "sub"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	want := []string{"clock", "weather"}
-	if exeSuffix() != "" {
-		// No executable bit, and the suffix in any case.
-		if err := os.WriteFile(filepath.Join(dir, "shout.EXE"), nil, 0o755); err != nil {
-			t.Fatal(err)
-		}
-		want = []string{"clock", "notes", "shout", "weather"}
-	}
 	got, err := List(dir)
 	if err != nil {
 		t.Fatal(err)

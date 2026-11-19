@@ -8,7 +8,6 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -457,20 +456,10 @@ func TestWatchReportsMissingDirectoryOnce(t *testing.T) {
 	}
 }
 
-// repoint points the link at link to target. It replaces the link in
-// one rename, as dotfiles managers do, where it can: Windows refuses to
-// rename over a link to a directory, so there it removes the link first.
+// repoint points the link at link to target, in one rename, as
+// dotfiles managers do.
 func repoint(t *testing.T, target, link string) {
 	t.Helper()
-	if runtime.GOOS == "windows" {
-		if err := os.Remove(link); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.Symlink(target, link); err != nil {
-			t.Fatal(err)
-		}
-		return
-	}
 	swap := link + ".new"
 	if err := os.Symlink(target, swap); err != nil {
 		t.Fatal(err)
