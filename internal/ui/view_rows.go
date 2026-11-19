@@ -107,10 +107,13 @@ func (v *viewState) actionable(gtx layout.Context, th *theme.Theme, id, text str
 	}
 	focused := gtx.Focused(c)
 	dims := c.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-		semantic.Button.Add(gtx.Ops)
-		semantic.LabelOp(cut(text, maxText)).Add(gtx.Ops)
-		semantic.SelectedOp(v.selected == id).Add(gtx.Ops)
-		return draw(gtx, c.Hovered() || focused || v.selected == id)
+		dims := draw(gtx, c.Hovered() || focused || v.selected == id)
+		semanticArea(gtx, image.Rectangle{Max: dims.Size}, func() {
+			semantic.Button.Add(gtx.Ops)
+			semantic.LabelOp(cut(text, maxText)).Add(gtx.Ops)
+			semantic.SelectedOp(v.selected == id).Add(gtx.Ops)
+		})
+		return dims
 	})
 	if focused {
 		ring := gtx.Dp(2)
