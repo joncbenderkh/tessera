@@ -25,16 +25,15 @@ languages can follow its documented handshake:
    the value in `proto/tessera/v1/version.go`,
    `PLUGIN_PROTOCOL_VERSIONS` listing the protocol versions it supports,
    and `PLUGIN_CLIENT_CERT` holding a fresh PEM certificate. It also
-   sets `PLUGIN_MIN_PORT` and `PLUGIN_MAX_PORT`, which a plugin uses only
-   on Windows, as the range its TCP port must fall in. A plugin started
+   sets `PLUGIN_MIN_PORT` and `PLUGIN_MAX_PORT`, go-plugin's range for
+   a TCP port, which a plugin on a unix socket ignores. A plugin started
    without the cookie was run by hand: it prints a short message and
    exits.
-2. The plugin listens on a unix socket (on Windows, TCP on 127.0.0.1),
-   generates its own certificate, and prints one line to stdout:
+2. The plugin listens on a unix socket, generates its own certificate,
+   and prints one line to stdout:
    `1|<protocol version>|<network>|<address>|grpc|<certificate>`, where
-   `<network>|<address>` is `unix|<socket path>` (on Windows,
-   `tcp|127.0.0.1:<port>`) and the certificate is its DER encoding in
-   unpadded standard base64.
+   `<network>|<address>` is `unix|<socket path>` and the certificate is
+   its DER encoding in unpadded standard base64.
 3. The host connects over mutual TLS, each side trusting only the other's
    certificate, and makes `PanelService` calls. The host verifies the
    plugin's certificate for the name `localhost`, so it needs that DNS
@@ -54,24 +53,19 @@ A plugin's stdin is empty, and its stdout carries only the handshake
 line: anything written there later is discarded. An output line longer
 than 64 KiB is logged in pieces.
 
-On Unix each plugin runs in a process group of its own. On Linux,
-macOS, and the BSDs the host kills that group as soon as the plugin
-exits, and when it shuts the plugin down, so children that stay in the
-group cannot outlive the plugin or keep the host from exiting by
-holding the plugin's stderr open. A child that leaves the group is
-on its own, though the host still sees the plugin exit; if it holds
-the plugin's stdout or stderr open, the host reads them for up to 3
-more seconds and then closes them. On other Unix systems the group is
-killed only when a plugin has to be killed. On Windows only the plugin
-itself is killed. All of this holds while the host runs: on Linux the
-kernel also kills a plugin whose host dies without shutting it down,
-but not the plugin's children; elsewhere such a plugin outlives its
-host.
+Each plugin runs in a process group of its own. The host kills that
+group as soon as the plugin exits, and when it shuts the plugin down, so
+children that stay in the group cannot outlive the plugin or keep the
+host from exiting by holding the plugin's stderr open. A child that
+leaves the group is on its own, though the host still sees the plugin
+exit; if it holds the plugin's stdout or stderr open, the host reads
+them for up to 3 more seconds and then closes them. All of this holds
+while the host runs: the kernel also kills a plugin whose host dies
+without shutting it down, but not the plugin's children.
 
 Mutual TLS is what go-plugin calls AutoMTLS, and the host always enables
-it: without it, any local process could connect to a plugin, read its
-view, and trigger its actions. That matters most for TCP, which every
-local user can reach, but it covers unix sockets as well.
+it: without it, any local process that can reach a plugin's unix
+socket could connect to it, read its view, and trigger its actions.
 
 The host side is `internal/pluginhost`; the Go SDK in `sdk/` hides
 all of this from a plugin (see [plugins.md](plugins.md)).
@@ -210,8 +204,7 @@ and restarts a plugin that crashes, hangs, or breaks the protocol:
   permanent failures below, counts the same way. The next launch, after
   a failure or a restart, waits until the old process is gone, or until
   shutting it down gives up (about 6 seconds; a process stuck in the
-  kernel can outlive SIGKILL), which the panel's Logs then say. On
-  Windows, children the plugin started are not shut down with it.
+  kernel can outlive SIGKILL), which the panel's Logs then say.
 - The health check catches a plugin frozen as a whole. go-plugin
   answers it outside the plugin's own code, so a plugin hung inside
   that code still passes; the Watch heartbeat catches those, as does
@@ -239,20 +232,16 @@ list, each line cut to 4 KiB. An event that spans lines, such as an
 error a plugin returned, continues on lines that start with `| `.
 
 Plugins are installed in `tessera/plugins` under the user data
-directory: `$XDG_DATA_HOME` (or `~/.local/share`) on Linux,
-`~/Library/Application Support` on macOS, and `%LOCALAPPDATA%` on
-Windows, unless the host is started with `--plugins <dir>`. A plugin's
-`DescribeResponse.name` must equal its executable's file name, which
-is how the config's `plugin:` field finds it: the name itself on Unix,
-the name plus `.exe` on Windows. Other files in the
+directory, `$XDG_DATA_HOME` (or `~/.local/share`), unless the host is
+started with `--plugins <dir>`. A plugin's `DescribeResponse.name`
+must equal its executable's file name, which is how the config's
+`plugin:` field finds it. Other files in the
 plugins directory, such as `clock.py` next to `clock`, are ignored.
 Install or update a plugin by renaming it into place (write it as
 `clock.new` in the plugins directory, then rename it to `clock`): a
 panel that restarts while its plugin is missing or half-written fails
 for good, as above, until the user restarts it or its settings or size
-change. On Windows a launch
-denied access, to the file or to running it, is retried, since an
-antivirus scan of a new `.exe` can deny it for a moment.
+change.
 
 The host refuses a plugin, shutting it down and recording the reason,
 when its file is missing or not executable, the handshake or the
@@ -267,8 +256,7 @@ above; the rest are the permanent failures. The reason is logged and
 shown in the panel's place, in its error tile.
 Names are 1 to 64 lowercase letters, digits, and hyphens, starting with a
 letter or digit, so they can never name a path outside the plugins
-directory. Names Windows reserves for devices (`con`, `prn`, `aux`,
-`nul`, `com0` to `com9`, `lpt0` to `lpt9`) are not allowed.
+directory.
 
 ## Settings
 

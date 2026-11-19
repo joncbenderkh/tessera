@@ -31,11 +31,18 @@ dialogs). Edit mode must be able to re-enable any disabled panel.
   local toolchain is go1.27.2 (`/usr/local/go`).
   `github.com/shirou/gopsutil/v4` stays at v4.26.8, the last release
   that needs no more than Go 1.24; v4.26.9 needs 1.26.
+- **Platform:** Linux only, for the host, the plugins, and the SDK
+  (#49). macOS, Windows, and the BSDs are not built, tested, or
+  released. The plugin protocol itself stays language- and OS-neutral
+  on the wire. `internal/pluginhost/linux_only.go` stops
+  builds for other systems of everything that imports it: the host,
+  `cmd/build`, and the SDK's and plugins' tests. The SDK and plugin
+  binaries still compile for them, unsupported.
 - **GUI:** [Gio](https://gioui.org) (`gioui.org`), immediate mode. Gio needs
-  cgo on Linux (Wayland/X11, EGL/Vulkan, xkbcommon), so the host binary is
-  **not** `CGO_ENABLED=0`. CI needs the system dev packages, and
-  cross-compiling the host is per-OS. Plugins have no GUI dependency and
-  stay `CGO_ENABLED=0`.
+  cgo (Wayland/X11, EGL/Vulkan, xkbcommon), so the host binary is
+  **not** `CGO_ENABLED=0`. CI needs the system dev packages, and the
+  host is built natively per architecture. Plugins have no GUI
+  dependency and stay `CGO_ENABLED=0`.
 - **Plugin model:** out-of-process RPC in the style of
   `github.com/hashicorp/go-plugin`. Each panel is its own executable, which
   the host launches and talks to over gRPC. Protocol definitions live in
@@ -52,12 +59,12 @@ dialogs). Edit mode must be able to re-enable any disabled panel.
     server-streaming RPC. Polling is the fallback. Input events (click,
     scroll) go back to the plugin as RPCs.
   - Plugins are discovered from a plugins directory
-    (`$XDG_DATA_HOME/tessera/plugins`, found per OS with
+    (`$XDG_DATA_HOME/tessera/plugins`, found with
     `github.com/adrg/xdg`), and each declares its name, version,
     protocol version, and config schema in the handshake. The host
     launches them with `github.com/hashicorp/go-plugin` itself.
 - **Config:** one YAML file, `tessera/config.yaml` in the user config
-  directory (`$XDG_CONFIG_HOME`, or `~/.config`, on Linux), holds the
+  directory (`$XDG_CONFIG_HOME`, or `~/.config`), holds the
   theme, the grid, panel placement and enabled state, and per-panel
   settings. YAML was the owner's choice over TOML and JSON: compact for
   a list of panels with nested settings, and it allows comments. It is
@@ -118,9 +125,8 @@ dialogs). Edit mode must be able to re-enable any disabled panel.
   through `internal/pluginhost`; the author guide is `docs/plugins.md`.
 - `plugins/<name>`: first-party panels, each its own `main` package.
   `plugins/internal/zones` holds the time zone names the clocks accept.
-  The system panels (`system`, `disk`, `network`, `processes`) are
-  Linux-only (`//go:build linux`); `plugins/internal/metric` is what
-  they share.
+  The system panels (`system`, `disk`, `network`, `processes`) share
+  `plugins/internal/metric`.
 
 ## Commands
 
@@ -147,8 +153,10 @@ Use the local toolchain: `export PATH=/usr/local/go/bin:$PATH`.
   `go test ./plugins/internal/zones -run TestZoneList -update`.
   It is not part of `go generate`, so a new Go release does not fail
   CI's drift check. Run it with the `go.mod` minimum
-  (`GOTOOLCHAIN=go1.25.0`): CI's Windows job on that Go has no system
-  time zones, so a zone only newer releases know fails `TestZoneList`.
+  (`GOTOOLCHAIN=go1.25.0`): plugins built with it embed its time zone
+  database for systems without one, so a zone only newer releases know
+  would not load there. `TestZoneList` checks the list against the
+  running Go's database, so CI's minimum-Go job catches one.
 - Refresh the calendar plugin's table of Windows time zone names from
   CLDR (it downloads `windowsZones.xml` at the release pinned in
   `plugins/calendar/windowszones_test.go`):
@@ -167,11 +175,7 @@ Use the local toolchain: `export PATH=/usr/local/go/bin:$PATH`.
   `buf format`, `buf breaking` against the previous `main` (with the
   rules pinned in the workflow), a `go generate` drift check, and an
   SPDX header check. Pull requests must target `main`; CI fails on any
-  other base. A separate job runs the `internal/pluginhost`,
-  `internal/config`, `internal/ui`, `sdk`, and `plugins` tests on macOS
-  and Windows, on both Go versions; the BSD variants of the plugin host's
-  process code are only vetted (`GOOS=freebsd go vet` and so on, in the
-  stable Linux job), never run. It does not run the host.
+  other base. CI runs on Linux only. It does not run the host.
 - Plugins and `sdk/` must also build with `CGO_ENABLED=0`.
 
 The host needs Gio's system packages. On Fedora: `wayland-devel`,
@@ -187,13 +191,11 @@ backend.
    `git tag v$(cat VERSION) && git push origin v$(cat VERSION)`.
 
 `.github/workflows/release.yml` fails unless the tag equals `v` + `VERSION`.
-It builds the host natively on linux/amd64, linux/arm64, darwin/arm64, and
-windows/amd64, cross-builds every `plugins/*` main package with
-`CGO_ENABLED=0` for the same targets (the Linux-only ones for Linux
-alone), and publishes the archives with
-`SHA256SUMS` and generated notes as a GitHub release. On PRs that touch
-the workflow it runs the builds without publishing. The macOS host is a
-bare binary, not a signed `.app` bundle.
+It builds the host natively on linux/amd64 and linux/arm64,
+cross-builds every `plugins/*` main package with `CGO_ENABLED=0` for
+the same targets, and publishes the archives with `SHA256SUMS` and
+generated notes as a GitHub release. On PRs that touch the workflow it
+runs the builds without publishing.
 
 ## Status
 
@@ -224,7 +226,7 @@ and notes (#19). The calendar panel lists the rest of today's events
 from iCalendar feeds, from URLs or files, read-only (#21), and a world
 clock shows up to four time zones (#50). The month panel shows the
 current month with today highlighted (#51). The system panels system,
-disk, network, and processes (#20), Linux-only, read /proc directly
+disk, network, and processes (#20) read /proc directly
 and through gopsutil. Edit mode moves and resizes panels by dragging
 or with the arrow keys, disables them with an Undo, re-enables them
 and adds panels from a bar above the grid, and saves each change at
@@ -233,7 +235,8 @@ plugin, and the host's `--plugins` flag loads them from another
 directory. Plugins declare the least body their views need, which
 edit mode keeps panels to and Add panel grows them to, alongside the
 default size; plugins are told the size they are shown at, and a
-view that does not fit fades out where it is cut (#52).
+view that does not fit fades out where it is cut (#52). tessera
+supports Linux alone (#49).
 
 ## Git workflow
 

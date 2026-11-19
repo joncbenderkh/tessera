@@ -2,7 +2,7 @@
 
 tessera reads one YAML file: `tessera/config.yaml` in the user config
 directory. That is `$XDG_CONFIG_HOME/tessera/config.yaml`, or
-`~/.config/tessera/config.yaml`, on Linux. Pass `--config <path>` to use a
+`~/.config/tessera/config.yaml`. Pass `--config <path>` to use a
 different file. On first run, tessera writes a default config there,
 readable only by you (mode 0600). Later saves keep the file's existing
 permissions.
@@ -69,7 +69,7 @@ panels:
 | `grid.columns` | Number of grid columns, from 1 to 24. |
 | `grid.row_height` | Height of one grid row in dp (logical pixels), from 150 to 2000. Large text makes rows taller where a panel's head and its buttons or menu need it, and the window keeps room for one such row. |
 | `panels[].id` | Unique name for this panel, read as written (`017` stays `017`). One plugin can back several panels. |
-| `panels[].plugin` | Name of the plugin that provides the panel: lowercase letters, digits, and hyphens, starting with a letter or digit, at most 64 characters, and not a Windows device name such as `con` or `com1`. Read as written, like `id`. |
+| `panels[].plugin` | Name of the plugin that provides the panel: lowercase letters, digits, and hyphens, starting with a letter or digit, at most 64 characters. Read as written, like `id`. |
 | `panels[].enabled` | `false` hides the panel. Defaults to `true`. |
 | `panels[].x`, `y` | Zero-based column and row of the panel's top-left cell. See [Grid](#grid). |
 | `panels[].w`, `h` | Width and height in cells, each at least 1. A panel ends by row 1000: `y` + `h` is at most 1000. |

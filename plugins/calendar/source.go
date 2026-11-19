@@ -74,8 +74,8 @@ func parseSource(s string) (source, error) {
 }
 
 // hasScheme reports whether s starts with a URL scheme: a letter, then
-// at least one more letter, digit, +, -, or ., then a colon. A Windows
-// drive letter is too short to be one.
+// at least one more letter, digit, +, -, or ., then a colon. A single
+// letter is not taken for one.
 func hasScheme(s string) bool {
 	scheme, _, ok := strings.Cut(s, ":")
 	if !ok || len(scheme) < 2 {
