@@ -338,6 +338,27 @@ func TestAddedPanelGrows(t *testing.T) {
 	}
 }
 
+// A growth the host would refuse, pushing a panel past the last row,
+// waits until the layout has room for it.
+func TestAddedPanelGrowsWhenThereIsRoom(t *testing.T) {
+	var r input.Router
+	cfg := gridConfig([]config.Panel{panel("a", 0, 0, 1, 1), panel("z", 0, 1, 1, 999)})
+	g := &Grid{Edit: true}
+	g.Added("a")
+	states := needing("a")
+	if got := frame(&r, g, cfg, states, time.Now()); len(got) != 0 {
+		t.Errorf("with no room: %v", got)
+	}
+	if !g.grow["a"] {
+		t.Fatal("a is no longer to grow")
+	}
+	cfg = gridConfig([]config.Panel{panel("a", 0, 0, 1, 1), panel("z", 0, 1, 1, 998)})
+	want := []Action{{Kind: ActionPlace, Panel: "a", Cell: cell("a", 0, 0, 2, 2)}}
+	if got := frame(&r, g, cfg, states, time.Now()); !slices.Equal(got, want) {
+		t.Errorf("with room: %v, want %v", got, want)
+	}
+}
+
 // Keys in one frame each start from the size the one before leaves:
 // a Shift+Right at the grid's edge does nothing, so a Shift+Left after
 // it is still refused at the least size.
@@ -1036,6 +1057,34 @@ func TestAddedPanelGrowsAfterADrag(t *testing.T) {
 	}
 	cfg = gridConfig([]config.Panel{panel("a", 1, 0, 1, 1)})
 	want = []Action{{Kind: ActionPlace, Panel: "a", Cell: cell("a", 1, 0, 2, 2)}}
+	if got := frame(&r, g, cfg, states, time.Now()); !slices.Equal(got, want) {
+		t.Errorf("after it: %v, want %v", got, want)
+	}
+}
+
+// Another tile dragged when the plugin describes itself delays the
+// growth too, which would move that tile from under the pointer.
+func TestAddedPanelGrowsAfterAnotherDrag(t *testing.T) {
+	var r input.Router
+	cfg := gridConfig([]config.Panel{panel("a", 0, 0, 1, 1), panel("b", 2, 0, 1, 1)})
+	g := &Grid{Edit: true}
+	g.Added("a")
+	starting := live("a", "b")
+	starting[0].State = pluginhost.Starting
+	frame(&r, g, cfg, starting, time.Now())
+	head := g.placed["b"].Min.Add(image.Pt(60, 22))
+	events := drag(head, head.Add(image.Pt(349, 0)))
+	frame(&r, g, cfg, starting, time.Now(), events[:2]...)
+	states := needing("a", "b")
+	if got := frame(&r, g, cfg, states, time.Now()); len(got) != 0 {
+		t.Errorf("while b is dragged: %v", got)
+	}
+	want := []Action{{Kind: ActionPlace, Panel: "b", Cell: cell("b", 3, 0, 1, 1)}}
+	if got := frame(&r, g, cfg, states, time.Now(), events[2:]...); !slices.Equal(got, want) {
+		t.Errorf("at the drop: %v, want %v", got, want)
+	}
+	cfg = gridConfig([]config.Panel{panel("a", 0, 0, 1, 1), panel("b", 3, 0, 1, 1)})
+	want = []Action{{Kind: ActionPlace, Panel: "a", Cell: cell("a", 0, 0, 2, 2)}}
 	if got := frame(&r, g, cfg, states, time.Now()); !slices.Equal(got, want) {
 		t.Errorf("after it: %v, want %v", got, want)
 	}

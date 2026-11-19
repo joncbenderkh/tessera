@@ -146,8 +146,9 @@ does too.
   and so on). Once its plugin has started, the panel grows to the
   plugin's default size and the least size it asks for, moving left
   if the grid's edge is in the way. It grows only while the window
-  shows all the grid's columns, as other resizing needs; one still
-  waiting when edit mode ends stays one cell.
+  shows all the grid's columns, as other resizing needs. A growth
+  that would push a panel past the last row waits until another change
+  makes room. One still waiting when edit mode ends stays one cell.
 
 Moving and resizing need the window to show all the grid's columns;
 in a narrower window, edit mode can still disable, enable, and add

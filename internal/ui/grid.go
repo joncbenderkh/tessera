@@ -381,11 +381,15 @@ func (g *Grid) Layout(gtx layout.Context, th *theme.Theme, cfg config.Config, st
 		fewest := minCells(gtx, s.Info.GetMinBody(), colW, rowH, gap, headH)
 		fewest.X = min(fewest.X, cfg.Grid.Columns)
 		// A panel Add panel made grows, but not while its tile is
-		// dragged: the drop would place it at its old size.
+		// dragged: the drop would place it at its old size. A growth
+		// the host would refuse, as past the last row, waits for a
+		// layout that has room.
 		grow := func() {
 			if mode == editMove && g.grow[c.ID] && s.Info != nil && t.drag == dragNone {
 				if a, ok := grown(c, cfg.Grid.Columns, s.Info, fewest); ok {
-					growth = append(growth, a)
+					if _, refused := landing(cfg, a.Cell); !refused {
+						growth = append(growth, a)
+					}
 				} else {
 					delete(g.grow, c.ID)
 				}
@@ -459,10 +463,14 @@ func (g *Grid) Layout(gtx layout.Context, th *theme.Theme, cfg config.Config, st
 	// Each growth is worked out from this frame's layout, so it waits
 	// for a frame that moves nothing else: a drop or a key, of its own
 	// tile or another, or another growth, would undo it or land off.
-	// One a frame, then, and the next frame is asked for.
+	// One a frame, then, and the next frame is asked for. Nor does one
+	// move a tile being dragged from under the pointer.
 	moved := slices.ContainsFunc(actions, func(a Action) bool {
 		return a.Kind == ActionPlace || a.Kind == ActionStep || a.Kind == ActionResize
 	})
+	for _, t := range seen {
+		moved = moved || t.drag != dragNone
+	}
 	if len(growth) > 0 && !moved {
 		actions = append(actions, growth[0])
 		delete(g.grow, growth[0].Panel)
