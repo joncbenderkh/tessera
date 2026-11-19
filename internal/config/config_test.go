@@ -10,7 +10,6 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
-	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -296,9 +295,6 @@ func TestValidate(t *testing.T) {
 		{"plugin name with uppercase", []Panel{plugin("Clock")}, "lowercase letters"},
 		{"plugin name with underscore", []Panel{plugin("system_stats")}, "lowercase letters"},
 		{"plugin name with leading hyphen", []Panel{plugin("-clock")}, "lowercase letters"},
-		{"plugin name reserved on Windows", []Panel{plugin("com1")}, "reserved device name"},
-		{"plugin name lpt0 reserved on Windows", []Panel{plugin("lpt0")}, "reserved device name"},
-		{"plugin name containing a reserved name", []Panel{plugin("console")}, ""},
 		{"zero span", []Panel{panel("a", 0, 0, 0, 1)}, "at least 1"},
 		{"negative position", []Panel{panel("a", -1, 0, 1, 1)}, "must not be negative"},
 		{"past last column", []Panel{panel("a", 3, 0, 2, 1)}, "4 columns"},
@@ -436,9 +432,6 @@ func TestSaveRejectsInvalidConfig(t *testing.T) {
 }
 
 func TestSavePermissions(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("Windows has no Unix permission bits; Go reports 0666 or 0444")
-	}
 	path := filepath.Join(t.TempDir(), FileName)
 	mode := func() os.FileMode {
 		t.Helper()

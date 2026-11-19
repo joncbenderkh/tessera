@@ -11,7 +11,6 @@ import (
 	"log"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -37,7 +36,7 @@ import (
 //   - oversize: sends a view over each limit, then one within them.
 func TestMain(m *testing.M) {
 	if os.Getenv(tesserav1.MagicCookieKey) != "" {
-		name := strings.TrimSuffix(filepath.Base(os.Args[0]), exeSuffix())
+		name := filepath.Base(os.Args[0])
 		views := make(chan sdk.View)
 		switch name {
 		case "quiet":
@@ -151,13 +150,6 @@ func serveGreeter(name string) {
 	})
 }
 
-func exeSuffix() string {
-	if runtime.GOOS == "windows" {
-		return ".exe"
-	}
-	return ""
-}
-
 // launch copies the test binary into a plugins directory as name and
 // launches it.
 func launch(t *testing.T, name string) *pluginhost.Instance {
@@ -171,7 +163,7 @@ func launch(t *testing.T, name string) *pluginhost.Instance {
 		t.Fatal(err)
 	}
 	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, name+exeSuffix()), data, 0o755); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, name), data, 0o755); err != nil {
 		t.Fatal(err)
 	}
 	inst, err := pluginhost.Launch(context.Background(), dir, name, func(line string) { t.Log(line) }, log.New(io.Discard, "", 0))

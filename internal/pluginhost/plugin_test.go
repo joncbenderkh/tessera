@@ -12,7 +12,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -35,7 +34,7 @@ func TestMain(m *testing.M) {
 		return
 	}
 	if os.Getenv(tesserav1.MagicCookieKey) != "" {
-		servePlugin(strings.TrimSuffix(filepath.Base(os.Args[0]), exeSuffix()))
+		servePlugin(filepath.Base(os.Args[0]))
 		return
 	}
 	if dir := os.Getenv(hostKey); dir != "" {
@@ -424,7 +423,7 @@ func install(t *testing.T, names ...string) string {
 	}
 	dir := t.TempDir()
 	for _, name := range names {
-		if err := os.WriteFile(filepath.Join(dir, name+exeSuffix()), data, 0o755); err != nil {
+		if err := os.WriteFile(filepath.Join(dir, name), data, 0o755); err != nil {
 			t.Fatal(err)
 		}
 	}

@@ -15,10 +15,6 @@ import (
 // file names in the plugins directory, so it admits no path separators.
 var pluginName = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,63}$`)
 
-// windowsDevice matches the names Windows reserves for devices, which
-// cannot be executable names there.
-var windowsDevice = regexp.MustCompile(`^(con|prn|aux|nul|com[0-9]|lpt[0-9])$`)
-
 // The grid's bounds keep the window's arithmetic in range and every tile
 // usable: a row is tall enough for a failed panel's message and buttons.
 const (
@@ -105,11 +101,8 @@ func (c Config) Validate() error {
 
 // ValidPluginName reports why name cannot be a plugin name, or nil.
 func ValidPluginName(name string) error {
-	switch {
-	case !pluginName.MatchString(name):
+	if !pluginName.MatchString(name) {
 		return fmt.Errorf("plugin %q must be lowercase letters, digits, and hyphens, starting with a letter or digit, at most 64 characters", name)
-	case windowsDevice.MatchString(name):
-		return fmt.Errorf("plugin %q is a reserved device name on Windows", name)
 	}
 	return nil
 }

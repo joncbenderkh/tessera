@@ -31,8 +31,7 @@ import (
 type Plugin struct {
 	// Name is the plugin's stable name, such as "clock": 1 to 64
 	// lowercase letters, digits, and hyphens, starting with a letter or
-	// digit. It must equal the executable's file name (plus ".exe" on
-	// Windows).
+	// digit. It must equal the executable's file name.
 	Name string
 	// Version is the plugin's version in semver form, such as "0.1.0".
 	Version string

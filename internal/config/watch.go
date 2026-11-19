@@ -19,10 +19,8 @@ const settleDelay = 100 * time.Millisecond
 
 // linkCheck is how often Watch checks where a symlinked config, or its
 // symlinked directory, points, whether its directory was replaced, and
-// rereads the file a link points to. kqueue (macOS, the BSDs)
-// watches the file a link points to, not the link, so it reports no event
-// when the link is replaced, and no backend reports a link above the
-// watched directory, or the directory itself, being replaced.
+// rereads the file a link points to. inotify reports no link above
+// the watched directory, or the directory itself, being replaced.
 const linkCheck = time.Second
 
 // Watch calls onChange whenever the file at path changes content, until ctx
@@ -41,8 +39,8 @@ const linkCheck = time.Second
 // a link, as with a dotfiles manager, it watches the directory the link
 // points to, and follows the link when it is pointed elsewhere. If path
 // itself is a link, the file it points to is checked every linkCheck
-// rather than watched: its directory can be as large as /nix/store, and
-// kqueue opens a file for each entry of a watched directory.
+// rather than watched: its directory can be as large and busy as
+// /nix/store.
 func Watch(ctx context.Context, path string, from []byte, read func(path string) ([]byte, error), onChange func(Config, error)) error {
 	if read == nil {
 		read = os.ReadFile
@@ -152,9 +150,6 @@ func stat(path string) os.FileInfo {
 	if err != nil {
 		return nil
 	}
-	// On Windows, SameFile reads the file's ID by path on its first call;
-	// read it now, before the path can name another file.
-	os.SameFile(info, info)
 	return info
 }
 

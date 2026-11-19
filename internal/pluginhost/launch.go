@@ -249,9 +249,9 @@ func Describe(ctx context.Context, dir, name string, output func(line string), l
 // Close shuts the plugin down: Shutdown, then a kill if it is still
 // running 2 seconds later. If go-plugin is still waiting after
 // killTimeout, on a plugin that never answers Shutdown or a child
-// holding its stderr open, Close kills the plugin's process group (on
-// Windows, the plugin alone). Where watch runs on Unix, the group of a
-// plugin that exits is killed as it exits, so its children go with it.
+// holding its stderr open, Close kills the plugin's process group. The
+// group of a plugin that exits is killed as it exits, so its children
+// go with it.
 // It returns within killTimeout, reapTimeout, pipeTimeout, and
 // flushTimeout together, even if the plugin is still running then, as
 // one stuck in the kernel can be after SIGKILL.
@@ -382,7 +382,7 @@ func (w *lineWriter) Write(b []byte) (int, error) {
 			return len(b), nil
 		}
 		if c == '\n' {
-			w.output(string(bytes.TrimSuffix(w.line, []byte("\r")))) // Windows line ends
+			w.output(string(bytes.TrimSuffix(w.line, []byte("\r")))) // CRLF line ends
 			w.line = w.line[:0]
 			continue
 		}
