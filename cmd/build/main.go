@@ -17,7 +17,6 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"syscall"
 	"time"
@@ -88,7 +87,7 @@ func build(noHost, run bool, dest string, extra []string) {
 	if err != nil {
 		log.Fatal(err)
 	}
-	host := filepath.Join(root, "tessera"+exeSuffix())
+	host := filepath.Join(root, "tessera")
 	if !noHost {
 		if err := goBuild(ctx, root, nil, "-o", host, "./cmd/tessera"); err != nil {
 			fatalUnlessStopped(ctx, "building the host", err)
@@ -194,12 +193,10 @@ func goBuild(ctx context.Context, root string, env []string, args ...string) err
 	cmd.Dir = root
 	cmd.Env = append(os.Environ(), env...)
 	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
-	if runtime.GOOS != "windows" {
-		// Interrupted, go build finishes writing its output, which a
-		// kill could leave half copied; it is killed if it lingers.
-		cmd.Cancel = func() error { return cmd.Process.Signal(os.Interrupt) }
-		cmd.WaitDelay = 10 * time.Second
-	}
+	// Interrupted, go build finishes writing its output, which a kill
+	// could leave half copied; it is killed if it lingers.
+	cmd.Cancel = func() error { return cmd.Process.Signal(os.Interrupt) }
+	cmd.WaitDelay = 10 * time.Second
 	return cmd.Run()
 }
 
@@ -242,13 +239,9 @@ func install(staging, dest string) ([]string, error) {
 	var names []string
 	for _, e := range entries {
 		if err := os.Rename(filepath.Join(staging, e.Name()), filepath.Join(dest, e.Name())); err != nil {
-			if runtime.GOOS == "windows" {
-				// Windows does not replace a running executable.
-				err = fmt.Errorf("%w (quit tessera, whose panels run it, and try again)", err)
-			}
 			return names, err
 		}
-		names = append(names, strings.TrimSuffix(e.Name(), exeSuffix()))
+		names = append(names, e.Name())
 	}
 	return names, nil
 }
@@ -304,11 +297,4 @@ func runHost(host string, args []string, signals <-chan os.Signal) int {
 		return 1
 	}
 	return 0
-}
-
-func exeSuffix() string {
-	if runtime.GOOS == "windows" {
-		return ".exe"
-	}
-	return ""
 }

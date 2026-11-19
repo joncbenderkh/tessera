@@ -6,7 +6,6 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
-	"runtime"
 	"slices"
 	"strconv"
 	"syscall"
@@ -48,8 +47,8 @@ func TestMain(m *testing.M) {
 	os.Exit(m.Run())
 }
 
-// A signal the build receives reaches the host it runs, which on Unix
-// is in a process group of its own.
+// A signal the build receives reaches the host it runs, which is in a
+// process group of its own.
 func TestRunHostPassesSignal(t *testing.T) {
 	ready := filepath.Join(t.TempDir(), "ready")
 	t.Setenv("BUILD_TEST_HOST_READY", ready)
@@ -65,13 +64,6 @@ func TestRunHostPassesSignal(t *testing.T) {
 		t.Fatal(err)
 	}
 	checkOwnGroup(t, pid)
-	if runtime.GOOS == "windows" {
-		// Nothing to pass on: the console reaches the host itself.
-		self, _ := os.FindProcess(pid)
-		self.Kill()
-		<-code
-		return
-	}
 	signals <- syscall.SIGTERM
 	select {
 	case got := <-code:
@@ -135,10 +127,7 @@ func TestInstallPlugins(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"calendar", "clock", "greeting", "notes", "worldclock"}
-	if runtime.GOOS == "linux" {
-		want = append(want, "disk", "network", "processes", "system")
-	}
+	want := []string{"calendar", "clock", "disk", "greeting", "month", "network", "notes", "processes", "system", "worldclock"}
 	for _, name := range want {
 		if !slices.Contains(names, name) {
 			t.Errorf("installed %q, missing %q", names, name)
@@ -160,7 +149,7 @@ func TestInstallPlugins(t *testing.T) {
 func TestInstallReplaces(t *testing.T) {
 	staging, dest := t.TempDir(), t.TempDir()
 	for dir, content := range map[string]string{staging: "new", dest: "old"} {
-		if err := os.WriteFile(filepath.Join(dir, "clock"+exeSuffix()), []byte(content), 0o755); err != nil {
+		if err := os.WriteFile(filepath.Join(dir, "clock"), []byte(content), 0o755); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -168,7 +157,7 @@ func TestInstallReplaces(t *testing.T) {
 	if err != nil || !slices.Equal(names, []string{"clock"}) {
 		t.Fatalf("install: %q, %v", names, err)
 	}
-	if got, err := os.ReadFile(filepath.Join(dest, "clock"+exeSuffix())); err != nil || string(got) != "new" {
+	if got, err := os.ReadFile(filepath.Join(dest, "clock")); err != nil || string(got) != "new" {
 		t.Errorf("clock holds %q, %v; want new", got, err)
 	}
 }
@@ -222,9 +211,6 @@ func TestModulePath(t *testing.T) {
 
 // A host killed by a signal gives the shell's code for it.
 func TestRunHostSignalled(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("no signals on Windows")
-	}
 	t.Setenv("BUILD_TEST_HOST_KILLED", "1")
 	if got := runHost(os.Args[0], nil, nil); got != 128+9 {
 		t.Errorf("killed host gives %d, want %d", got, 128+9)

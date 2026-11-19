@@ -1,12 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//go:build unix
-
 package main
 
 import (
 	"os"
-	"runtime"
 	"strconv"
 	"strings"
 	"syscall"
@@ -22,12 +19,9 @@ func checkOwnGroup(t *testing.T, pid int) {
 
 // backgroundSafe reports whether the terminal cannot stop this process
 // for being in the background: whether it started with SIGTTOU and
-// SIGTTIN ignored, which only Linux shows (in /proc), and which
-// signal.Ignored does not report.
+// SIGTTIN ignored, which /proc shows and signal.Ignored does not
+// report.
 func backgroundSafe() bool {
-	if runtime.GOOS != "linux" {
-		return true
-	}
 	status, err := os.ReadFile("/proc/self/status")
 	if err != nil {
 		return false
