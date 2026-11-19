@@ -124,7 +124,8 @@ func flatten(nodes []input.SemanticNode) []Node {
 
 // withoutEchoes drops the text drawn on an element that already has it
 // as its label, as a button's: a plain label node, with nothing below
-// it, that starts inside a node it repeats the label of.
+// it, that starts inside a node it repeats the label of. It drops a
+// repeat of an element too.
 func withoutEchoes(nodes []Node) []Node {
 	echo := func(n Node) bool {
 		if n.Class != "" || n.Description != "" || n.Label == "" || n.Text != n.Label {
@@ -137,11 +138,22 @@ func withoutEchoes(nodes []Node) []Node {
 		}
 		return false
 	}
+	// Gio can list one element twice, as an editor whose own semantics
+	// sit beside those its box gives: same parent, class, label,
+	// description, and bounds.
+	type key struct {
+		parent             uint
+		class, label, desc string
+		bounds             image.Rectangle
+	}
+	seen := map[key]bool{}
 	echoes := map[uint]bool{}
 	for _, n := range nodes {
-		if echo(n) {
+		k := key{n.Parent, n.Class, n.Label, n.Description, n.Bounds}
+		if echo(n) || seen[k] && n.Text == n.Label {
 			echoes[n.ID] = true
 		}
+		seen[k] = true
 	}
 	return slices.DeleteFunc(nodes, func(n Node) bool { return echoes[n.ID] })
 }
