@@ -79,6 +79,11 @@ dialogs). Edit mode must be able to re-enable any disabled panel.
 - **Command lines:** the host and `cmd/build` parse theirs with
   `github.com/spf13/cobra` (GNU-style `--flags`; stray arguments are
   errors), the owner's choice.
+- **Driving the UI in tests:** `cmd/uidrive` talks to X directly with
+  `github.com/jezek/xgb` (BSD-3-Clause) and its XTEST extension, for
+  input and screenshots, rather than running xdotool or ImageMagick.
+  It finds elements through Gio's semantic tree, which the host serves
+  only with its hidden `--debug-socket` flag.
 - **Module path:** `github.com/joncbenderkh/tessera`.
 
 ## Layout
@@ -89,6 +94,10 @@ dialogs). Edit mode must be able to re-enable any disabled panel.
   `layout.go` saves edit mode's changes one at a time, numbered, so
   those not yet in a config reloaded from the file are applied on top
   of it.
+- `cmd/uidrive`: the developer tool that drives the host's window by
+  element name on a private Xvfb display (see Commands).
+- `internal/uidebug`: the window's semantic tree, served to
+  `cmd/uidrive` on a Unix socket, and finding elements in it by name.
 - `cmd/build`: the developer build: the host and every first-party
   plugin, installed into the plugins directory (`go run ./cmd/build`).
 - `internal/config`: loading, validating, saving, and watching the user
@@ -98,7 +107,10 @@ dialogs). Edit mode must be able to re-enable any disabled panel.
   starting and error bodies, and edit mode's drags and keys), the
   edit bar, the plugins' views in them (`view*.go`), the button, the
   toast and dialog primitives, and the measures first-party plugins'
-  tests use to check that a view fits a tile (`measure.go`).
+  tests use to check that a view fits a tile (`measure.go`). An
+  element that takes input gives its semantics (class, label,
+  description) in a `semanticArea` of its own, which keeps them
+  readable by `uidebug`'s router.
   `internal/ui/theme`
   holds the design tokens (dark and light palettes, spacing, radius, and
   type scales) taken from `docs/design`.
@@ -140,6 +152,17 @@ Use the local toolchain: `export PATH=/usr/local/go/bin:$PATH`.
   to it; Ctrl-\ still gives the host's goroutine dump, which does
   not close its plugins). A bare `go build` at the root builds the
   `tessera` library package and writes nothing.
+- Try a UI change in the real window, never on the desktop: build with
+  `go run ./cmd/build --dest <dir>`, then `go run ./cmd/uidrive start
+  --plugins <dir> --config <file>` runs the host on a private Xvfb
+  display with a copy of the config. Then `uidrive tree` lists the
+  elements; `click NAME` (a label or description, as `tree` shows;
+  `--nth` picks among several), `hover`, `scroll`, `type TEXT`, and
+  `key Return|Escape|ctrl+a…` act on them; `wait NAME [--gone]`
+  waits; `shot` saves a PNG; `config` and `log` print the session's
+  config file and host log; `stop` ends it. Sessions live in
+  `$XDG_RUNTIME_DIR/tessera-uidrive/<name>` (`--session`). It needs
+  `Xvfb` (Fedora: `xorg-x11-server-Xvfb`).
 - Build the host alone: `go build ./cmd/tessera`; `./tessera --version`.
 - Test: `go test ./...`
 - Vet: `go vet ./...`
@@ -236,7 +259,8 @@ directory. Plugins declare the least body their views need, which
 edit mode keeps panels to and Add panel grows them to, alongside the
 default size; plugins are told the size they are shown at, and a
 view that does not fit fades out where it is cut (#52). tessera
-supports Linux alone (#49).
+supports Linux alone (#49). `cmd/uidrive` drives the window by
+element name on a private X display, for trying UI changes (#61).
 
 ## Git workflow
 
