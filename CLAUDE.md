@@ -157,7 +157,8 @@ Use the local toolchain: `export PATH=/usr/local/go/bin:$PATH`.
   --plugins <dir> --config <file>` runs the host on a private Xvfb
   display with a copy of the config. Then `uidrive tree` lists the
   elements; `click NAME` (a label or description, as `tree` shows;
-  `--nth` picks among several), `hover`, `scroll`, `type TEXT`, and
+  `--nth` picks among several, `--class Editor` keeps one class,
+  and with it `""` names all of it), `hover`, `scroll`, `type TEXT`, and
   `key Return|Escape|ctrl+a…` act on them; `wait NAME [--gone]`
   waits; `shot` saves a PNG; `config` and `log` print the session's
   config file and host log; `stop` ends it. Sessions live in

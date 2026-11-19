@@ -15,12 +15,14 @@
 package main
 
 import (
+	"cmp"
 	"errors"
 	"fmt"
 	"image"
 	"image/png"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -118,13 +120,14 @@ func main() {
 	treeCmd.Flags().BoolVar(&all, "all", false, "list unnamed elements too")
 
 	var nth, count int
+	var class string
 	var right bool
 	clickCmd := &cobra.Command{
 		Use:   "click NAME",
 		Short: "Click the element NAME names (see tree), or a point given as X,Y",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(_ *cobra.Command, args []string) error {
-			return act(name, args[0], nth, func(d *display, p image.Point) error {
+			return act(name, args[0], class, nth, func(d *display, p image.Point) error {
 				button := byte(1)
 				if right {
 					button = 3
@@ -134,6 +137,7 @@ func main() {
 		},
 	}
 	clickCmd.Flags().IntVar(&nth, "nth", 0, "of several elements that NAME names, the nth, from 1")
+	clickCmd.Flags().StringVar(&class, "class", "", "only elements of this class, such as Button or Editor; with it, NAME may be empty for all of them")
 	clickCmd.Flags().IntVar(&count, "count", 1, "clicks: 2 for a double click")
 	clickCmd.Flags().BoolVar(&right, "right", false, "click the right button")
 
@@ -142,10 +146,11 @@ func main() {
 		Short: "Put the pointer over the element NAME names, or at X,Y",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(_ *cobra.Command, args []string) error {
-			return act(name, args[0], nth, (*display).move)
+			return act(name, args[0], class, nth, (*display).move)
 		},
 	}
 	hoverCmd.Flags().IntVar(&nth, "nth", 0, "of several elements that NAME names, the nth, from 1")
+	hoverCmd.Flags().StringVar(&class, "class", "", "only elements of this class, such as Button or Editor; with it, NAME may be empty for all of them")
 
 	var lines int
 	scrollCmd := &cobra.Command{
@@ -153,7 +158,7 @@ func main() {
 		Short: "Scroll the wheel over the element NAME names, or at X,Y",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(_ *cobra.Command, args []string) error {
-			return act(name, args[0], nth, func(d *display, p image.Point) error {
+			return act(name, args[0], class, nth, func(d *display, p image.Point) error {
 				button := byte(5) // down
 				if lines < 0 {
 					button, lines = 4, -lines
@@ -163,6 +168,7 @@ func main() {
 		},
 	}
 	scrollCmd.Flags().IntVar(&nth, "nth", 0, "of several elements that NAME names, the nth, from 1")
+	scrollCmd.Flags().StringVar(&class, "class", "", "only elements of this class, such as Button or Editor; with it, NAME may be empty for all of them")
 	scrollCmd.Flags().IntVar(&lines, "lines", 3, "wheel steps, down; negative scrolls up")
 
 	typeCmd := &cobra.Command{
@@ -305,7 +311,7 @@ func main() {
 
 // act finds the element target names, or the point target gives as
 // X,Y in window pixels, and does do at its center.
-func act(name, target string, nth int, do func(*display, image.Point) error) error {
+func act(name, target, class string, nth int, do func(*display, image.Point) error) error {
 	s, err := loadSession(name)
 	if err != nil {
 		return err
@@ -316,7 +322,7 @@ func act(name, target string, nth int, do func(*display, image.Point) error) err
 		if err != nil {
 			return err
 		}
-		n, err := pick(t, target, nth)
+		n, err := pick(t, target, class, nth)
 		if err != nil {
 			return err
 		}
@@ -334,11 +340,30 @@ func act(name, target string, nth int, do func(*display, image.Point) error) err
 	return nil
 }
 
-// pick is the element query names: the nth if nth is set, and
-// otherwise the one best match, as Tree.Find ranks them.
-func pick(t uidebug.Tree, query string, nth int) (uidebug.Node, error) {
-	found := t.Find(query)
+// pick is the element query names, of class if it is set: the nth if
+// nth is set, and otherwise the one best match, as Tree.Find ranks
+// them. An empty query with a class picks among all of that class, top
+// to bottom.
+func pick(t uidebug.Tree, query, class string, nth int) (uidebug.Node, error) {
+	var found []uidebug.Node
+	if query == "" && class != "" {
+		for _, n := range t.Nodes {
+			if !n.Bounds.Empty() {
+				found = append(found, n)
+			}
+		}
+		slices.SortStableFunc(found, func(a, b uidebug.Node) int {
+			return cmp.Or(cmp.Compare(a.Bounds.Min.Y, b.Bounds.Min.Y), cmp.Compare(a.Bounds.Min.X, b.Bounds.Min.X))
+		})
+	} else {
+		found = t.Find(query)
+	}
+	if class != "" {
+		found = slices.DeleteFunc(found, func(n uidebug.Node) bool { return !strings.EqualFold(n.Class, class) })
+	}
 	switch {
+	case len(found) == 0 && class != "":
+		return uidebug.Node{}, fmt.Errorf("no %s named %q; see uidrive tree", class, query)
 	case len(found) == 0:
 		return uidebug.Node{}, fmt.Errorf("nothing named %q; see uidrive tree", query)
 	case nth > 0 && nth <= len(found):
