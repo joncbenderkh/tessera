@@ -229,10 +229,11 @@ func (v *viewState) widget(gtx layout.Context, th *theme.Theme, w *tesserav1.Wid
 
 // whole draws w, whose height does not depend on the room it gets, at
 // its full height, and cuts it at gtx's, fading out there: a label told
-// its room would stop drawing there unnoticed.
+// its room would stop drawing there unnoticed. One pixel more than the
+// room shows the cut, and keeps a long text from being drawn past it.
 func (v *viewState) whole(gtx layout.Context, th *theme.Theme, w layout.Widget) layout.Dimensions {
 	room := gtx.Constraints.Max.Y
-	gtx.Constraints.Max.Y = 1 << 24
+	gtx.Constraints.Max.Y = room + 1
 	cl := clip.Rect{Max: image.Pt(gtx.Constraints.Max.X, room)}.Push(gtx.Ops)
 	dims := w(gtx)
 	cl.Pop()
