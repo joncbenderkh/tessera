@@ -3,6 +3,7 @@
 package main
 
 import (
+	"image"
 	"slices"
 	"testing"
 	"time"
@@ -11,7 +12,9 @@ import (
 	"google.golang.org/grpc/status"
 
 	"github.com/joncbenderkh/tessera/internal/plugintest"
+	"github.com/joncbenderkh/tessera/internal/ui"
 	tesserav1 "github.com/joncbenderkh/tessera/proto/tessera/v1"
+	"github.com/joncbenderkh/tessera/sdk"
 )
 
 func TestMain(m *testing.M) { plugintest.Main(m, main) }
@@ -64,4 +67,30 @@ func TestClock(t *testing.T) {
 		texts := plugintest.Texts(v.GetBody())
 		return len(texts) == 3 && texts[2] == "Asia/Tokyo · JST"
 	})
+}
+
+// The views fit the least body the plugin asks for, minBody, at the
+// default text size.
+func TestMinBody(t *testing.T) {
+	// From the narrowest body a tile has, or the least width it asks for.
+	for _, width := range []int{124, 168, 300, 432, 600, 900} {
+		testMinBodyAt(t, max(width, minBody.Width))
+	}
+}
+
+func testMinBodyAt(t *testing.T, width int) {
+	t.Helper()
+	for i, v := range minBodyViews() {
+		if !ui.ViewFits(v.Proto(), image.Pt(width, minBody.Height), 1) {
+			t.Errorf("view %d does not fit %d by %d dp", i, width, minBody.Height)
+		}
+	}
+}
+
+// minBodyViews are the views minBody is measured with.
+func minBodyViews() []sdk.View {
+	// The widest date: a Wednesday in September. Zone names longer than
+	// Europe/Berlin's, such as America/North_Dakota/New_Salem, wrap
+	// and fade in a narrow tile.
+	return []sdk.View{view(time.Date(2026, 9, 16, 23, 48, 48, 0, time.UTC), "Europe/Berlin")}
 }

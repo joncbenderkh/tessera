@@ -282,3 +282,31 @@ func TestMonth(t *testing.T) {
 		return len(texts) > 8 && texts[0] == time.Now().In(kiritimati).Format("January 2006") && texts[1] == " S"
 	})
 }
+
+// The views fit the least body the plugin asks for, minBody, at the
+// default text size.
+func TestMinBody(t *testing.T) {
+	// From the narrowest body a tile has, or the least width it asks for.
+	for _, width := range []int{124, 168, 300, 432, 600, 900} {
+		testMinBodyAt(t, max(width, minBody.Width))
+	}
+}
+
+func testMinBodyAt(t *testing.T, width int) {
+	t.Helper()
+	for i, v := range minBodyViews() {
+		if !ui.ViewFits(v.Proto(), image.Pt(width, minBody.Height), 1) {
+			t.Errorf("view %d does not fit %d by %d dp", i, width, minBody.Height)
+		}
+	}
+}
+
+// minBodyViews are the views minBody is measured with: months of six
+// weeks, from Monday and from Sunday, and the widest name.
+func minBodyViews() []sdk.View {
+	return []sdk.View{
+		view(time.Date(2026, 8, 31, 12, 0, 0, 0, time.UTC), time.Monday),
+		view(time.Date(2026, 5, 31, 12, 0, 0, 0, time.UTC), time.Sunday),
+		view(time.Date(2026, 9, 30, 12, 0, 0, 0, time.UTC), time.Monday),
+	}
+}

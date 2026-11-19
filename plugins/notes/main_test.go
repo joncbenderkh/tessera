@@ -3,6 +3,7 @@
 package main
 
 import (
+	"image"
 	"slices"
 	"testing"
 
@@ -10,6 +11,8 @@ import (
 	"google.golang.org/grpc/status"
 
 	"github.com/joncbenderkh/tessera/internal/plugintest"
+	"github.com/joncbenderkh/tessera/internal/ui"
+	"github.com/joncbenderkh/tessera/sdk"
 )
 
 func TestMain(m *testing.M) { plugintest.Main(m, main) }
@@ -42,4 +45,27 @@ func TestNotes(t *testing.T) {
 		t.Fatal(err)
 	}
 	p.AwaitTexts("Plan", "Ship it.")
+}
+
+// The views fit the least body the plugin asks for, minBody, at the
+// default text size.
+func TestMinBody(t *testing.T) {
+	// From the narrowest body a tile has, or the least width it asks for.
+	for _, width := range []int{124, 168, 300, 432, 600, 900} {
+		testMinBodyAt(t, max(width, minBody.Width))
+	}
+}
+
+func testMinBodyAt(t *testing.T, width int) {
+	t.Helper()
+	for i, v := range minBodyViews() {
+		if !ui.ViewFits(v.Proto(), image.Pt(width, minBody.Height), 1) {
+			t.Errorf("view %d does not fit %d by %d dp", i, width, minBody.Height)
+		}
+	}
+}
+
+// minBodyViews are the views minBody is measured with.
+func minBodyViews() []sdk.View {
+	return []sdk.View{view(settings{Title: "Plan", Body: "Ship it."}), view(settings{})}
 }

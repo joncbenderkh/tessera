@@ -139,6 +139,38 @@ func (w *live) run() (end, error) {
 		}
 		return stop, err
 	}
+	// reconfigure configures the plugin again, after what changed, and
+	// reports whether run ends, and how.
+	reconfigure := func(what string) (end, bool, error) {
+		select {
+		case <-pn.reshown: // this Configure sends the latest shown size too
+		default:
+		}
+		cfg, columns := m.config(pn)
+		stop, _, err := w.call(func(ctx context.Context) error {
+			return configure(ctx, inst, cfg, columns, m.opts.CallTimeout)
+		})
+		if stop != nil {
+			return *stop, true, nil
+		}
+		if err != nil {
+			var hung hangError
+			if Retryable(err) && !errors.As(err, &hung) && !answered(err) {
+				if stop := w.settle(); stop != nil {
+					return *stop, true, nil
+				}
+			}
+			return end{}, true, err
+		}
+		w.alive()
+		m.event(pn, "%s; plugin configured again", what)
+		if w.polled && !w.off {
+			if stop, err := render(); stop != nil || err != nil {
+				return orClose(stop), true, err
+			}
+		}
+		return end{}, false, nil
+	}
 	for {
 		// An idle wait of more than a tick or two means the clock
 		// jumped, as across a sleep on some systems, rather than a call
@@ -216,28 +248,16 @@ func (w *live) run() (end, error) {
 			if w.off { // new settings may fit the limits; only a relaunch shows views again
 				return end{restart: true, changed: true}, nil
 			}
-			cfg := m.config(pn)
-			stop, _, err := w.call(func(ctx context.Context) error {
-				return configure(ctx, inst, cfg, m.opts.CallTimeout)
-			})
-			if stop != nil {
-				return *stop, nil
+			if e, done, err := reconfigure("settings or size changed"); done {
+				return e, err
 			}
-			if err != nil {
-				var hung hangError
-				if Retryable(err) && !errors.As(err, &hung) && !answered(err) {
-					if stop := w.settle(); stop != nil {
-						return *stop, nil
-					}
-				}
-				return end{}, err
+		case <-pn.reshown:
+			resumed()
+			if w.off { // only a change to the config relaunches it
+				continue
 			}
-			w.alive()
-			m.event(pn, "settings or size changed; plugin configured again")
-			if w.polled && !w.off {
-				if stop, err := render(); stop != nil || err != nil {
-					return orClose(stop), err
-				}
+			if e, done, err := reconfigure("shown size changed"); done {
+				return e, err
 			}
 		case req := <-pn.events:
 			resumed()

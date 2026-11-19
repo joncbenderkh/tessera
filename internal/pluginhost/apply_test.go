@@ -97,6 +97,43 @@ func TestApplyConfiguresChangedSettings(t *testing.T) {
 	}
 }
 
+// A panel is configured again when the window's columns change the
+// size it is shown at, and only then.
+func TestSetColumnsConfiguresShownSize(t *testing.T) {
+	dir := install(t, "clock")
+	logger, _ := newLogger()
+	cfg := panels("clock", "clock")
+	cfg.Panels[0].W = 3
+	m := StartWith(cfg, dir, logger, fast)
+	defer m.Close()
+	waitFor(t, m, "p0", "live", is(Live))
+	waitFor(t, m, "p1", "live", is(Live))
+	await := func(id, want string) {
+		t.Helper()
+		for deadline := time.Now().Add(10 * time.Second); countLines(m.Logs(id), want) == 0; {
+			if time.Now().After(deadline) {
+				t.Fatalf("logs lack %q:\n%s", want, strings.Join(m.Logs(id), "\n"))
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+	}
+	await("p0", "configured p0 map[] 3x1 shown 3x1")
+
+	m.SetColumns(2)
+	await("p0", "configured p0 map[] 3x1 shown 2x1")
+	m.SetColumns(1)
+	await("p0", "configured p0 map[] 3x1 shown 1x1")
+	m.SetColumns(4)
+	await("p0", "configured p0 map[] 3x1 shown 3x1")
+	time.Sleep(100 * time.Millisecond)
+	if n := countLines(m.Logs("p0"), "configured p0"); n != 4 {
+		t.Errorf("p0 configured %d times, want 4", n)
+	}
+	if n := countLines(m.Logs("p1"), "configured p1"); n != 1 {
+		t.Errorf("p1 configured %d times, want 1: one column wide, it is shown at its size throughout", n)
+	}
+}
+
 func TestApplyRejectedSettingsCrash(t *testing.T) {
 	dir := install(t, "rejects-later")
 	logger, _ := newLogger()
@@ -285,5 +322,37 @@ func TestApplyDuringLaunch(t *testing.T) {
 	logs := m.Logs("p0")
 	if countLines(logs, "configured p0") != 1 || countLines(logs, "configured p0 map[timezone:UTC]") != 1 {
 		t.Errorf("want one Configure, with the new settings:\n%s", strings.Join(logs, "\n"))
+	}
+}
+
+// A change of the size a panel is shown at relaunches neither a crashed
+// panel nor one whose views were over a limit, as a change of the
+// config would.
+func TestSetColumnsRelaunchesNothing(t *testing.T) {
+	dir := install(t, "rejects-later", "big-view")
+	logger, _ := newLogger()
+	cfg := panels("rejects-later", "big-view")
+	cfg.Panels[0].W, cfg.Panels[1].W = 3, 3
+	m := StartWith(cfg, dir, logger, fast)
+	defer m.Close()
+	waitFor(t, m, "p0", "live", is(Live))
+	waitFor(t, m, "p1", "refusing the view", func(s PanelState) bool { return s.ViewErr != nil })
+	rejected := cfg
+	rejected.Panels = slices.Clone(cfg.Panels)
+	rejected.Panels[0].Settings = config.Settings{"timezone": "Mars"}
+	m.Apply(rejected)
+	waitFor(t, m, "p0", "crashed", is(Crashed))
+
+	for _, n := range []int{2, 1, 2, 4} {
+		m.SetColumns(n)
+	}
+	time.Sleep(300 * time.Millisecond)
+	for _, id := range []string{"p0", "p1"} {
+		if n := countLines(m.Logs(id), "starting plugin"); n != 1 {
+			t.Errorf("%s launched %d times, want 1:\n%s", id, n, strings.Join(m.Logs(id), "\n"))
+		}
+	}
+	if s := m.States()[0]; s.State != Crashed {
+		t.Errorf("p0 %v, want still crashed", s.State)
 	}
 }

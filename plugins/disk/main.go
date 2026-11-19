@@ -81,7 +81,8 @@ func main() {
 		Version:      tessera.Version,
 		Description:  "How full a file system is.",
 		ConfigSchema: schema,
-		DefaultSize:  sdk.Size{Columns: 1, Rows: 1},
+		DefaultSize:  sdk.Size{Columns: 1, Rows: 2},
+		MinBody:      minBody,
 		Views:        views,
 		Configure:    d.configure,
 	})
@@ -188,10 +189,12 @@ func view(mount, device string, u *disk.UsageStat) sdk.View {
 	display := strconv.FormatFloat(math.Floor(used), 'f', 0, 64)
 	fstype := strings.ToValidUTF8(u.Fstype, "\uFFFD")
 	detail := strings.Join(slices.DeleteFunc([]string{device, fstype}, func(s string) bool { return s == "" }), " · ")
+	// Weighted, so the dial grows into what the detail line leaves
+	// rather than taking its room.
 	body := sdk.Column(
-		sdk.Gauge("", used).Unit("%").Display(display).
+		sdk.Weighted(1, sdk.Gauge("", used).Unit("%").Display(display).
 			WarnAt(warnAt).ErrorAt(errorAt).
-			Caption(metric.BytesString(u.Free) + " free of " + metric.BytesString(u.Total)),
+			Caption(metric.BytesString(u.Free)+" free of "+metric.BytesString(u.Total))),
 	).Gap(sdk.SpacingSmall)
 	if detail != "" {
 		body.Add(sdk.Text(detail).Size(sdk.SizeSmall).Tone(sdk.ToneMuted).Monospace())
@@ -218,3 +221,7 @@ func failed(mount string, notMounted bool) sdk.View {
 		).Gap(sdk.SpacingSmall),
 	}
 }
+
+// minBody is the least room the panel's view needs, in dp: room for
+// the dial at its least size, its caption, and the device line.
+var minBody = sdk.BodySize{Width: 120, Height: 144}

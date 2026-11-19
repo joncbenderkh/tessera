@@ -69,6 +69,7 @@ func main() {
 		Description:  "CPU and memory use, with their recent history.",
 		ConfigSchema: schema,
 		DefaultSize:  sdk.Size{Columns: 2, Rows: 2},
+		MinBody:      minBody,
 		Views:        views,
 		Configure:    s.configure,
 	})
@@ -282,3 +283,7 @@ func cores(n int) string {
 	}
 	return strconv.Itoa(n) + " CPUs"
 }
+
+// minBody is the least room the panel's view needs, in dp: room for
+// both stats, in the narrowest column.
+var minBody = sdk.BodySize{Width: 168, Height: 149}

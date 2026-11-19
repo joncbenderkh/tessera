@@ -344,6 +344,7 @@ func TestWindowConfigChange(t *testing.T) {
 	reloads := make(chan reload, 1)
 	reloads <- reload{cfg: file, valid: true}
 	var applied []config.Config
+	var added []string
 	redraws := 0
 	w := &windowConfig{
 		cfg:      layoutConfig(),
@@ -355,9 +356,13 @@ func TestWindowConfigChange(t *testing.T) {
 		toast:    &ui.Toaster{},
 		apply:    func(c config.Config) { applied = append(applied, c) },
 		redraw:   func() { redraws++ },
+		added:    func(id string) { added = append(added, id) },
 	}
 	if !w.change(ui.Action{Kind: ui.ActionAdd, Plugin: "clock"}) {
 		t.Fatal("Add changed nothing")
+	}
+	if !slices.Equal(added, []string{"clock-2"}) {
+		t.Errorf("told of panels %v added, want [clock-2]: the id the reload left free", added)
 	}
 	ids := func(c config.Config) []string {
 		var ids []string

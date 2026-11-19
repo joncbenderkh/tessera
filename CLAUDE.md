@@ -230,7 +230,10 @@ or with the arrow keys, disables them with an Undo, re-enables them
 and adds panels from a bar above the grid, and saves each change at
 once (#15). `go run ./cmd/build` builds the host and installs every
 plugin, and the host's `--plugins` flag loads them from another
-directory.
+directory. Plugins declare the least body their views need, which
+edit mode keeps panels to and Add panel grows them to, alongside the
+default size; plugins are told the size they are shown at, and a
+view that does not fit fades out where it is cut (#52).
 
 ## Git workflow
 

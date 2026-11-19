@@ -52,6 +52,7 @@ func main() {
 		Description:  "The time, date, and time zone.",
 		ConfigSchema: schema,
 		DefaultSize:  sdk.Size{Columns: 1, Rows: 1},
+		MinBody:      minBody,
 		Views:        views,
 		Configure:    c.configure,
 	})
@@ -112,3 +113,7 @@ func zoneLabel(t time.Time, zone string) string {
 	}
 	return zone + " · " + abbr
 }
+
+// minBody is the least room the panel's view needs, in dp: room for
+// the time, the date and the zone on their lines.
+var minBody = sdk.BodySize{Width: 150, Height: 88}
