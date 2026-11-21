@@ -8,7 +8,7 @@
 //
 //	go run ./cmd/build --dest /tmp/plugins
 //	go run ./cmd/uidrive start --plugins /tmp/plugins --config my.yaml
-//	go run ./cmd/uidrive click "Options for World clock"
+//	go run ./cmd/uidrive click "World clock panel options"
 //	go run ./cmd/uidrive click Configure…
 //	go run ./cmd/uidrive shot
 //	go run ./cmd/uidrive stop
@@ -23,6 +23,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -58,9 +59,6 @@ func main() {
 			}
 			s, err := startSession(name, start)
 			if err != nil {
-				if s.Dir != "" {
-					s.stop()
-				}
 				return err
 			}
 			fmt.Printf("session %q on display %s\nconfig: %s\nlog: %s\n", name, s.Display, s.configPath(), s.hostLog())
@@ -78,17 +76,31 @@ func main() {
 		Short: "Stop the host and its X display",
 		Args:  cobra.NoArgs,
 		RunE: func(*cobra.Command, []string) error {
+			dir, err := sessionDir(name)
+			if err != nil {
+				return err
+			}
+			// Locked before the state is read, so a start under way
+			// finishes first and this stops what it started.
+			unlock, err := lockSession(dir)
+			if err != nil {
+				return err
+			}
+			defer unlock()
 			s, err := loadSession(name)
-			if s.Dir == "" {
+			switch {
+			case s.Dir != "":
+				if err := s.stop(); err != nil {
+					return err
+				}
+			case !clean:
 				return err
 			}
-			if err := s.stop(); err != nil {
-				return err
-			}
+			// Stopped before, or a failed start: only files are left.
 			if clean {
-				return os.RemoveAll(s.Dir)
+				return os.RemoveAll(dir)
 			}
-			fmt.Println("stopped; files kept in", s.Dir)
+			fmt.Println("stopped; files kept in", dir)
 			return nil
 		},
 	}
@@ -120,14 +132,17 @@ func main() {
 	treeCmd.Flags().BoolVar(&all, "all", false, "list unnamed elements too")
 
 	var nth, count int
-	var class string
+	var class, point string
 	var right bool
 	clickCmd := &cobra.Command{
-		Use:   "click NAME",
-		Short: "Click the element NAME names (see tree), or a point given as X,Y",
-		Args:  cobra.ExactArgs(1),
+		Use:   "click [NAME]",
+		Short: "Click the element NAME names (see tree), or the point --at gives",
+		Args:  cobra.MaximumNArgs(1),
 		RunE: func(_ *cobra.Command, args []string) error {
-			return act(name, args[0], class, nth, func(d *display, p image.Point) error {
+			if count < 1 {
+				return fmt.Errorf("--count %d: want 1 or more", count)
+			}
+			return act(name, args, point, class, nth, func(d *display, p image.Point) error {
 				button := byte(1)
 				if right {
 					button = 3
@@ -138,27 +153,32 @@ func main() {
 	}
 	clickCmd.Flags().IntVar(&nth, "nth", 0, "of several elements that NAME names, the nth, from 1")
 	clickCmd.Flags().StringVar(&class, "class", "", "only elements of this class, such as Button or Editor; with it, NAME may be empty for all of them")
+	clickCmd.Flags().StringVar(&point, "at", "", "a point X,Y in window pixels, instead of NAME")
 	clickCmd.Flags().IntVar(&count, "count", 1, "clicks: 2 for a double click")
 	clickCmd.Flags().BoolVar(&right, "right", false, "click the right button")
 
 	hoverCmd := &cobra.Command{
-		Use:   "hover NAME",
-		Short: "Put the pointer over the element NAME names, or at X,Y",
-		Args:  cobra.ExactArgs(1),
+		Use:   "hover [NAME]",
+		Short: "Put the pointer over the element NAME names, or at the point --at gives",
+		Args:  cobra.MaximumNArgs(1),
 		RunE: func(_ *cobra.Command, args []string) error {
-			return act(name, args[0], class, nth, (*display).move)
+			return act(name, args, point, class, nth, (*display).move)
 		},
 	}
 	hoverCmd.Flags().IntVar(&nth, "nth", 0, "of several elements that NAME names, the nth, from 1")
 	hoverCmd.Flags().StringVar(&class, "class", "", "only elements of this class, such as Button or Editor; with it, NAME may be empty for all of them")
+	hoverCmd.Flags().StringVar(&point, "at", "", "a point X,Y in window pixels, instead of NAME")
 
 	var lines int
 	scrollCmd := &cobra.Command{
-		Use:   "scroll NAME",
-		Short: "Scroll the wheel over the element NAME names, or at X,Y",
-		Args:  cobra.ExactArgs(1),
+		Use:   "scroll [NAME]",
+		Short: "Scroll the wheel over the element NAME names, or at the point --at gives",
+		Args:  cobra.MaximumNArgs(1),
 		RunE: func(_ *cobra.Command, args []string) error {
-			return act(name, args[0], class, nth, func(d *display, p image.Point) error {
+			if lines == 0 {
+				return errors.New("--lines 0 scrolls nothing")
+			}
+			return act(name, args, point, class, nth, func(d *display, p image.Point) error {
 				button := byte(5) // down
 				if lines < 0 {
 					button, lines = 4, -lines
@@ -169,6 +189,7 @@ func main() {
 	}
 	scrollCmd.Flags().IntVar(&nth, "nth", 0, "of several elements that NAME names, the nth, from 1")
 	scrollCmd.Flags().StringVar(&class, "class", "", "only elements of this class, such as Button or Editor; with it, NAME may be empty for all of them")
+	scrollCmd.Flags().StringVar(&point, "at", "", "a point X,Y in window pixels, instead of NAME")
 	scrollCmd.Flags().IntVar(&lines, "lines", 3, "wheel steps, down; negative scrolls up")
 
 	typeCmd := &cobra.Command{
@@ -211,10 +232,15 @@ func main() {
 			if err != nil {
 				return err
 			}
-			if _, err := s.tree(0); err != nil { // a frame drawn since the last action
-				return err
+			// Two frames: the window hands a frame to the GPU after the
+			// tree is read from it, so the frame after it starts only
+			// once the first is on its way to the screen.
+			for range 2 {
+				if _, err := s.tree(0); err != nil {
+					return err
+				}
 			}
-			d, err := openDisplay(s.Display, 0)
+			d, err := s.openDisplay(0)
 			if err != nil {
 				return err
 			}
@@ -260,7 +286,8 @@ func main() {
 				if err != nil {
 					return err
 				}
-				found := t.Find(args[0])
+				window := image.Rectangle{Max: t.Size}
+				found := t.FindFunc(args[0], func(n uidebug.Node) bool { return n.Visible.Overlaps(window) })
 				if len(found) > 0 != gone {
 					if !gone {
 						fmt.Println(describe(found[0]))
@@ -311,13 +338,20 @@ func main() {
 
 // act finds the element target names, or the point target gives as
 // X,Y in window pixels, and does do at its center.
-func act(name, target, class string, nth int, do func(*display, image.Point) error) error {
+func act(name string, args []string, point, class string, nth int, do func(*display, image.Point) error) error {
+	at, err := target(args, point, class)
+	if err != nil {
+		return err
+	}
 	s, err := loadSession(name)
 	if err != nil {
 		return err
 	}
-	var at image.Point
-	if _, err := fmt.Sscanf(target, "%d,%d", &at.X, &at.Y); err != nil || strings.Count(target, ",") != 1 {
+	if point == "" {
+		target := ""
+		if len(args) == 1 {
+			target = args[0]
+		}
 		t, err := s.tree(0)
 		if err != nil {
 			return err
@@ -326,9 +360,18 @@ func act(name, target, class string, nth int, do func(*display, image.Point) err
 		if err != nil {
 			return err
 		}
-		at = n.Bounds.Min.Add(n.Bounds.Max).Div(2)
+		switch {
+		case n.Covered:
+			return fmt.Errorf("%s is under a dialog or popover; close it first", describe(n))
+		case n.Visible.Empty():
+			return fmt.Errorf("%s is scrolled out of view; scroll it into view", describe(n))
+		}
+		at = aim(n)
+		if !at.In(image.Rectangle{Max: t.Size}) {
+			return fmt.Errorf("%s is outside the %dx%d window; scroll it into view", describe(n), t.Size.X, t.Size.Y)
+		}
 	}
-	d, err := openDisplay(s.Display, 0)
+	d, err := s.openDisplay(0)
 	if err != nil {
 		return err
 	}
@@ -340,15 +383,64 @@ func act(name, target, class string, nth int, do func(*display, image.Point) err
 	return nil
 }
 
+// target checks that a command names one target: an element by NAME,
+// or a class with an empty NAME, or a point with --at, which it reads.
+func target(args []string, point, class string) (image.Point, error) {
+	switch {
+	case point != "" && (len(args) > 0 || class != ""):
+		return image.Point{}, errors.New("--at takes the place of NAME and --class")
+	case point != "":
+		at, ok := parsePoint(point)
+		if !ok {
+			return image.Point{}, fmt.Errorf("--at %q: want X,Y, two integers", point)
+		}
+		return at, nil
+	case len(args) == 0:
+		return image.Point{}, errors.New("give NAME, or --at X,Y")
+	}
+	return image.Point{}, nil
+}
+
+// parsePoint reads target as a point, X,Y, in window pixels.
+func parsePoint(target string) (image.Point, bool) {
+	xs, ys, ok := strings.Cut(target, ",")
+	if !ok {
+		return image.Point{}, false
+	}
+	// X coordinates are 16-bit.
+	x, errX := strconv.ParseInt(strings.TrimSpace(xs), 10, 16)
+	y, errY := strconv.ParseInt(strings.TrimSpace(ys), 10, 16)
+	return image.Pt(int(x), int(y)), errX == nil && errY == nil
+}
+
+// aim is where to act on n, within the part of it that shows: an
+// element's center, or a point just inside where text starts, since
+// text's bounds are the room it was laid out in, which can reach far
+// past it. A click there lands on whatever is drawn over the text's
+// start, such as the list row it is part of.
+func aim(n uidebug.Node) image.Point {
+	v := n.Visible
+	if n.Class != "" {
+		return v.Min.Add(v.Max).Div(2)
+	}
+	return image.Pt(min(v.Min.X+4, v.Max.X-1), min(v.Min.Y+4, v.Max.Y-1))
+}
+
 // pick is the element query names, of class if it is set: the nth if
 // nth is set, and otherwise the one best match, as Tree.Find ranks
 // them. An empty query with a class picks among all of that class, top
 // to bottom.
 func pick(t uidebug.Tree, query, class string, nth int) (uidebug.Node, error) {
+	// The class narrows the nodes matched, so an exact match of another
+	// class does not hide one by substring of this class.
+	var keep func(uidebug.Node) bool
+	if class != "" {
+		keep = func(n uidebug.Node) bool { return strings.EqualFold(n.Class, class) }
+	}
 	var found []uidebug.Node
 	if query == "" && class != "" {
 		for _, n := range t.Nodes {
-			if !n.Bounds.Empty() {
+			if !n.Bounds.Empty() && keep(n) {
 				found = append(found, n)
 			}
 		}
@@ -356,10 +448,7 @@ func pick(t uidebug.Tree, query, class string, nth int) (uidebug.Node, error) {
 			return cmp.Or(cmp.Compare(a.Bounds.Min.Y, b.Bounds.Min.Y), cmp.Compare(a.Bounds.Min.X, b.Bounds.Min.X))
 		})
 	} else {
-		found = t.Find(query)
-	}
-	if class != "" {
-		found = slices.DeleteFunc(found, func(n uidebug.Node) bool { return !strings.EqualFold(n.Class, class) })
+		found = t.FindFunc(query, keep)
 	}
 	switch {
 	case len(found) == 0 && class != "":
@@ -387,7 +476,7 @@ func keys(name string, combos []combo) error {
 	if err != nil {
 		return err
 	}
-	d, err := openDisplay(s.Display, 0)
+	d, err := s.openDisplay(0)
 	if err != nil {
 		return err
 	}
@@ -421,7 +510,15 @@ func describe(n uidebug.Node) string {
 	}
 	// Text's bounds are the room it was laid out in, which can be far
 	// larger than the text, so only its position means much.
-	r := n.Bounds
+	r := n.Visible
+	switch {
+	case n.Covered:
+		r = n.Bounds
+		b.WriteString(" covered")
+	case r.Empty():
+		r = n.Bounds
+		b.WriteString(" out of view")
+	}
 	fmt.Fprintf(&b, " at %d,%d", r.Min.X, r.Min.Y)
 	if n.Clickable || n.Class != "" {
 		fmt.Fprintf(&b, " %dx%d", r.Dx(), r.Dy())
@@ -429,7 +526,7 @@ func describe(n uidebug.Node) string {
 	for _, f := range []struct {
 		on   bool
 		name string
-	}{{n.Clickable, "click"}, {n.Scrollable, "scroll"}, {n.Selected, "selected"}, {n.Disabled, "disabled"}} {
+	}{{n.Clickable, "click"}, {n.Selected, "selected"}, {n.Disabled, "disabled"}} {
 		if f.on {
 			b.WriteString(" " + f.name)
 		}

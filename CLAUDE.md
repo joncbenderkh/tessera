@@ -110,7 +110,11 @@ dialogs). Edit mode must be able to re-enable any disabled panel.
   tests use to check that a view fits a tile (`measure.go`). An
   element that takes input gives its semantics (class, label,
   description) in a `semanticArea` of its own, which keeps them
-  readable by `uidebug`'s router.
+  readable by `uidebug`'s router; a scrolling list or grid marks the
+  part that shows with `viewport`, to which `uidebug` cuts the
+  elements in it, and a dialog's or popover's backdrop calls
+  `modalLayer`, under which `uidebug` takes what was drawn before for
+  covered (markers named in `internal/uimark`).
   `internal/ui/theme`
   holds the design tokens (dark and light palettes, spacing, radius, and
   type scales) taken from `docs/design`.
@@ -157,12 +161,15 @@ Use the local toolchain: `export PATH=/usr/local/go/bin:$PATH`.
   --plugins <dir> --config <file>` runs the host on a private Xvfb
   display with a copy of the config. Then `uidrive tree` lists the
   elements; `click NAME` (a label or description, as `tree` shows;
-  `--nth` picks among several, `--class Editor` keeps one class,
-  and with it `""` names all of it), `hover`, `scroll`, `type TEXT`, and
+  `--nth` picks among several, `--class Button` keeps one class,
+  and with it `""` names all of it; `--at X,Y` gives a point instead;
+  elements under a dialog or popover, or scrolled out of view, are
+  refused), `hover`, `scroll`, `type TEXT`, and
   `key Return|Escape|ctrl+a…` act on them; `wait NAME [--gone]`
   waits; `shot` saves a PNG; `config` and `log` print the session's
   config file and host log; `stop` ends it. Sessions live in
-  `$XDG_RUNTIME_DIR/tessera-uidrive/<name>` (`--session`). It needs
+  `$XDG_RUNTIME_DIR/tessera-uidrive/<name>` (`--session`), or without it
+  `$TMPDIR/tessera-uidrive-<uid>/<name>`, which must be yours, mode 0700. It needs
   `Xvfb` (Fedora: `xorg-x11-server-Xvfb`).
 - Build the host alone: `go build ./cmd/tessera`; `./tessera --version`.
 - Test: `go test ./...`

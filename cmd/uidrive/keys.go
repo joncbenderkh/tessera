@@ -5,6 +5,7 @@ package main
 import (
 	"fmt"
 	"strings"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/jezek/xgb"
@@ -66,6 +67,11 @@ func parseCombo(s string) (combo, error) {
 		return combo{}, fmt.Errorf("%q: unknown key %q", s, key)
 	}
 	r, _ := utf8.DecodeRuneInString(key)
+	if len(c.mods) > 0 {
+		// As shortcuts are written: ctrl+A is Ctrl and the A key, not
+		// Ctrl, Shift, and A; shift+ctrl+a asks for Shift.
+		r = unicode.ToLower(r)
+	}
 	sym, ok := runeKeysym(r)
 	if !ok {
 		return combo{}, fmt.Errorf("%q: cannot type %q", s, r)

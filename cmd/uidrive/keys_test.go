@@ -17,6 +17,8 @@ func TestParseCombo(t *testing.T) {
 	}{
 		{"Return", nil, 0xff0d},
 		{"ctrl+a", []xproto.Keysym{keyControl}, 'a'},
+		{"ctrl+A", []xproto.Keysym{keyControl}, 'a'},
+		{"A", nil, 'A'},
 		{"Ctrl+Shift+Tab", []xproto.Keysym{keyControl, keyShift}, 0xff09},
 		{"ctrl++", []xproto.Keysym{keyControl}, '+'},
 		{"+", nil, '+'},
