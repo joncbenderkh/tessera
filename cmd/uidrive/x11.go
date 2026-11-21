@@ -8,6 +8,7 @@ import (
 	"image"
 	"io"
 	"log"
+	"os"
 	"time"
 
 	"github.com/jezek/xgb"
@@ -28,10 +29,11 @@ type display struct {
 // openDisplay connects to the X display name and finds the host's
 // window, waiting up to wait for it to appear.
 func openDisplay(name string, wait time.Duration) (*display, error) {
-	xgb.Logger = log.New(io.Discard, "", 0) // it warns of a missing Xauthority, which Xvfb needs none of
+	// It logs to stderr on its own; a refused connection's error says why.
+	xgb.Logger = log.New(io.Discard, "", 0)
 	conn, err := xgb.NewConnDisplay(name)
 	if err != nil {
-		return nil, fmt.Errorf("display %s: %w", name, err)
+		return nil, fmt.Errorf("display %s (cookie from XAUTHORITY=%q): %w", name, os.Getenv("XAUTHORITY"), err)
 	}
 	if err := xtest.Init(conn); err != nil {
 		conn.Close()
