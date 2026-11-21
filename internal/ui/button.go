@@ -85,13 +85,17 @@ func (b *Button) Layout(gtx layout.Context, th *theme.Theme, label string) layou
 			width = height
 		}
 		bounds := image.Rectangle{Max: image.Pt(width, height)}
-		semantic.Button.Add(gtx.Ops)
-		if b.Toggle {
-			semantic.SelectedOp(b.Pressed).Add(gtx.Ops)
-		}
-		if b.Description != "" {
-			semantic.DescriptionOp(b.Description).Add(gtx.Ops)
-		}
+		semanticArea(gtx, bounds, func() {
+			semantic.Button.Add(gtx.Ops)
+			semantic.EnabledOp(gtx.Enabled()).Add(gtx.Ops)
+			semantic.LabelOp(label).Add(gtx.Ops)
+			if b.Toggle {
+				semantic.SelectedOp(b.Pressed).Add(gtx.Ops)
+			}
+			if b.Description != "" {
+				semantic.DescriptionOp(b.Description).Add(gtx.Ops)
+			}
+		})
 		rr := gtx.Dp(theme.RadiusSmall)
 		paint.FillShape(gtx.Ops, bg, clip.UniformRRect(bounds, rr).Op(gtx.Ops))
 		at := bounds.Max.Sub(text.dims.Size).Div(2)

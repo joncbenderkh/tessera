@@ -351,6 +351,7 @@ func (p *popover) layout(gtx layout.Context, th *theme.Theme, labels []string) {
 	backdrop := clip.Rect(far).Push(gtx.Ops)
 	p.outside.Add(gtx.Ops)
 	backdrop.Pop()
+	modalLayer(gtx, far)
 
 	if p.focus && len(p.items) > 0 {
 		gtx.Execute(key.FocusCmd{Tag: &p.items[0].Clickable})
@@ -398,6 +399,7 @@ func (p *popover) layout(gtx layout.Context, th *theme.Theme, labels []string) {
 	lgtx := gtx
 	lgtx.Constraints = layout.Constraints{Min: image.Pt(widest, 0), Max: image.Pt(widest, max(box.Dy()-2*pad, 0))}
 	p.list.Axis = layout.Vertical
+	defer viewport(gtx, image.Rectangle{Max: lgtx.Constraints.Max})()
 	p.list.Layout(lgtx, len(p.items), func(gtx layout.Context, i int) layout.Dimensions {
 		gtx.Constraints.Min.X = widest
 		return p.items[i].Layout(gtx, th, labels[i])

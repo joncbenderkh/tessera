@@ -330,6 +330,7 @@ func (g *Grid) Layout(gtx layout.Context, th *theme.Theme, cfg config.Config, st
 	g.follow = ""
 	defer clip.Rect{Max: area}.Push(gtx.Ops).Pop()
 	g.scroll.Add(gtx.Ops)
+	defer viewport(gtx, image.Rectangle{Max: area})()
 
 	byID := make(map[string]pluginhost.PanelState, len(states))
 	for _, s := range states {

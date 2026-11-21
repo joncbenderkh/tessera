@@ -22,6 +22,7 @@ import (
 	"github.com/joncbenderkh/tessera/internal/pluginhost"
 	"github.com/joncbenderkh/tessera/internal/ui"
 	"github.com/joncbenderkh/tessera/internal/ui/theme"
+	"github.com/joncbenderkh/tessera/internal/uidebug"
 	tesserav1 "github.com/joncbenderkh/tessera/proto/tessera/v1"
 )
 
@@ -116,7 +117,7 @@ func minWindowHeight(gtx layout.Context, px int) unit.Dp {
 // and the toast and dialog over them. Each reload replaces cfg; one that
 // failed keeps the last good one. Edit mode lists the plugins in
 // pluginDir, and layouts saves its changes.
-func run(window *app.Window, plugins *pluginhost.Manager, pluginDir string, cfg config.Config, reloads <-chan reload, saver *themeSaver, layouts *layoutSaver) error {
+func run(window *app.Window, plugins *pluginhost.Manager, pluginDir string, cfg config.Config, reloads <-chan reload, saver *themeSaver, layouts *layoutSaver, debug *uidebug.Server) error {
 	go func() {
 		for range plugins.Changed() {
 			window.Invalidate()
@@ -271,6 +272,7 @@ func run(window *app.Window, plugins *pluginhost.Manager, pluginDir string, cfg 
 			toast.Layout(gtx, th)
 			dialog.Layout(gtx, th)
 			op.Defer(gtx.Ops, over.Stop())
+			debug.Frame(gtx.Ops, e.Size)
 			e.Frame(gtx.Ops)
 		}
 	}

@@ -392,7 +392,9 @@ func (t *tile) layoutHead(gtx layout.Context, th *theme.Theme, s pluginhost.Pane
 		cursor.Add(gtx.Ops)
 		t.move.Add(gtx.Ops)
 		event.Op(gtx.Ops, &t.grip)
-		semantic.DescriptionOp("Move " + title(s) + ": arrow keys move it, Shift and arrow keys resize it").Add(gtx.Ops)
+		semanticArea(gtx, image.Rectangle{Max: t.headSize}, func() {
+			semantic.DescriptionOp("Move " + title(s) + ": arrow keys move it, Shift and arrow keys resize it").Add(gtx.Ops)
+		})
 	}
 	area.Pop()
 	hovered := t.head.Update(gtx.Source)
@@ -473,6 +475,7 @@ func (t *tile) menuPopover(gtx layout.Context, th *theme.Theme, narrow bool) {
 	backdrop := clip.Rect(far).Push(gtx.Ops)
 	t.outside.Add(gtx.Ops)
 	backdrop.Pop()
+	modalLayer(gtx, far)
 
 	if t.focus {
 		t.focus = false

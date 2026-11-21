@@ -107,10 +107,13 @@ func (v *viewState) actionable(gtx layout.Context, th *theme.Theme, id, text str
 	}
 	focused := gtx.Focused(c)
 	dims := c.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-		semantic.Button.Add(gtx.Ops)
-		semantic.LabelOp(cut(text, maxText)).Add(gtx.Ops)
-		semantic.SelectedOp(v.selected == id).Add(gtx.Ops)
-		return draw(gtx, c.Hovered() || focused || v.selected == id)
+		dims := draw(gtx, c.Hovered() || focused || v.selected == id)
+		semanticArea(gtx, image.Rectangle{Max: dims.Size}, func() {
+			semantic.Button.Add(gtx.Ops)
+			semantic.LabelOp(cut(text, maxText)).Add(gtx.Ops)
+			semantic.SelectedOp(v.selected == id).Add(gtx.Ops)
+		})
+		return dims
 	})
 	if focused {
 		ring := gtx.Dp(2)
@@ -216,13 +219,13 @@ func (v *viewState) table(gtx layout.Context, th *theme.Theme, w *tesserav1.Widg
 	l := v.scrollList(w)
 	lgtx := gtx
 	lgtx.Constraints = layout.Constraints{Max: image.Pt(width, max(gtx.Constraints.Max.Y-headH, 0))}
-	st := clip.Rect{Min: image.Pt(0, headH), Max: image.Pt(width, gtx.Constraints.Max.Y)}.Push(gtx.Ops)
+	pop := viewport(gtx, image.Rectangle{Min: image.Pt(0, headH), Max: image.Pt(width, gtx.Constraints.Max.Y)})
 	off := op.Offset(image.Pt(0, headH)).Push(gtx.Ops)
 	dims := l.Layout(lgtx, len(rows), func(gtx layout.Context, i int) layout.Dimensions {
 		return v.tableRow(gtx, th, rows[i], cols, bounds)
 	})
 	off.Pop()
-	st.Pop()
+	pop()
 	v.scrolled(w, l, dims)
 	return layout.Dimensions{Size: image.Pt(width, headH+dims.Size.Y)}
 }
@@ -332,9 +335,11 @@ func (v *viewState) list(gtx layout.Context, th *theme.Theme, w *tesserav1.Widge
 	l := v.scrollList(w)
 	lgtx := gtx
 	lgtx.Constraints = layout.Constraints{Max: gtx.Constraints.Max}
+	pop := viewport(gtx, image.Rectangle{Max: lgtx.Constraints.Max})
 	dims := l.Layout(lgtx, len(items), func(gtx layout.Context, i int) layout.Dimensions {
 		return v.listItem(gtx, th, items[i], width)
 	})
+	pop()
 	v.scrolled(w, l, dims)
 	return layout.Dimensions{Size: image.Pt(width, dims.Size.Y)}
 }
