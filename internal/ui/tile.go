@@ -475,6 +475,7 @@ func (t *tile) menuPopover(gtx layout.Context, th *theme.Theme, narrow bool) {
 	backdrop := clip.Rect(far).Push(gtx.Ops)
 	t.outside.Add(gtx.Ops)
 	backdrop.Pop()
+	modalLayer(gtx, far)
 
 	if t.focus {
 		t.focus = false

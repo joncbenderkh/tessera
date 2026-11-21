@@ -5,8 +5,11 @@ package ui
 import (
 	"image"
 
+	"gioui.org/io/semantic"
 	"gioui.org/layout"
 	"gioui.org/op/clip"
+
+	"github.com/joncbenderkh/tessera/internal/uimark"
 )
 
 // semanticArea adds an element's semantics, which add gives, in an area
@@ -17,4 +20,19 @@ import (
 func semanticArea(gtx layout.Context, bounds image.Rectangle, add func()) {
 	defer clip.Rect(bounds).Push(gtx.Ops).Pop()
 	add()
+}
+
+// viewport clips what is drawn until pop is called to bounds, the part
+// of a scrolling list or grid that shows, in an area marked as a
+// viewport, to whose bounds uidebug cuts those of the elements in it.
+func viewport(gtx layout.Context, bounds image.Rectangle) (pop func()) {
+	area := clip.Rect(bounds).Push(gtx.Ops)
+	semantic.DescriptionOp(uimark.Viewport).Add(gtx.Ops)
+	return area.Pop
+}
+
+// modalLayer marks a dialog's or popover's backdrop, bounds large, after
+// which uidebug takes what was drawn before for covered.
+func modalLayer(gtx layout.Context, bounds image.Rectangle) {
+	semanticArea(gtx, bounds, func() { semantic.DescriptionOp(uimark.Modal).Add(gtx.Ops) })
 }
