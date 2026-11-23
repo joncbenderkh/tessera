@@ -3,11 +3,13 @@
 package main
 
 import (
+	"errors"
 	"image"
 	"net"
 	"net/http"
 	"os"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -218,6 +220,9 @@ func TestTarget(t *testing.T) {
 	if at, err := target(nil, "120,40", ""); err != nil || at != image.Pt(120, 40) {
 		t.Errorf("target(--at 120,40) = %v, %v", at, err)
 	}
+	if _, err := target(nil, "", "Button"); err != nil {
+		t.Errorf("--class without NAME is refused: %v", err)
+	}
 	if _, err := target([]string{"12,5"}, "", ""); err != nil {
 		t.Errorf("a name like 12,5 is refused: %v", err)
 	}
@@ -225,10 +230,208 @@ func TestTarget(t *testing.T) {
 		args         []string
 		point, class string
 	}{
-		{nil, "", ""}, {[]string{"Save"}, "1,2", ""}, {nil, "1,2", "Button"}, {nil, "a,b", ""},
+		{nil, "", ""}, {[]string{""}, "", ""}, {[]string{" "}, "", ""}, {[]string{"Save"}, "1,2", ""}, {nil, "1,2", "Button"}, {nil, "a,b", ""},
 	} {
 		if _, err := target(c.args, c.point, c.class); err == nil {
 			t.Errorf("target(%v, %q, %q) took it", c.args, c.point, c.class)
 		}
+	}
+}
+
+// Of two elements of one name, the one that shows is picked; one that
+// does not is picked only when nothing shown has the name.
+func TestPickPrefersShown(t *testing.T) {
+	tree := uidebug.Tree{Size: image.Pt(800, 600), Nodes: []uidebug.Node{
+		{ID: 2, Class: "Button", Clickable: true, Label: "Restart", Text: "Restart", Bounds: image.Rect(10, 900, 90, 932)},
+		{ID: 3, Class: "Button", Clickable: true, Label: "Restart", Text: "Restart", Bounds: image.Rect(10, 100, 90, 132), Visible: image.Rect(10, 100, 90, 132)},
+		{ID: 4, Class: "Button", Clickable: true, Label: "Close", Text: "Close", Bounds: image.Rect(10, 200, 90, 232), Covered: true},
+	}}
+	if n, err := pick(tree, "Restart", "", 0); err != nil || n.ID != 3 {
+		t.Errorf("pick(Restart) = %+v, %v; want the shown one", n, err)
+	}
+	if n, err := pick(tree, "Close", "", 0); err != nil || n.ID != 4 {
+		t.Errorf("pick(Close) = %+v, %v; want the covered one, to refuse it", n, err)
+	}
+}
+
+// An element of exactly the name beats one that shows and only holds
+// it, even hidden, to be refused with its reason; with none that shows,
+// the first is taken at once, and a class alone is worded as such.
+func TestPickExactBeatsShownSubstring(t *testing.T) {
+	tree := uidebug.Tree{Size: image.Pt(800, 600), Nodes: []uidebug.Node{
+		{ID: 2, Class: "Button", Clickable: true, Label: "Restart", Text: "Restart", Bounds: image.Rect(10, 900, 90, 932)},
+		{ID: 3, Class: "Button", Clickable: true, Label: "Restart all", Text: "Restart all", Bounds: image.Rect(10, 100, 90, 132), Visible: image.Rect(10, 100, 90, 132)},
+		{ID: 4, Class: "Button", Clickable: true, Label: "Close", Text: "Close", Bounds: image.Rect(10, 200, 90, 232), Covered: true},
+		{ID: 5, Class: "Button", Clickable: true, Label: "Close", Text: "Close", Bounds: image.Rect(10, 300, 90, 332), Covered: true},
+	}}
+	if n, err := pick(tree, "Restart", "", 0); err != nil || n.ID != 2 {
+		t.Errorf("pick(Restart) = %+v, %v; want the hidden Restart, not Restart all", n, err)
+	}
+	if n, err := pick(tree, "Restart a", "", 0); err != nil || n.ID != 3 {
+		t.Errorf("pick(Restart a) = %+v, %v; want the shown Restart all", n, err)
+	}
+	if n, err := pick(tree, "Close", "", 0); err != nil || n.ID != 4 {
+		t.Errorf("pick(Close) = %+v, %v; want the first covered one, not an ambiguity", n, err)
+	}
+	if _, err := pick(tree, "", "Editor", 0); err == nil || strings.Contains(err.Error(), `""`) {
+		t.Errorf("pick(--class Editor) error %v, want one without an empty name", err)
+	}
+}
+
+// A stop that cannot end a process keeps the session's state, so that a
+// later stop can try again.
+func TestStopKeepsStateOfSurvivor(t *testing.T) {
+	kill = func(int, syscall.Signal) error { return syscall.EPERM } // no real signal
+	defer func() { kill = syscall.Kill }()
+	self, err := started(os.Getpid())
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := session{Dir: t.TempDir(), Host: self}
+	if err := s.save(); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.stop(); err == nil {
+		t.Error("stop reported success with the host still running")
+	}
+	if _, err := os.Stat(s.Dir + "/state.json"); err != nil {
+		t.Errorf("state.json is gone: %v", err)
+	}
+}
+
+// Without a name or class there is nothing to pick by.
+func TestPickNeedsNameOrClass(t *testing.T) {
+	tree := uidebug.Tree{Size: image.Pt(800, 600), Nodes: []uidebug.Node{
+		{ID: 3, Class: "Button", Clickable: true, Label: "Delete all", Bounds: image.Rect(10, 10, 90, 42), Visible: image.Rect(10, 10, 90, 42)},
+	}}
+	for _, nth := range []int{0, 1} {
+		if n, err := pick(tree, "", "", nth); err == nil {
+			t.Errorf("pick(\"\", nth %d) = %+v", nth, n)
+		}
+	}
+}
+
+// The state file is replaced whole, leaving no temporary file behind.
+func TestSaveAtomic(t *testing.T) {
+	s := session{Dir: t.TempDir(), Display: ":9"}
+	if err := s.save(); err != nil {
+		t.Fatal(err)
+	}
+	entries, _ := os.ReadDir(s.Dir)
+	if len(entries) != 1 || entries[0].Name() != "state.json" {
+		t.Errorf("session directory holds %v, want state.json alone", entries)
+	}
+}
+
+// A blank NAME with a class picks among all of the class, as no NAME.
+func TestPickBlankNameWithClass(t *testing.T) {
+	tree := uidebug.Tree{Size: image.Pt(800, 600), Nodes: []uidebug.Node{
+		{ID: 3, Class: "Button", Clickable: true, Label: "Save", Bounds: image.Rect(10, 10, 90, 42), Visible: image.Rect(10, 10, 90, 42)},
+	}}
+	if n, err := pick(tree, " ", "Button", 0); err != nil || n.ID != 3 {
+		t.Errorf("pick(\" \", Button) = %+v, %v; want the button", n, err)
+	}
+}
+
+// start leaves a session whose state cannot be read.
+func TestStartKeepsUnreadableSession(t *testing.T) {
+	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
+	dir, err := sessionDir("default")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(dir+"/state.json", []byte("{"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(dir+"/config.yaml", []byte("keep"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := startSession("default", startOptions{host: "/nonexistent", size: image.Pt(10, 10)}); err == nil {
+		t.Error("start took over a session whose state cannot be read")
+	}
+	if b, _ := os.ReadFile(dir + "/config.yaml"); string(b) != "keep" {
+		t.Errorf("config.yaml = %q, want it untouched", b)
+	}
+}
+
+// A process that is gone by the time stop signals it is stopped, not a
+// failure.
+func TestStopProcessAlreadyGone(t *testing.T) {
+	self, err := started(os.Getpid())
+	if err != nil {
+		t.Fatal(err)
+	}
+	gone := false
+	kill = func(int, syscall.Signal) error { gone = true; return syscall.ESRCH }
+	defer func() { kill = syscall.Kill }()
+	// alive keeps reporting this process, so stop waits; the kill's
+	// ESRCH alone must not be its error.
+	s := session{Dir: t.TempDir(), Host: self}
+	if err := s.save(); err != nil {
+		t.Fatal(err)
+	}
+	err = s.stop()
+	if !gone || err == nil || errors.Is(err, syscall.ESRCH) {
+		t.Errorf("stop = %v, want only the survivor error, not ESRCH", err)
+	}
+}
+
+func TestWaitNeedsName(t *testing.T) {
+	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
+	cmd := newRoot()
+	cmd.SetArgs([]string{"wait", " ", "--gone"})
+	if err := cmd.Execute(); err == nil || !strings.Contains(err.Error(), "give NAME") {
+		t.Errorf("wait \" \" --gone = %v, want give NAME", err)
+	}
+}
+
+// A hidden element named exactly by labels across its children, which
+// do not show, still beats a shown element that holds the name.
+func TestPickHiddenExactAcrossLabels(t *testing.T) {
+	tree := uidebug.Tree{Size: image.Pt(800, 600), Nodes: []uidebug.Node{
+		{ID: 2, Parent: 1, Bounds: image.Rect(0, 0, 400, 100), Visible: image.Rect(0, 0, 400, 100)}, // a viewport
+		{ID: 3, Parent: 2, AllText: "World clock", Bounds: image.Rect(0, 200, 400, 230)},
+		{ID: 4, Parent: 3, Label: "World", Text: "World", AllText: "World", Bounds: image.Rect(0, 200, 100, 230)},
+		{ID: 5, Parent: 3, Label: "clock", Text: "clock", AllText: "clock", Bounds: image.Rect(100, 200, 200, 230)},
+		{ID: 6, Parent: 1, Class: "Button", Clickable: true, Label: "World clock options", Text: "World clock options", AllText: "World clock options", Bounds: image.Rect(0, 300, 100, 330), Visible: image.Rect(0, 300, 100, 330)},
+	}}
+	if n, err := pick(tree, "World clock", "", 0); err != nil || n.ID != 3 {
+		t.Errorf("pick(World clock) = %+v, %v; want the hidden row", n, err)
+	}
+}
+
+func TestPickNegativeNth(t *testing.T) {
+	tree := uidebug.Tree{Size: image.Pt(800, 600), Nodes: []uidebug.Node{
+		{ID: 3, Class: "Button", Clickable: true, Label: "Save", Bounds: image.Rect(10, 10, 90, 42), Visible: image.Rect(10, 10, 90, 42)},
+	}}
+	if _, err := pick(tree, "Save", "", -1); err == nil {
+		t.Error("pick took --nth -1")
+	}
+}
+
+// A stop after a start that wrote no state is not a failure.
+func TestStopWithoutStateFile(t *testing.T) {
+	if err := (session{Dir: t.TempDir()}).stop(); err != nil {
+		t.Errorf("stop = %v", err)
+	}
+}
+
+// An element that shows is named by what shows of it alone: a row whose
+// "clock" is clipped is not "World clock", and a word scrolled out of a
+// row that shows does not name it.
+func TestPickShownByWhatShows(t *testing.T) {
+	tree := uidebug.Tree{Size: image.Pt(800, 600), Nodes: []uidebug.Node{
+		{ID: 3, Parent: 2, AllText: "World clock", Bounds: image.Rect(0, 20, 400, 50)},
+		{ID: 6, Parent: 2, Text: "World", AllText: "World clock", Bounds: image.Rect(0, 80, 400, 110), Visible: image.Rect(0, 80, 400, 100)},
+		{ID: 7, Parent: 2, Class: "Button", Clickable: true, Label: "", Text: "Open", AllText: "Open Secret", Bounds: image.Rect(0, 120, 400, 150), Visible: image.Rect(0, 120, 400, 150)},
+	}}
+	if n, err := pick(tree, "World clock", "", 0); err != nil || n.ID != 3 {
+		t.Errorf("pick(World clock) = %+v, %v; want the hidden row, to be refused", n, err)
+	}
+	if n, err := pick(tree, "Secret", "Button", 0); err == nil {
+		t.Errorf("pick(Secret, Button) = %+v; want nothing, Secret does not show", n)
 	}
 }

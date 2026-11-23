@@ -162,7 +162,7 @@ Use the local toolchain: `export PATH=/usr/local/go/bin:$PATH`.
   display with a copy of the config. Then `uidrive tree` lists the
   elements; `click NAME` (a label or description, as `tree` shows;
   `--nth` picks among several, `--class Button` keeps one class,
-  and with it `""` names all of it; `--at X,Y` gives a point instead;
+  and alone picks among all of it; `--at X,Y` gives a point instead;
   elements under a dialog or popover, or scrolled out of view, are
   refused), `hover`, `scroll`, `type TEXT`, and
   `key Return|Escape|ctrl+a…` act on them; `wait NAME [--gone]`

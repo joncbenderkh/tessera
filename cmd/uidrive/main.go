@@ -16,6 +16,7 @@ package main
 
 import (
 	"cmp"
+	"context"
 	"errors"
 	"fmt"
 	"image"
@@ -38,6 +39,14 @@ import (
 const settle = 250 * time.Millisecond
 
 func main() {
+	if err := newRoot().Execute(); err != nil {
+		fmt.Fprintln(os.Stderr, "uidrive:", err)
+		os.Exit(1)
+	}
+}
+
+// newRoot is uidrive's command line.
+func newRoot() *cobra.Command {
 	var name string
 	root := &cobra.Command{
 		Use:           "uidrive",
@@ -88,12 +97,18 @@ func main() {
 			}
 			defer unlock()
 			s, err := loadSession(name)
+			_, statErr := os.Stat(filepath.Join(dir, "state.json"))
 			switch {
 			case s.Dir != "":
 				if err := s.stop(); err != nil {
 					return err
 				}
-			case !clean:
+			case !clean || !errors.Is(statErr, os.ErrNotExist):
+				// A state file that cannot be read may still name
+				// running processes: its files stay.
+				if statErr == nil {
+					return fmt.Errorf("session %q: %w; stop its processes and remove %s", name, err, dir)
+				}
 				return err
 			}
 			// Stopped before, or a failed start: only files are left.
@@ -152,7 +167,7 @@ func main() {
 		},
 	}
 	clickCmd.Flags().IntVar(&nth, "nth", 0, "of several elements that NAME names, the nth, from 1")
-	clickCmd.Flags().StringVar(&class, "class", "", "only elements of this class, such as Button or Editor; with it, NAME may be empty for all of them")
+	clickCmd.Flags().StringVar(&class, "class", "", "only elements of this class, such as Button or Editor; with it, NAME may be left out for all of them")
 	clickCmd.Flags().StringVar(&point, "at", "", "a point X,Y in window pixels, instead of NAME")
 	clickCmd.Flags().IntVar(&count, "count", 1, "clicks: 2 for a double click")
 	clickCmd.Flags().BoolVar(&right, "right", false, "click the right button")
@@ -166,7 +181,7 @@ func main() {
 		},
 	}
 	hoverCmd.Flags().IntVar(&nth, "nth", 0, "of several elements that NAME names, the nth, from 1")
-	hoverCmd.Flags().StringVar(&class, "class", "", "only elements of this class, such as Button or Editor; with it, NAME may be empty for all of them")
+	hoverCmd.Flags().StringVar(&class, "class", "", "only elements of this class, such as Button or Editor; with it, NAME may be left out for all of them")
 	hoverCmd.Flags().StringVar(&point, "at", "", "a point X,Y in window pixels, instead of NAME")
 
 	var lines int
@@ -188,7 +203,7 @@ func main() {
 		},
 	}
 	scrollCmd.Flags().IntVar(&nth, "nth", 0, "of several elements that NAME names, the nth, from 1")
-	scrollCmd.Flags().StringVar(&class, "class", "", "only elements of this class, such as Button or Editor; with it, NAME may be empty for all of them")
+	scrollCmd.Flags().StringVar(&class, "class", "", "only elements of this class, such as Button or Editor; with it, NAME may be left out for all of them")
 	scrollCmd.Flags().StringVar(&point, "at", "", "a point X,Y in window pixels, instead of NAME")
 	scrollCmd.Flags().IntVar(&lines, "lines", 3, "wheel steps, down; negative scrolls up")
 
@@ -276,15 +291,30 @@ func main() {
 		Short: "Wait until an element NAME names appears, or with --gone, until none does",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(_ *cobra.Command, args []string) error {
+			if strings.TrimSpace(args[0]) == "" {
+				return errors.New("give NAME")
+			}
+			if timeout <= 0 {
+				return fmt.Errorf("--timeout %v: want more than 0", timeout)
+			}
 			s, err := loadSession(name)
 			if err != nil {
 				return err
 			}
 			deadline := time.Now().Add(timeout)
+			ctx, cancel := context.WithDeadline(context.Background(), deadline)
+			defer cancel()
 			for {
-				t, err := s.tree(0)
+				t, err := s.treeBy(ctx, 0)
 				if err != nil {
-					return err
+					if ctx.Err() == nil {
+						return err
+					}
+					// The time ran out during a request.
+					if gone {
+						return fmt.Errorf("%q not known to be gone after %v", args[0], timeout)
+					}
+					return fmt.Errorf("nothing named %q after %v", args[0], timeout)
 				}
 				window := image.Rectangle{Max: t.Size}
 				found := t.FindFunc(args[0], func(n uidebug.Node) bool { return n.Visible.Overlaps(window) })
@@ -300,7 +330,7 @@ func main() {
 					}
 					return fmt.Errorf("nothing named %q after %v", args[0], timeout)
 				}
-				time.Sleep(100 * time.Millisecond)
+				time.Sleep(min(100*time.Millisecond, time.Until(deadline)))
 			}
 		},
 	}
@@ -313,11 +343,16 @@ func main() {
 			Short: short,
 			Args:  cobra.NoArgs,
 			RunE: func(*cobra.Command, []string) error {
-				s, err := loadSession(name)
-				if s.Dir == "" {
+				// The files outlast the session, as after stop or a failed
+				// start, when they are most wanted.
+				dir, err := sessionDir(name)
+				if err != nil {
 					return err
 				}
-				b, err := os.ReadFile(path(s))
+				if _, err := os.Stat(dir); errors.Is(err, os.ErrNotExist) {
+					return fmt.Errorf("no session %q", name)
+				}
+				b, err := os.ReadFile(path(session{Dir: dir}))
 				if err != nil {
 					return err
 				}
@@ -330,14 +365,11 @@ func main() {
 	root.AddCommand(startCmd, stopCmd, treeCmd, clickCmd, hoverCmd, scrollCmd, typeCmd, keyCmd, shotCmd, waitCmd,
 		fileCmd("config", "Print the session's config file, as the host has saved it", session.configPath),
 		fileCmd("log", "Print the host's log", session.hostLog))
-	if err := root.Execute(); err != nil {
-		fmt.Fprintln(os.Stderr, "uidrive:", err)
-		os.Exit(1)
-	}
+	return root
 }
 
-// act finds the element target names, or the point target gives as
-// X,Y in window pixels, and does do at its center.
+// act finds the element args name, or the point --at gives, and does
+// do there.
 func act(name string, args []string, point, class string, nth int, do func(*display, image.Point) error) error {
 	at, err := target(args, point, class)
 	if err != nil {
@@ -363,13 +395,12 @@ func act(name string, args []string, point, class string, nth int, do func(*disp
 		switch {
 		case n.Covered:
 			return fmt.Errorf("%s is under a dialog or popover; close it first", describe(n))
+		case n.Visible.Empty() && !n.Bounds.Overlaps(image.Rectangle{Max: t.Size}):
+			return fmt.Errorf("%s is outside the %dx%d window; scroll it into view or use a larger --size", describe(n), t.Size.X, t.Size.Y)
 		case n.Visible.Empty():
 			return fmt.Errorf("%s is scrolled out of view; scroll it into view", describe(n))
 		}
 		at = aim(n)
-		if !at.In(image.Rectangle{Max: t.Size}) {
-			return fmt.Errorf("%s is outside the %dx%d window; scroll it into view", describe(n), t.Size.X, t.Size.Y)
-		}
 	}
 	d, err := s.openDisplay(0)
 	if err != nil {
@@ -384,7 +415,8 @@ func act(name string, args []string, point, class string, nth int, do func(*disp
 }
 
 // target checks that a command names one target: an element by NAME,
-// or a class with an empty NAME, or a point with --at, which it reads.
+// all of a class with --class and no NAME, or a point with --at, which
+// it reads.
 func target(args []string, point, class string) (image.Point, error) {
 	switch {
 	case point != "" && (len(args) > 0 || class != ""):
@@ -395,10 +427,27 @@ func target(args []string, point, class string) (image.Point, error) {
 			return image.Point{}, fmt.Errorf("--at %q: want X,Y, two integers", point)
 		}
 		return at, nil
-	case len(args) == 0:
-		return image.Point{}, errors.New("give NAME, or --at X,Y")
+	case class == "" && (len(args) == 0 || strings.TrimSpace(args[0]) == ""):
+		return image.Point{}, errors.New("give NAME, --class, or --at X,Y")
 	}
 	return image.Point{}, nil
+}
+
+// exactly reports whether a node's label, description, or text is
+// query, as Tree.Find compares them.
+func exactly(query string) func(uidebug.Node) bool {
+	q := strings.ToLower(strings.TrimSpace(query))
+	return func(n uidebug.Node) bool {
+		if q == "" {
+			return false
+		}
+		for _, v := range []string{n.Label, n.Description, n.Text} {
+			if strings.ToLower(strings.TrimSpace(v)) == q {
+				return true
+			}
+		}
+		return false
+	}
 }
 
 // parsePoint reads target as a point, X,Y, in window pixels.
@@ -433,12 +482,18 @@ func aim(n uidebug.Node) image.Point {
 func pick(t uidebug.Tree, query, class string, nth int) (uidebug.Node, error) {
 	// The class narrows the nodes matched, so an exact match of another
 	// class does not hide one by substring of this class.
-	var keep func(uidebug.Node) bool
-	if class != "" {
-		keep = func(n uidebug.Node) bool { return strings.EqualFold(n.Class, class) }
+	if strings.TrimSpace(query) == "" && class == "" {
+		return uidebug.Node{}, errors.New("no NAME or class to pick by")
 	}
-	var found []uidebug.Node
-	if query == "" && class != "" {
+	ofClass := func(n uidebug.Node) bool { return class == "" || strings.EqualFold(n.Class, class) }
+	if nth < 0 {
+		return uidebug.Node{}, fmt.Errorf("--nth %d: want 1 or more", nth)
+	}
+	candidates := func(t uidebug.Tree, keep func(uidebug.Node) bool) []uidebug.Node {
+		if strings.TrimSpace(query) != "" {
+			return t.FindFunc(query, keep)
+		}
+		var found []uidebug.Node
 		for _, n := range t.Nodes {
 			if !n.Bounds.Empty() && keep(n) {
 				found = append(found, n)
@@ -447,21 +502,52 @@ func pick(t uidebug.Tree, query, class string, nth int) (uidebug.Node, error) {
 		slices.SortStableFunc(found, func(a, b uidebug.Node) int {
 			return cmp.Or(cmp.Compare(a.Bounds.Min.Y, b.Bounds.Min.Y), cmp.Compare(a.Bounds.Min.X, b.Bounds.Min.X))
 		})
-	} else {
-		found = t.FindFunc(query, keep)
+		return found
+	}
+	// Matched among the elements that show first, exactly and then by
+	// substring; one covered or scrolled out of view is taken when none
+	// that shows is named, or only it is named exactly, so that act can
+	// say why it refuses it.
+	found := candidates(t, func(n uidebug.Node) bool { return ofClass(n) && !n.Covered && !n.Visible.Empty() })
+	shown := len(found) > 0
+	// An element of exactly that name beats ones that only hold it,
+	// even if it does not show: a near name is not clicked in its
+	// place, and act says why it cannot click the one named.
+	// Among all, a hidden element goes by its whole text, as none of
+	// it shows; one that shows goes by what shows of it, as in tree.
+	whole := uidebug.Tree{Size: t.Size, Nodes: slices.Clone(t.Nodes)}
+	for i, n := range whole.Nodes {
+		if n.AllText != "" && (n.Covered || n.Visible.Empty()) {
+			whole.Nodes[i].Text = n.AllText
+		}
+	}
+	if all := candidates(whole, ofClass); !shown || slices.ContainsFunc(all, exactly(query)) && !slices.ContainsFunc(found, exactly(query)) {
+		// Still, of these, the ones that show, if any, as above.
+		showing := slices.DeleteFunc(slices.Clone(all), func(n uidebug.Node) bool { return n.Covered || n.Visible.Empty() })
+		if len(showing) > 0 {
+			found, shown = showing, true
+		} else {
+			found, shown = all, false
+		}
+	}
+	named := fmt.Sprintf("named %q", query)
+	if strings.TrimSpace(query) == "" {
+		named = "of class " + class
 	}
 	switch {
-	case len(found) == 0 && class != "":
+	case len(found) == 0 && class != "" && strings.TrimSpace(query) != "":
 		return uidebug.Node{}, fmt.Errorf("no %s named %q; see uidrive tree", class, query)
 	case len(found) == 0:
-		return uidebug.Node{}, fmt.Errorf("nothing named %q; see uidrive tree", query)
+		return uidebug.Node{}, fmt.Errorf("nothing %s; see uidrive tree", named)
 	case nth > 0 && nth <= len(found):
 		return found[nth-1], nil
 	case nth > 0:
-		return uidebug.Node{}, fmt.Errorf("only %d elements named %q", len(found), query)
+		return uidebug.Node{}, fmt.Errorf("only %d elements %s", len(found), named)
+	case !shown:
+		return found[0], nil
 	case len(found) > 1 && found[0].Clickable == found[1].Clickable:
 		var b strings.Builder
-		fmt.Fprintf(&b, "%d elements named %q; pick one with --nth:", len(found), query)
+		fmt.Fprintf(&b, "%d elements %s; pick one with --nth:", len(found), named)
 		for i, n := range found {
 			fmt.Fprintf(&b, "\n  %d: %s", i+1, describe(n))
 		}
