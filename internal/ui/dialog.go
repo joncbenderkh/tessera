@@ -94,6 +94,7 @@ func (d *Dialog) Layout(gtx layout.Context, th *theme.Theme) layout.Dimensions {
 	backdrop := clip.Rect{Max: area}.Push(gtx.Ops)
 	d.backdrop.Add(gtx.Ops)
 	backdrop.Pop()
+	modalLayer(gtx, image.Rectangle{Max: area})
 
 	pad := gtx.Dp(theme.Space24)
 	width := min(gtx.Dp(560), area.X*9/10)
@@ -179,6 +180,7 @@ func (d *Dialog) body(gtx layout.Context, th *theme.Theme) layout.Dimensions {
 	inner.Constraints = layout.Constraints{Max: gtx.Constraints.Max.Sub(image.Pt(2*pad, 2*pad))}
 	inner.Constraints.Min.X = inner.Constraints.Max.X
 	list := record(inner, func(gtx layout.Context) layout.Dimensions {
+		defer viewport(gtx, image.Rectangle{Max: gtx.Constraints.Max})()
 		return d.list.Layout(gtx, len(d.lines), func(gtx layout.Context, i int) layout.Dimensions {
 			return material.LabelStyle{
 				Text: d.lines[i], TextSize: theme.TextMin, LineHeightScale: 1.8, Color: th.Fg,

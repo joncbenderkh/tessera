@@ -10,6 +10,7 @@ require (
 	github.com/goccy/go-yaml v1.19.2
 	github.com/hashicorp/go-hclog v1.6.3
 	github.com/hashicorp/go-plugin v1.8.0
+	github.com/jezek/xgb v1.1.1
 	github.com/shirou/gopsutil/v4 v4.26.8
 	github.com/spf13/cobra v1.10.2
 	github.com/teambition/rrule-go v1.8.2

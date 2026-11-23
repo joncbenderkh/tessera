@@ -21,10 +21,11 @@ import (
 	"github.com/joncbenderkh/tessera"
 	"github.com/joncbenderkh/tessera/internal/config"
 	"github.com/joncbenderkh/tessera/internal/pluginhost"
+	"github.com/joncbenderkh/tessera/internal/uidebug"
 )
 
 func main() {
-	var configPath, pluginsDir string
+	var configPath, pluginsDir, debugSocket string
 	cmd := &cobra.Command{
 		Use:          "tessera",
 		Short:        "A desktop dashboard whose every panel is a plugin",
@@ -32,19 +33,22 @@ func main() {
 		Args:         cobra.NoArgs,
 		SilenceUsage: true,
 		RunE: func(*cobra.Command, []string) error {
-			return start(configPath, pluginsDir)
+			return start(configPath, pluginsDir, debugSocket)
 		},
 	}
 	cmd.SetVersionTemplate("tessera {{.Version}}\n")
 	cmd.Flags().StringVar(&configPath, "config", "", "config file (default: tessera/config.yaml in the user config directory)")
 	cmd.Flags().StringVar(&pluginsDir, "plugins", pluginhost.DefaultDir(), "plugins directory")
+	// For cmd/uidrive, which drives the window in tests.
+	cmd.Flags().StringVar(&debugSocket, "debug-socket", "", "serve the window's semantic tree on this Unix socket")
+	_ = cmd.Flags().MarkHidden("debug-socket")
 	if cmd.Execute() != nil {
 		os.Exit(1)
 	}
 }
 
 // start runs the host, which exits from within.
-func start(configPath, pluginsDir string) error {
+func start(configPath, pluginsDir, debugSocket string) error {
 	if pluginsDir == "" {
 		// Abs would read it as the working directory.
 		return errors.New("--plugins is empty")
@@ -69,6 +73,13 @@ func start(configPath, pluginsDir string) error {
 	}
 	plugins := pluginhost.Start(cfg, pluginDir, log.Default())
 	window := new(app.Window)
+	var debug *uidebug.Server
+	if debugSocket != "" {
+		if debug, err = uidebug.Serve(context.Background(), debugSocket, window.Invalidate); err != nil {
+			plugins.Close()
+			return fmt.Errorf("--debug-socket: %w", err)
+		}
+	}
 	saver := &themeSaver{path: configPath, done: make(chan error, 1), invalidate: window.Invalidate}
 	layouts := &layoutSaver{path: configPath, done: make(chan error, 1), invalidate: window.Invalidate}
 	signals := make(chan os.Signal, 1)
@@ -109,7 +120,7 @@ func start(configPath, pluginsDir string) error {
 			}
 		}()
 		window.Option(app.Title("tessera"), app.Size(unit.Dp(1440), unit.Dp(900)), app.MinSize(minWidth, minHeight))
-		err := run(window, plugins, pluginDir, cfg, reloads, saver, layouts)
+		err := run(window, plugins, pluginDir, cfg, reloads, saver, layouts, debug)
 		plugins.Close()
 		if err != nil {
 			log.Fatal(err)
