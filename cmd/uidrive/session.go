@@ -152,8 +152,25 @@ func (s session) save() error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(filepath.Join(s.Dir, "state.json"), b, 0o600)
+	// Written whole or not at all: a state file cut short would leave
+	// running processes no command can find.
+	f, err := os.CreateTemp(s.Dir, ".state-*")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(f.Name()) // after the rename, there is none
+	if _, err := f.Write(b); err != nil {
+		f.Close()
+		return err
+	}
+	if err := f.Close(); err != nil {
+		return err
+	}
+	return os.Rename(f.Name(), filepath.Join(s.Dir, "state.json"))
 }
+
+// kill signals a process; tests replace it.
+var kill = syscall.Kill
 
 // alive reports whether p is still running: its id is in use, by the
 // process that started then, which has not exited.
@@ -220,7 +237,10 @@ func startSession(name string, o startOptions) (s session, err error) {
 	// Undone under the lock, so another start cannot slip in between.
 	defer func() {
 		if err != nil && s.Dir != "" {
-			s.stop()
+			if serr := s.stop(); serr != nil {
+				// What survives may be in no state file: name it.
+				err = fmt.Errorf("%w; stopping what it started: %v (host pid %d, Xvfb pid %d)", err, serr, s.Host.PID, s.X.PID)
+			}
 		}
 	}()
 	switch old, err := loadSession(name); {
@@ -231,15 +251,20 @@ func startSession(name string, o startOptions) (s session, err error) {
 		if err := old.stop(); err != nil {
 			return session{}, fmt.Errorf("stopping the last session %q: %w", name, err)
 		}
+	default:
+		// No state to go by: start only if there is none at all, since
+		// a state file that cannot be read may name running processes.
+		if _, serr := os.Stat(filepath.Join(dir, "state.json")); !errors.Is(serr, os.ErrNotExist) {
+			return session{}, fmt.Errorf("session %q: %w; stop its processes and remove %s", name, err, dir)
+		}
 	}
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return session{}, err
 	}
 	s = session{Dir: dir}
-	// The host must be able to bind it: a Unix socket's path is at most
-	// 107 bytes.
-	if n := len(s.socket()); n > 107 {
-		return session{}, fmt.Errorf("the session's socket path, %s, is %d bytes, over the 107 a socket allows; use a shorter --session or TMPDIR", s.socket(), n)
+	// The host must be able to bind it.
+	if err := uidebug.CheckPath(s.socket()); err != nil {
+		return session{}, fmt.Errorf("%w; use a shorter --session or TMPDIR", err)
 	}
 	config := []byte(defaultConfig)
 	if o.config != "" {
@@ -259,7 +284,7 @@ func startSession(name string, o startOptions) (s session, err error) {
 		return session{}, err
 	}
 	if s.Display, s.X, err = startX(dir, s.xauth(), o.size); err != nil {
-		return session{}, err
+		return s, err // the deferred stop ends an X server that did start
 	}
 	if err := s.save(); err != nil {
 		return s, err
@@ -307,7 +332,8 @@ panels: []
 `
 
 // startX starts Xvfb on a free display, size pixels large, and returns
-// the display's name and the server's process.
+// the display's name and the server's process. On an error after the
+// server started, the process is returned too, for the caller to stop.
 func startX(dir, auth string, size image.Point) (string, process, error) {
 	r, w, err := os.Pipe()
 	if err != nil {
@@ -343,13 +369,11 @@ func startX(dir, auth string, size image.Point) (string, process, error) {
 	select {
 	case l := <-line:
 		if _, err := strconv.Atoi(l); err != nil {
-			syscall.Kill(x.PID, syscall.SIGTERM)
-			return "", process{}, fmt.Errorf("the X server gave no display; see %s", logFile.Name())
+			return "", x, fmt.Errorf("the X server gave no display; see %s", logFile.Name())
 		}
 		return ":" + l, x, nil
 	case <-time.After(10 * time.Second):
-		syscall.Kill(x.PID, syscall.SIGTERM)
-		return "", process{}, fmt.Errorf("the X server did not start; see %s", logFile.Name())
+		return "", x, fmt.Errorf("the X server did not start; see %s", logFile.Name())
 	}
 }
 
@@ -373,23 +397,40 @@ outer:
 // The caller holds the session's lock.
 func (s session) stop() error {
 	var errs []error
+	// awaitExit waits up to d for p to exit.
+	awaitExit := func(p process, d time.Duration) {
+		deadline := time.Now().Add(d)
+		for p.alive() && time.Now().Before(deadline) {
+			time.Sleep(20 * time.Millisecond)
+		}
+	}
 	for _, p := range []process{s.Host, s.X} {
 		if !p.alive() {
 			continue
 		}
-		if err := syscall.Kill(p.PID, syscall.SIGTERM); err != nil {
-			errs = append(errs, err)
+		if err := kill(p.PID, syscall.SIGTERM); err != nil {
+			if !errors.Is(err, syscall.ESRCH) { // gone on its own
+				errs = append(errs, err)
+			}
 			continue
 		}
-		deadline := time.Now().Add(10 * time.Second)
-		for p.alive() && time.Now().Before(deadline) {
-			time.Sleep(50 * time.Millisecond)
-		}
+		awaitExit(p, 10*time.Second)
 		if p.alive() {
-			errs = append(errs, syscall.Kill(p.PID, syscall.SIGKILL))
+			if err := kill(p.PID, syscall.SIGKILL); err != nil && !errors.Is(err, syscall.ESRCH) {
+				errs = append(errs, err)
+			}
+			awaitExit(p, 2*time.Second) // a killed process takes a moment to go
 		}
 	}
-	errs = append(errs, os.Remove(filepath.Join(s.Dir, "state.json")))
+	if s.Host.alive() || s.X.alive() {
+		// Kept, so that stop can try again on what is still running.
+		errs = append(errs, errors.New("a process outlived stop; the session's state is kept"))
+		return errors.Join(errs...)
+	}
+	// A start that failed early wrote none.
+	if err := os.Remove(filepath.Join(s.Dir, "state.json")); err != nil && !errors.Is(err, os.ErrNotExist) {
+		errs = append(errs, err)
+	}
 	return errors.Join(errs...)
 }
 
@@ -406,16 +447,27 @@ func (s session) openDisplay(wait time.Duration) (*display, error) {
 // tree asks the host for its semantic tree, retrying for up to wait
 // while the host starts.
 func (s session) tree(wait time.Duration) (uidebug.Tree, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), wait+10*time.Second)
+	defer cancel()
+	return s.treeBy(ctx, wait)
+}
+
+// treeBy is tree, giving up when ctx ends.
+func (s session) treeBy(ctx context.Context, wait time.Duration) (uidebug.Tree, error) {
 	client := http.Client{
-		Timeout: 10 * time.Second,
-		Transport: &http.Transport{DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+		// One request a connection: a long wait polls many times.
+		Transport: &http.Transport{DisableKeepAlives: true, DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
 			return (&net.Dialer{}).DialContext(ctx, "unix", s.socket())
 		}},
 	}
 	deadline := time.Now().Add(wait)
 	for {
 		t, err := func() (uidebug.Tree, error) {
-			resp, err := client.Get("http://host/tree")
+			req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://host/tree", nil)
+			if err != nil {
+				return uidebug.Tree{}, err
+			}
+			resp, err := client.Do(req)
 			if err != nil {
 				return uidebug.Tree{}, err
 			}
@@ -429,7 +481,7 @@ func (s session) tree(wait time.Duration) (uidebug.Tree, error) {
 			}
 			return t, nil
 		}()
-		if err == nil || time.Now().After(deadline) || !s.Host.alive() {
+		if err == nil || ctx.Err() != nil || time.Now().After(deadline) || !s.Host.alive() {
 			if err != nil {
 				err = fmt.Errorf("%w; see %s", err, s.hostLog())
 			}
