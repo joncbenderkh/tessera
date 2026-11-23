@@ -5,11 +5,14 @@ package uidebug
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"image"
 	"net"
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -254,6 +257,12 @@ func TestFlattenClipsToViewport(t *testing.T) {
 			t.Errorf("node %d (%s) visible %v, want %v", n.ID, n.Label, n.Visible, w)
 		}
 	}
+	// The viewport is named by what shows in it alone: among the nodes
+	// that show, as wait looks, nothing is named for the hidden row.
+	shown := func(n Node) bool { return !n.Visible.Empty() }
+	if got := (Tree{Nodes: nodes}).FindFunc("gone", shown); len(got) != 0 {
+		t.Errorf("FindFunc(gone, shown) = %+v, want nothing", got)
+	}
 }
 
 // An ancestor that matches only through a button below a viewport is
@@ -299,5 +308,183 @@ func TestFlattenCoversBeforeModal(t *testing.T) {
 	}
 	if n := byID[3]; n.Description != "" {
 		t.Errorf("the marker kept its description %q", n.Description)
+	}
+}
+
+// A covered element does not name the element around it that shows.
+func TestCoveredTextNamesNothing(t *testing.T) {
+	nodes := flatten([]input.SemanticNode{{
+		ID:   1,
+		Desc: input.SemanticDesc{Bounds: image.Rect(-1e6, -1e6, 1e6, 1e6)},
+		Children: []input.SemanticNode{
+			{ID: 2, ParentID: 1, Desc: input.SemanticDesc{Description: uimark.Viewport, Bounds: image.Rect(0, 0, 800, 600)}, Children: []input.SemanticNode{
+				{ID: 3, ParentID: 2, Desc: input.SemanticDesc{Class: semantic.Button, Label: "Restart", Bounds: image.Rect(0, 0, 80, 32)}},
+				{ID: 4, ParentID: 2, Desc: input.SemanticDesc{Description: uimark.Modal, Bounds: image.Rect(0, 0, 800, 600)}},
+				{ID: 5, ParentID: 2, Desc: input.SemanticDesc{Class: semantic.Button, Label: "Close", Bounds: image.Rect(300, 300, 360, 332)}},
+			}},
+		},
+	}})
+	for _, n := range nodes {
+		if n.ID == 2 && n.Text != "Close" {
+			t.Errorf("the viewport's text %q, want only what shows: Close", n.Text)
+		}
+	}
+}
+
+// Nothing shows outside the window, in a viewport or not.
+func TestFlattenClipsToWindow(t *testing.T) {
+	nodes := flattenIn([]input.SemanticNode{{
+		ID:   1,
+		Desc: input.SemanticDesc{Bounds: image.Rect(-1e6, -1e6, 1e6, 1e6)},
+		Children: []input.SemanticNode{
+			{ID: 2, ParentID: 1, Desc: input.SemanticDesc{Class: semantic.Button, Label: "Restart", Bounds: image.Rect(10, 900, 90, 932)}},
+		},
+	}}, image.Rect(0, 0, 800, 600))
+	for _, n := range nodes {
+		if n.ID == 2 && !n.Visible.Empty() {
+			t.Errorf("a button below the window shows at %v", n.Visible)
+		}
+	}
+}
+
+// A request that gives up leaves the queue.
+func TestAbandonedRequestLeavesQueue(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "debug.sock")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	s, err := Serve(ctx, path, func() {}) // draws no frame
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := http.Client{
+		Timeout: 200 * time.Millisecond,
+		Transport: &http.Transport{DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+			return (&net.Dialer{}).DialContext(ctx, "unix", path)
+		}},
+	}
+	for range 3 {
+		if resp, err := client.Get("http://host/tree"); err == nil {
+			resp.Body.Close()
+		}
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		s.mu.Lock()
+		n := len(s.pending)
+		s.mu.Unlock()
+		if n == 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("%d abandoned requests still queued", n)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// The socket is the user's alone, whatever the umask.
+func TestSocketPrivate(t *testing.T) {
+	old := syscall.Umask(0)
+	defer syscall.Umask(old)
+	path := filepath.Join(t.TempDir(), "debug.sock")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if _, err := Serve(ctx, path, func() {}); err != nil {
+		t.Fatal(err)
+	}
+	fi, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if perm := fi.Mode().Perm(); perm&0o077 != 0 {
+		t.Errorf("socket mode %v, want no access for others", perm)
+	}
+}
+
+// A hidden element's whole text holds its hidden children too.
+func TestAllTextHoldsHidden(t *testing.T) {
+	nodes := flattenIn([]input.SemanticNode{{
+		ID:   1,
+		Desc: input.SemanticDesc{Bounds: image.Rect(-1e6, -1e6, 1e6, 1e6)},
+		Children: []input.SemanticNode{{
+			ID: 2, ParentID: 1, Desc: input.SemanticDesc{Description: uimark.Viewport, Bounds: image.Rect(0, 0, 400, 100)},
+			Children: []input.SemanticNode{{
+				ID: 3, ParentID: 2, Desc: input.SemanticDesc{Bounds: image.Rect(0, 200, 400, 230)},
+				Children: []input.SemanticNode{
+					{ID: 4, ParentID: 3, Desc: input.SemanticDesc{Label: "World", Bounds: image.Rect(0, 200, 100, 230)}},
+					{ID: 5, ParentID: 3, Desc: input.SemanticDesc{Label: "clock", Bounds: image.Rect(100, 200, 200, 230)}},
+				},
+			}},
+		}},
+	}}, image.Rect(0, 0, 800, 600))
+	for _, n := range nodes {
+		if n.ID == 3 && (n.Text != "" || n.AllText != "World clock") {
+			t.Errorf("row text %q, all text %q; want none shown, all World clock", n.Text, n.AllText)
+		}
+	}
+}
+
+// A label that shows is not taken for the echo of a covered button of
+// the same label under it.
+func TestEchoNeedsSameCoverage(t *testing.T) {
+	nodes := withoutEchoes([]Node{
+		{ID: 2, Class: "Button", Label: "Save", Text: "Save", Bounds: image.Rect(0, 0, 100, 40), Covered: true},
+		{ID: 3, Label: "Save", Text: "Save", Bounds: image.Rect(10, 10, 300, 300), Visible: image.Rect(10, 10, 300, 300)},
+	})
+	if len(nodes) != 2 {
+		t.Errorf("nodes %+v, want the shown label kept", nodes)
+	}
+}
+
+// A path whose socket is made at a longer one first is refused when
+// that one would not fit, before anything is made.
+func TestCheckPathCountsTheFirstSocket(t *testing.T) {
+	dir := "/" + strings.Repeat("d", 95)
+	if err := CheckPath(dir + "/debug.sock"); err == nil { // 107 bytes, but up to 111 at first
+		t.Error("CheckPath took a path whose first socket is too long")
+	}
+	if err := CheckPath("/run/user/1000/tessera-uidrive/default/debug.sock"); err != nil {
+		t.Error(err)
+	}
+}
+
+// Publishing fails rather than replace a file made at the path in the
+// meantime, and the server's socket goes when it stops.
+func TestServePublishesWithoutReplacing(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "debug.sock")
+	l, fi, err := listenPrivate(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	l.Close()
+	if fi == nil {
+		t.Fatal("no file info")
+	}
+	os.Remove(path)
+	if err := os.WriteFile(path, []byte("keep"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := listenPrivate(path); err == nil {
+		t.Error("listenPrivate replaced a file at the path")
+	}
+	if b, _ := os.ReadFile(path); string(b) != "keep" {
+		t.Errorf("the file at the path is %q", b)
+	}
+	os.Remove(path)
+	ctx, cancel := context.WithCancel(context.Background())
+	if _, err := Serve(ctx, path, func() {}); err != nil {
+		t.Fatal(err)
+	}
+	cancel()
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		if _, err := os.Lstat(path); errors.Is(err, os.ErrNotExist) {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the socket outlived its server")
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }

@@ -19,16 +19,19 @@ import (
 // text: the router reading it is not the window's, so an area's
 // handlers ask it for nothing, and it lists no area for them.
 type Node struct {
-	ID          uint            `json:"id"`
-	Parent      uint            `json:"parent,omitempty"`
-	Class       string          `json:"class,omitempty"` // "Button", "Editor", "CheckBox", "RadioButton", "Switch", or "" for none
-	Label       string          `json:"label,omitempty"`
-	Description string          `json:"description,omitempty"`
-	Text        string          `json:"text,omitempty"` // the labels of the node and its descendants, in order
-	Selected    bool            `json:"selected,omitempty"`
-	Disabled    bool            `json:"disabled,omitempty"`
-	Clickable   bool            `json:"clickable,omitempty"` // has a class: a Button, Editor, and so on
-	Bounds      image.Rectangle `json:"bounds"`
+	ID          uint   `json:"id"`
+	Parent      uint   `json:"parent,omitempty"`
+	Class       string `json:"class,omitempty"` // "Button", "Editor", "CheckBox", "RadioButton", "Switch", or "" for none
+	Label       string `json:"label,omitempty"`
+	Description string `json:"description,omitempty"`
+	Text        string `json:"text,omitempty"` // the labels of the node and its descendants that show, in order
+	// AllText is Text with the descendants that do not show too, the
+	// whole name of an element that is itself hidden.
+	AllText   string          `json:"all_text,omitempty"`
+	Selected  bool            `json:"selected,omitempty"`
+	Disabled  bool            `json:"disabled,omitempty"`
+	Clickable bool            `json:"clickable,omitempty"` // has a class: a Button, Editor, and so on
+	Bounds    image.Rectangle `json:"bounds"`
 	// Visible is the part of Bounds that shows: Bounds cut to the
 	// viewports, such as a scrolling list, the node is in. It is empty
 	// for a node scrolled out of view or Covered.
