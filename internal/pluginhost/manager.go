@@ -546,7 +546,7 @@ func (m *Manager) launch(pn *panel) (*Instance, string, error) {
 		return nil, exit, err
 	}
 	m.update(pn, func(s *PanelState) { s.Described, s.Schema = true, inst.Info.GetConfigSchema() })
-	if err := inst.schemaError(); err != nil {
+	if err := inst.schemaError(); err != nil && !errors.Is(err, config.ErrNoSchema) {
 		m.event(pn, "settings not checked by the host: the plugin declares an invalid %v", err)
 	}
 	select {
@@ -621,6 +621,29 @@ var ErrClosed = errors.New("the plugin host is closed")
 // ErrNotLive is HandleEvent's answer for a panel that is not Live or
 // Stale.
 var ErrNotLive = errors.New("the panel is not live")
+
+// Reconfigure configures the enabled panel id's plugin again with the
+// settings it has in the config, as after a trial whose settings were
+// not saved. It does nothing for a panel that is not live: one that is
+// not running is configured from the config when it starts, and a
+// notice would cut its restart's backoff short.
+func (m *Manager) Reconfigure(id string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, pn := range m.panels {
+		if pn.ID == id && (pn.State == Live || pn.State == Stale) {
+			pn.notify()
+		}
+	}
+}
+
+// ErrTrialBusy is TrySettings' answer when the panel's plugin was too
+// busy to try the settings in time; it did not try them.
+var ErrTrialBusy = errors.New("the panel was too busy to try the settings; try again")
+
+// ErrTrialExited is TrySettings' answer when the plugin exited while
+// trying the settings, which they may have caused.
+var ErrTrialExited = errors.New("the plugin exited while trying these settings")
 
 // ErrInterrupted is TrySettings' answer when the panel stopped, as for
 // a restart, a reload, or Disable, while its plugin was trying the
@@ -965,8 +988,10 @@ type trial struct {
 //
 // The error is a *config.SettingsError if the schema refuses them, a
 // *RejectedError if the plugin does, ErrNotLive if the panel is not
-// live, so only the schema was checked, ErrInterrupted if the panel
-// stopped while its plugin was trying them, or another failure, such as a
+// live, so only the schema was checked, ErrTrialBusy if the plugin did
+// not get to them in time, ErrTrialExited if it exited trying them,
+// ErrInterrupted if the panel stopped otherwise while its plugin was
+// trying them, or another failure, such as a
 // plugin that hung or died while trying them, which fails the panel as
 // a failed Configure does.
 func (m *Manager) TrySettings(ctx context.Context, id string, settings config.Settings) error {
@@ -1003,22 +1028,35 @@ func (m *Manager) TrySettings(ctx context.Context, id string, settings config.Se
 	}
 	t := trial{settings, make(chan error, 1)}
 	// The live loop takes it between calls, each bounded by the call
-	// timeout; one that does not take it in time has left Live.
-	wait := time.NewTimer(2 * m.opts.CallTimeout)
+	// timeout, but a loop busy with several may not take it in time:
+	// then the panel may well be live, and nothing was tried.
+	wait := time.NewTimer(4 * m.opts.CallTimeout)
 	defer wait.Stop()
-	select {
-	case pn.tries <- t:
-	case <-wait.C:
-		return ErrNotLive
-	case <-pn.ctx.Done():
-		return ErrNotLive
-	case <-ctx.Done():
-		return ctx.Err()
+	// A panel that stops meanwhile takes no trials: watch for it.
+	look := time.NewTicker(100 * time.Millisecond)
+	defer look.Stop()
+offer:
+	for {
+		select {
+		case pn.tries <- t:
+			break offer
+		case <-look.C:
+			m.mu.Lock()
+			live := pn.State == Live || pn.State == Stale
+			m.mu.Unlock()
+			if !live {
+				return ErrNotLive
+			}
+		case <-wait.C:
+			return ErrTrialBusy
+		case <-pn.ctx.Done():
+			return ErrNotLive
+		case <-ctx.Done():
+			return ctx.Err()
+		}
 	}
-	select {
-	case err := <-t.reply:
-		return err
-	case <-ctx.Done():
-		return ctx.Err()
-	}
+	// Taken, the trial runs to its end, bounded by the call timeout,
+	// whatever ctx does: its answer says which settings the plugin
+	// holds now.
+	return <-t.reply
 }

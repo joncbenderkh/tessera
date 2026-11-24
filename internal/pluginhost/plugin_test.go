@@ -226,12 +226,14 @@ func (testPlugin) GRPCClient(context.Context, *plugin.GRPCBroker, *grpc.ClientCo
 //   - rejects-later: rejects the settings of each Configure after the
 //     first.
 //   - hangs-configure-later: each Configure after the first never
-//     answers.
+//     answers, and says "configure hangs" on stderr.
 //   - schema: declares a config schema with one string setting,
-//     timezone, and rejects the timezone "Mars" in Configure. The
+//     timezone, rejects the timezone "Mars" in Configure, and exits
+//     on "Crash". The
 //     rejects modes declare it too.
 //   - bad-schema: declares a config schema that does not compile.
-//   - no-schema: declares no config schema, so it takes no settings.
+//   - no-schema: declares no config schema, so the host does not
+//     check its settings.
 //     The other modes take any.
 //
 // Any other name is a well-behaved plugin of that name, which reports
@@ -322,8 +324,11 @@ func (s *server) Configure(ctx context.Context, req *tesserav1.ConfigureRequest)
 	case "rejects":
 		return nil, status.Error(codes.InvalidArgument, "timezone: unknown")
 	case "schema":
-		if req.GetSettings().GetFields()["timezone"].GetStringValue() == "Mars" {
+		switch req.GetSettings().GetFields()["timezone"].GetStringValue() {
+		case "Mars":
 			return nil, status.Error(codes.InvalidArgument, "timezone: unknown")
+		case "Crash":
+			os.Exit(5)
 		}
 	case "rejects-later":
 		s.mu.Lock()
@@ -339,6 +344,7 @@ func (s *server) Configure(ctx context.Context, req *tesserav1.ConfigureRequest)
 		later := s.configs > 1
 		s.mu.Unlock()
 		if later {
+			fmt.Fprintln(os.Stderr, "configure hangs")
 			<-ctx.Done()
 			return nil, ctx.Err()
 		}

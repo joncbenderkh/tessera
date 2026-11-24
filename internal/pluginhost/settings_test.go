@@ -4,6 +4,7 @@ package pluginhost
 
 import (
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -128,6 +129,12 @@ func TestTrySettings(t *testing.T) {
 	if err := m.TrySettings(t.Context(), "p9", nil); err == nil {
 		t.Error("an unknown panel tried settings")
 	}
+
+	// A plugin that exits trying them is not "interrupted": the
+	// settings may be why.
+	if err := m.TrySettings(t.Context(), "p0", config.Settings{"timezone": "Crash"}); !errors.Is(err, ErrTrialExited) {
+		t.Errorf("Crash: %v, want ErrTrialExited", err)
+	}
 }
 
 // A panel that is not live has only its schema checked.
@@ -142,22 +149,73 @@ func TestTrySettingsNotLive(t *testing.T) {
 	}
 }
 
-// A plugin that declares no schema takes no settings.
+// A plugin that declares no schema has its settings unchecked by the
+// host: it checks its own, as before there were schemas.
 func TestNoSchema(t *testing.T) {
 	dir := install(t, "no-schema")
 	logger, _ := newLogger()
 	cfg := panels("no-schema")
+	cfg.Panels[0].Settings = config.Settings{"a": int64(1)}
 	m := StartWith(cfg, dir, logger, fast)
 	defer m.Close()
 	waitFor(t, m, "p0", "live", is(Live))
-	var invalid *config.SettingsError
-	if err := m.TrySettings(t.Context(), "p0", config.Settings{"a": int64(1)}); !errors.As(err, &invalid) {
-		t.Errorf("TrySettings = %v, want a SettingsError", err)
+	if err := m.TrySettings(t.Context(), "p0", config.Settings{"a": int64(2)}); err != nil {
+		t.Errorf("TrySettings = %v", err)
 	}
-	cfg.Panels[0].Settings = config.Settings{"a": int64(1)}
+	if strings.Contains(strings.Join(m.Logs("p0"), "\n"), "not checked by the host") {
+		t.Errorf("logged a missing schema as invalid: %q", m.Logs("p0"))
+	}
+}
+
+// Reconfigure gives a live panel's plugin its settings again.
+func TestReconfigure(t *testing.T) {
+	dir := install(t, "schema")
+	logger, _ := newLogger()
+	m := StartWith(panels("schema"), dir, logger, fast)
+	defer m.Close()
+	waitFor(t, m, "p0", "live", is(Live))
+	for deadline := time.Now().Add(10 * time.Second); countLines(m.Logs("p0"), "configured p0") < 1; time.Sleep(10 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatal("never configured")
+		}
+	}
+	m.Reconfigure("p0")
+	for deadline := time.Now().Add(10 * time.Second); countLines(m.Logs("p0"), "configured p0") < 2; time.Sleep(10 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatalf("not configured again: %q", m.Logs("p0"))
+		}
+	}
+}
+
+// A panel stopped while its plugin tries settings gives ErrInterrupted,
+// and nothing is saved.
+func TestTrySettingsInterrupted(t *testing.T) {
+	dir := install(t, "hangs-configure-later")
+	logger, _ := newLogger()
+	cfg := panels("hangs-configure-later")
+	opts := fast
+	opts.CallTimeout = 10 * time.Second
+	m := StartWith(cfg, dir, logger, opts)
+	defer m.Close()
+	waitFor(t, m, "p0", "live", is(Live))
+	done := make(chan error, 1)
+	go func() { done <- m.TrySettings(t.Context(), "p0", config.Settings{"a": int64(1)}) }()
+	for deadline := time.Now().Add(5 * time.Second); countLines(m.Logs("p0"), "configure hangs") < 1; {
+		if time.Now().After(deadline) {
+			t.Fatalf("the trial never reached the plugin: %q", m.Logs("p0"))
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if err := cfg.SetEnabled("p0", false); err != nil {
+		t.Fatal(err)
+	}
 	m.Apply(cfg)
-	s := waitFor(t, m, "p0", "crashed", is(Crashed))
-	if !errors.As(s.Err, &invalid) {
-		t.Errorf("error %v, want a SettingsError", s.Err)
+	select {
+	case err := <-done:
+		if !errors.Is(err, ErrInterrupted) {
+			t.Errorf("TrySettings = %v, want ErrInterrupted", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("TrySettings still waiting after the panel stopped")
 	}
 }

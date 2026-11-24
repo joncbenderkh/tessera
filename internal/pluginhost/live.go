@@ -182,7 +182,11 @@ func (w *live) run() (end, error) {
 			return configure(ctx, inst, cfg, columns, m.opts.CallTimeout)
 		})
 		if stop != nil {
-			t.reply <- ErrInterrupted
+			if stop.exited {
+				t.reply <- ErrTrialExited
+			} else {
+				t.reply <- ErrInterrupted
+			}
 			return *stop, true, nil
 		}
 		var rejected *RejectedError
@@ -191,6 +195,17 @@ func (w *live) run() (end, error) {
 			t.reply <- err
 			m.event(pn, "new settings tried: %v", err)
 			return reconfigure("settings tried")
+		}
+		if status.Code(err) == codes.Unavailable { // status.Code sees through the wrapping
+			// The connection went first: the plugin may be exiting,
+			// as the answer can beat the news of its exit.
+			select {
+			case <-inst.Done():
+				err = ErrTrialExited
+			case <-time.After(time.Second):
+			case <-pn.ctx.Done():
+				err = ErrInterrupted
+			}
 		}
 		t.reply <- err
 		if err != nil {
