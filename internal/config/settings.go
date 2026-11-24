@@ -447,11 +447,23 @@ func ParseValue(text string) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	if len(file.Docs) != 1 || file.Docs[0].Body == nil {
-		return nil, errors.New("want one YAML value")
+	// Directives, markers, and comments make no value.
+	docs := slices.DeleteFunc(slices.Clone(file.Docs), func(d *ast.DocumentNode) bool {
+		_, directive := d.Body.(*ast.DirectiveNode)
+		return d.Body == nil || directive
+	})
+	if len(docs) == 0 {
+		return nil, nil // blank
 	}
-	if err := rejectSharing(file); err != nil {
-		return nil, err
+	if len(docs) != 1 {
+		return nil, errors.New("want one YAML value, not several documents")
+	}
+	file.Docs = docs
+	// A value in settings, where merge keys are allowed, as in the file.
+	var err2 error
+	ast.Walk(sharingCheck{inSettings: true, err: &err2}, file.Docs[0])
+	if err2 != nil {
+		return nil, err2
 	}
 	return resolve(file.Docs[0].Body)
 }
