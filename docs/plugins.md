@@ -77,7 +77,9 @@ can start it.
 - `Version` is the plugin's semver version.
 - `Description` is one line for the panel picker.
 - `ConfigSchema` is a JSON Schema (draft 2020-12) for the panel's
-  settings, if it takes any; without one, it takes none. The host
+  settings. Without one, the host does not check them, and the
+  Configure dialog edits them as YAML; a plugin that takes none can
+  declare `{"type": "object", "maxProperties": 0}`. The host
   checks the settings against it before each `Configure`, and builds
   the Configure dialog's form from it (see [Settings form](#settings-form)).
 - `DefaultSize` is the size, in grid cells, a new panel gets.
@@ -210,21 +212,25 @@ order written, and gives each a control by its schema:
 | `"type": "boolean"` | an On/Off toggle |
 | `enum` of strings, numbers, or booleans | a button per value |
 | `"type": "array"` of strings or numbers | a text field per item, with Add and Remove |
-| `"type": "array"` of objects whose properties are all of the kinds above | a group of fields per item, with Add and Remove |
+| `"type": "array"` of objects whose properties are all strings, numbers, booleans, or `enum`s (no lists) | a group of fields per item, with Add and Remove |
 
 Any other property (a nested object, `oneOf`, several types, and so
 on), and any value that does not fit its property's type, is edited as
-YAML text. A schema without top-level `properties` gets one YAML field
+YAML text, as is a string of more than one line, since the text fields
+hold one. A schema without top-level `properties` gets one YAML field
 for all the settings. `title` replaces the property's name as its
 label, `description` is shown under it with the `default`, and
 properties named in `required` are marked. A setting is left out of
 the settings, so the plugin's default applies, until the user gives it
 a value, and again after its **Default** button (or a second click on
 the chosen value of a choice). A text field emptied after that holds
-`""`, and a list emptied `[]`; a blank number or YAML field is left
-out. A schema the host cannot compile (see
-[protocol.md](protocol.md#settings)) gets one YAML field. Settings the schema does not list are kept as they
-are. Write descriptions for the user: they are the form's help text.
+`""`, and a list emptied `[]`; a blank text item in a list holds `""`,
+and a blank number item must be filled in or removed; a blank number
+or YAML field is left out. A schema the host cannot compile (see
+[protocol.md](protocol.md#settings)), or none, gets one YAML field.
+Settings the schema does not list are kept as they are, each with a
+**Remove** button. Write descriptions for the user: they are the
+form's help text.
 
 ## Input events
 

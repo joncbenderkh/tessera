@@ -38,7 +38,9 @@ type Plugin struct {
 	// Description is one line for the panel picker.
 	Description string
 	// ConfigSchema is a JSON Schema (draft 2020-12) for the panel's
-	// settings. Empty means the panel takes no settings.
+	// settings. Empty means the host does not check them; declare
+	// {"type": "object", "maxProperties": 0} for a panel that takes
+	// none.
 	ConfigSchema string
 	// DefaultSize is the size a new panel gets. A zero dimension means 1.
 	DefaultSize Size

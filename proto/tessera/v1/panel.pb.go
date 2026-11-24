@@ -103,7 +103,8 @@ type DescribeResponse struct {
 	// and shows an error tile.
 	ViewVersion uint32 `protobuf:"varint,5,opt,name=view_version,json=viewVersion,proto3" json:"view_version,omitempty"`
 	// JSON Schema (draft 2020-12) for the panel's settings, as a JSON
-	// document. Empty means the panel takes no settings.
+	// document. Empty means the host does not check the settings; a
+	// panel that takes none declares {"type": "object", "maxProperties": 0}.
 	ConfigSchema string `protobuf:"bytes,6,opt,name=config_schema,json=configSchema,proto3" json:"config_schema,omitempty"`
 	// The size, in grid cells, a new panel gets when the user adds it.
 	// Unset, or a zero dimension, means 1.
@@ -321,7 +322,7 @@ type ConfigureRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// The panel's id from the config file. Unique within a layout.
 	PanelId string `protobuf:"bytes,1,opt,name=panel_id,json=panelId,proto3" json:"panel_id,omitempty"`
-	// The panel's settings from the config file, less those set to null,
+	// The panel's settings from the config file, less members set to null,
 	// which the host has checked against config_schema if it compiles,
 	// or settings the Configure dialog is about to save, which the
 	// plugin may refuse with INVALID_ARGUMENT.
