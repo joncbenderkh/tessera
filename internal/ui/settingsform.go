@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"maps"
 	"math"
+	"math/big"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -41,20 +43,29 @@ type fieldSpec struct {
 	hasDef      bool         //
 	item        *fieldSpec   // kindList: each item
 	props       []*fieldSpec // kindObjects: each item's settings
-	maxItems    int          // kindList, kindObjects: 0 for no limit
+	maxItems    int          // kindList, kindObjects: -1 for no limit
 }
 
 // schemaNode is the part of a JSON Schema the form reads.
 type schemaNode struct {
-	Type        json.RawMessage `json:"type"`
-	Title       string          `json:"title"`
-	Description string          `json:"description"`
-	Enum        []any           `json:"enum"`
-	Default     json.RawMessage `json:"default"`
-	Properties  json.RawMessage `json:"properties"`
-	Required    []string        `json:"required"`
-	Items       json.RawMessage `json:"items"`
-	MaxItems    *int            `json:"maxItems"`
+	Type        json.RawMessage   `json:"type"`
+	Title       string            `json:"title"`
+	Description string            `json:"description"`
+	Enum        []json.RawMessage `json:"enum"` // raw: numbers keep their digits
+	Default     json.RawMessage   `json:"default"`
+	Properties  json.RawMessage   `json:"properties"`
+	Required    []string          `json:"required"`
+	Items       json.RawMessage   `json:"items"`
+	MaxItems    *int              `json:"maxItems"`
+	// Composition, which the form cannot show as one control.
+	OneOf json.RawMessage `json:"oneOf"`
+	AnyOf json.RawMessage `json:"anyOf"`
+	AllOf json.RawMessage `json:"allOf"`
+	Not   json.RawMessage `json:"not"`
+	If    json.RawMessage `json:"if"`
+	Ref   string          `json:"$ref"`
+	// MaxProperties 0, at the top, is a plugin that takes no settings.
+	MaxProperties *int `json:"maxProperties"`
 }
 
 // parseForm reads a config schema into the form's fields, in the order
@@ -63,18 +74,24 @@ type schemaNode struct {
 // the dialog then edits them whole, in YAML.
 func parseForm(schema string) (fields []*fieldSpec, ok bool) {
 	if strings.TrimSpace(schema) == "" {
-		return nil, true // no settings
+		return nil, false // no schema: all of it as YAML
 	}
 	var root schemaNode
-	if err := json.Unmarshal([]byte(schema), &root); err != nil || len(root.Properties) == 0 {
+	if err := json.Unmarshal([]byte(schema), &root); err != nil {
+		return nil, false
+	}
+	if root.MaxProperties != nil && *root.MaxProperties == 0 {
+		return nil, true // the plugin takes no settings
+	}
+	if len(root.Properties) == 0 {
 		return nil, false
 	}
 	if t, ok := typeName(root.Type); !ok || t != "object" && t != "" {
 		return nil, false
 	}
 	names, nodes, err := orderedProperties(root.Properties)
-	if err != nil {
-		return nil, false
+	if err != nil || len(names) == 0 {
+		return nil, false // "properties": {} names none: all of it as YAML
 	}
 	for i, name := range names {
 		f := specOf(name, nodes[i], slices.Contains(root.Required, name), true)
@@ -119,10 +136,25 @@ func typeName(raw json.RawMessage) (string, bool) {
 	return t, true
 }
 
+// label is the setting's name as the form shows it: its schema's
+// title, or its name.
+func (f *fieldSpec) label() string {
+	if f.title != "" {
+		return f.title
+	}
+	return f.name
+}
+
+// composed reports whether n combines schemas, as oneOf does, which a
+// single control cannot show: such a setting is written in YAML.
+func (n schemaNode) composed() bool {
+	return len(n.OneOf) > 0 || len(n.AnyOf) > 0 || len(n.AllOf) > 0 || len(n.Not) > 0 || len(n.If) > 0 || n.Ref != ""
+}
+
 // specOf is the field for the property name with schema raw. nested
 // allows arrays; an array's items may not hold arrays themselves.
 func specOf(name string, raw json.RawMessage, required, nested bool) *fieldSpec {
-	f := &fieldSpec{name: name, required: required, kind: kindRaw}
+	f := &fieldSpec{name: name, required: required, kind: kindRaw, maxItems: -1}
 	var n schemaNode
 	if json.Unmarshal(raw, &n) != nil {
 		return f
@@ -137,12 +169,12 @@ func specOf(name string, raw json.RawMessage, required, nested bool) *fieldSpec 
 		f.maxItems = max(*n.MaxItems, 0)
 	}
 	t, ok := typeName(n.Type)
-	if !ok {
+	if !ok || n.composed() {
 		return f
 	}
 	if len(n.Enum) > 0 {
-		for _, v := range n.Enum {
-			v, err := normalize(v)
+		for _, raw := range n.Enum {
+			v, err := jsonValue(raw)
 			if err != nil || !isScalar(v) || v == nil {
 				return f
 			}
@@ -170,8 +202,8 @@ func specOf(name string, raw json.RawMessage, required, nested bool) *fieldSpec 
 			f.kind, f.item = kindList, item
 		case kindRaw:
 			var in schemaNode
-			if json.Unmarshal(n.Items, &in) != nil || len(in.Properties) == 0 {
-				return f
+			if json.Unmarshal(n.Items, &in) != nil || len(in.Properties) == 0 || in.composed() {
+				return f // composed items, as with allOf, need more than their properties
 			}
 			if t, ok := typeName(in.Type); !ok || t != "object" && t != "" {
 				return f
@@ -259,7 +291,32 @@ func isScalar(v any) bool {
 func sameValue(a, b any) bool {
 	a, _ = normalize(a)
 	b, _ = normalize(b)
+	// Only scalars compare with ==; a list or mapping, as a file may
+	// hold where a choice is due, is never one of the choices.
+	if !isScalar(a) || !isScalar(b) {
+		return false
+	}
 	return a == b
+}
+
+// enumLabels is the text of each choice's button: as a text field shows
+// it, or, where two choices would read alike, such as "1" and 1, in
+// YAML, which quotes the strings.
+func enumLabels(values []any) []string {
+	labels := make([]string, len(values))
+	seen := map[string]int{}
+	for i, v := range values {
+		labels[i] = scalarText(v)
+		seen[labels[i]]++
+	}
+	for i, v := range values {
+		if seen[labels[i]] > 1 || labels[i] == "" { // "" would be a blank button
+			if text, err := config.FormatValue(v); err == nil {
+				labels[i] = text
+			}
+		}
+	}
+	return labels
 }
 
 // scalarText is a scalar setting as a text field shows it.
@@ -284,8 +341,10 @@ func scalarText(v any) string {
 func valueFits(k fieldKind, f *fieldSpec, v any) bool {
 	switch k {
 	case kindText:
-		_, ok := v.(string)
-		return ok
+		// A field holds one line: text of several goes in YAML, which
+		// keeps its line breaks.
+		s, ok := v.(string)
+		return ok && !strings.ContainsAny(s, "\r\n")
 	case kindInteger:
 		_, ok := v.(int64)
 		return ok
@@ -336,24 +395,42 @@ func parseScalar(k fieldKind, text string) (any, bool, string) {
 		return nil, false, ""
 	}
 	switch k {
-	case kindInteger:
-		i, err := strconv.ParseInt(text, 10, 64)
-		if err != nil {
-			return nil, true, "must be a whole number"
+	case kindInteger, kindNumber:
+		// Only decimals: 0x10 or 1_000 would be strings in the file.
+		if !decimal.MatchString(text) {
+			break
 		}
-		return i, true, ""
-	case kindNumber:
-		if i, err := strconv.ParseInt(text, 10, 64); err == nil {
-			return i, true, ""
+		// Whole numbers are read exactly, so no digit is lost, and only
+		// within ±2^53, however written. An integer's 3.0 and 1e3 are
+		// whole numbers, as the schema reads them; a number's are whole
+		// written without a point or exponent.
+		if r, ok := new(big.Rat).SetString(text); ok && r.IsInt() {
+			if r.Num().CmpAbs(maxExact) > 0 {
+				return nil, true, "must be within ±2^53, which a plugin receives exactly"
+			}
+			if k == kindInteger || !strings.ContainsAny(text, ".eE") {
+				return r.Num().Int64(), true, ""
+			}
 		}
-		f, err := strconv.ParseFloat(text, 64)
-		if err != nil || math.IsInf(f, 0) || math.IsNaN(f) {
-			return nil, true, "must be a number"
+		if k == kindNumber {
+			if f, err := strconv.ParseFloat(text, 64); err == nil {
+				return f, true, ""
+			}
 		}
-		return f, true, ""
+	default:
+		return text, true, ""
 	}
-	return text, true, ""
+	if k == kindInteger {
+		return nil, true, "must be a whole number"
+	}
+	return nil, true, "must be a number"
 }
+
+// decimal is a number written in decimal, as the config file reads one.
+var decimal = regexp.MustCompile(`^[-+]?(\d+(\.\d*)?|\.\d+)([eE][-+]?\d+)?$`)
+
+// maxExact is the largest whole number a plugin receives exactly.
+var maxExact = big.NewInt(1 << 53)
 
 // extraSettings is the settings no field shows, which saving keeps.
 func extraSettings(fields []*fieldSpec, settings config.Settings) map[string]any {

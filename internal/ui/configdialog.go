@@ -38,14 +38,18 @@ import (
 // Escape close it; a click outside does not, so edits are not lost.
 type ConfigDialog struct {
 	Panel, Plugin string
+	// Original is the settings the dialog opened with, to tell whether
+	// the file has changed them since.
+	Original config.Settings
 
 	open    bool
 	busy    bool // Save was pressed; waiting for Failed or Close
 	submit  bool
 	fields  []*formField
 	whole   *formField     // the settings as a whole, in YAML, for a schema the form cannot show
-	extra   map[string]any // settings no field shows, kept as they are
-	general []string       // problems not at a field, and the plugin's answer
+	extra   map[string]any // settings no field shows, kept as they are unless removed
+	drop    map[string]*Button
+	general []string // problems not at a field, and the plugin's answer
 	list    layout.List
 	save    Button
 	cancel  Button
@@ -80,7 +84,7 @@ type formItem struct {
 // config schema; one the host cannot compile, and so does not check,
 // gives the settings in YAML.
 func (d *ConfigDialog) Open(panel, plugin, schema string, settings config.Settings) {
-	*d = ConfigDialog{Panel: panel, Plugin: plugin, open: true, focus: true}
+	*d = ConfigDialog{Panel: panel, Plugin: plugin, Original: settings, open: true, focus: true}
 	d.list.Axis = layout.Vertical
 	specs, ok := parseForm(schema)
 	if _, err := config.CompileSchema(schema); err != nil {
@@ -98,6 +102,10 @@ func (d *ConfigDialog) Open(panel, plugin, schema string, settings config.Settin
 		d.fields = append(d.fields, newField(s, v, v != nil))
 	}
 	d.extra = extraSettings(specs, settings)
+	d.drop = map[string]*Button{}
+	for k := range d.extra {
+		d.drop[k] = &Button{Description: "Remove the setting " + k}
+	}
 }
 
 func mapOrNil(s config.Settings) any {
@@ -115,6 +123,7 @@ func newField(spec *fieldSpec, v any, present bool) *formField {
 	}
 	switch f.kind {
 	case kindText, kindInteger, kindNumber:
+		f.editor.SingleLine, f.editor.Submit = true, true // Return adds nothing to the value
 		if present {
 			f.editor.SetText(scalarText(v))
 		}
@@ -147,6 +156,7 @@ func newField(spec *fieldSpec, v any, present bool) *formField {
 func newItem(spec *fieldSpec, v any) *formItem {
 	it := &formItem{}
 	if spec.kind == kindList {
+		it.editor.SingleLine, it.editor.Submit = true, true // Return adds nothing to the value
 		it.editor.SetText(scalarText(v))
 		return it
 	}
@@ -234,13 +244,12 @@ func (f *formField) value(path []string, problems *[]config.Problem) (any, bool,
 		}
 		return v, set, false
 	case kindRaw:
-		text := f.editor.Text()
-		v, err := config.ParseValue(text)
+		v, err := config.ParseValue(f.editor.Text())
 		if err != nil {
 			report(path, "not valid YAML: "+err.Error())
 			return nil, true, true
 		}
-		return v, strings.TrimSpace(text) != "", false
+		return v, v != nil, false // null, blank, or a comment: the default
 	case kindBool:
 		return f.on, f.set, false
 	case kindEnum:
@@ -254,12 +263,19 @@ func (f *formField) value(path []string, problems *[]config.Problem) (any, bool,
 	for i, it := range f.items {
 		at := append(slices.Clip(path), strconv.Itoa(i))
 		if f.kind == kindList {
+			// Every item stays, so the schema's problems keep their
+			// indexes: a blank text item is "", a blank number wrong.
 			v, set, msg := parseScalar(f.spec.item.kind, it.editor.Text())
 			switch {
 			case msg != "":
 				report(at, msg)
 				bad = true
-			case set:
+			case !set && f.spec.item.kind == kindText:
+				items = append(items, "")
+			case !set:
+				report(at, "give a number, or remove the item")
+				bad = true
+			default:
 				items = append(items, v)
 			}
 			continue
@@ -281,8 +297,11 @@ func (f *formField) value(path []string, problems *[]config.Problem) (any, bool,
 // its Default button takes away.
 func (f *formField) isSet() bool {
 	switch f.kind {
-	case kindInteger, kindNumber, kindRaw:
+	case kindInteger, kindNumber:
 		return strings.TrimSpace(f.editor.Text()) != ""
+	case kindRaw:
+		v, err := config.ParseValue(f.editor.Text())
+		return err != nil || v != nil
 	case kindText:
 		return f.set || f.editor.Text() != ""
 	case kindEnum:
@@ -393,13 +412,18 @@ func (d *ConfigDialog) Layout(gtx layout.Context, th *theme.Theme) layout.Dimens
 			d.Close()
 		}
 	}
+	if d.busy {
+		// The settings being tried are the ones saved: no edits
+		// meanwhile, which would be lost.
+		gtx = gtx.Disabled()
+	}
 	d.update(gtx)
 	if !d.open {
 		gtx.Execute(op.InvalidateCmd{})
 		return layout.Dimensions{}
 	}
 	if d.submit {
-		gtx.Execute(op.InvalidateCmd{}) // the caller takes it next frame
+		gtx.Execute(op.InvalidateCmd{}) // a frame to show Saving… while the caller tries them
 	}
 	if d.focus {
 		d.focus = false
@@ -493,8 +517,15 @@ func (d *ConfigDialog) update(gtx layout.Context) {
 			}
 		}
 	}
+	for k, b := range d.drop {
+		if b.Clicked(gtx) {
+			delete(d.extra, k)
+			delete(d.drop, k)
+			gtx.Execute(op.InvalidateCmd{})
+		}
+	}
 	for _, f := range d.fields {
-		if f.add.Clicked(gtx) && (f.spec.maxItems == 0 || len(f.items) < f.spec.maxItems) {
+		if f.add.Clicked(gtx) && (f.spec.maxItems < 0 || len(f.items) < f.spec.maxItems) {
 			f.items, f.set = append(f.items, newItem(f.spec, nil)), true
 			gtx.Execute(op.InvalidateCmd{})
 		}
@@ -558,8 +589,21 @@ func (d *ConfigDialog) rows(th *theme.Theme) []layout.Widget {
 		rows = append(rows, func(gtx layout.Context) layout.Dimensions { return f.layout(gtx, th, "") })
 	}
 	if len(d.extra) > 0 {
-		names := strings.Join(slicesSorted(d.extra), ", ")
-		rows = append(rows, label(th, "Also kept as they are: "+names+".", theme.TextSmall, th.Muted, theme.Body).Layout)
+		rows = append(rows, label(th, "Not in the plugin's schema, kept as they are unless removed:", theme.TextSmall, th.Muted, theme.Body).Layout)
+		for _, k := range slicesSorted(d.extra) {
+			text, err := config.FormatValue(d.extra[k])
+			if err != nil {
+				text = fmt.Sprint(d.extra[k])
+			}
+			text = k + ": " + strings.ReplaceAll(text, "\n", " ")
+			b := d.drop[k]
+			rows = append(rows, func(gtx layout.Context) layout.Dimensions {
+				return layout.Flex{Alignment: layout.Middle}.Layout(gtx,
+					layout.Flexed(1, label(th, text, theme.TextBase, th.Fg, theme.Mono).Layout),
+					layout.Rigid(func(gtx layout.Context) layout.Dimensions { return b.Layout(gtx, th, "Remove") }),
+				)
+			})
+		}
 	}
 	return rows
 }
@@ -682,13 +726,17 @@ func (f *formField) note() string {
 func (f *formField) control(gtx layout.Context, th *theme.Theme) layout.Dimensions {
 	switch f.kind {
 	case kindText, kindInteger, kindNumber:
-		hint := ""
-		if f.spec.hasDef {
+		hint, name := "", f.spec.label()
+		switch {
+		case f.kind == kindText && f.set:
+			hint = `""` // emptied, it holds "", not the default
+		case f.spec.hasDef:
 			hint = scalarText(f.spec.def)
+			name += ", default " + hint
 		}
-		return editorBox(gtx, th, &f.editor, hint, false)
+		return editorBox(gtx, th, &f.editor, hint, name, false)
 	case kindRaw:
-		return editorBox(gtx, th, &f.editor, "", true)
+		return editorBox(gtx, th, &f.editor, "", f.spec.label(), true)
 	case kindBool:
 		gtx.Constraints.Min.X = 0
 		f.toggle.Toggle, f.toggle.Pressed = true, f.on
@@ -699,10 +747,11 @@ func (f *formField) control(gtx layout.Context, th *theme.Theme) layout.Dimensio
 		return f.toggle.Layout(gtx, th, text)
 	case kindEnum:
 		var items []layout.Widget
-		for i, v := range f.spec.enum {
+		labels := enumLabels(f.spec.enum)
+		for i := range f.spec.enum {
 			b := &f.choices[i]
 			b.Toggle, b.Pressed = true, f.choice == i
-			text := scalarText(v)
+			text := labels[i]
 			items = append(items, func(gtx layout.Context) layout.Dimensions { return b.Layout(gtx, th, text) })
 		}
 		return flow(gtx, gtx.Dp(theme.Space8), items)
@@ -720,7 +769,7 @@ func (f *formField) itemsLayout(gtx layout.Context, th *theme.Theme) layout.Dime
 			})
 		}))
 	}
-	if f.spec.maxItems == 0 || len(f.items) < f.spec.maxItems {
+	if f.spec.maxItems < 0 || len(f.items) < f.spec.maxItems {
 		children = append(children, layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 			gtx.Constraints.Min.X = 0
 			return f.add.Layout(gtx, th, "Add")
@@ -732,13 +781,13 @@ func (f *formField) itemsLayout(gtx layout.Context, th *theme.Theme) layout.Dime
 // layout draws item i of f.
 func (it *formItem) layout(gtx layout.Context, th *theme.Theme, f *formField, i int) layout.Dimensions {
 	gtx.Constraints.Min.X = gtx.Constraints.Max.X
-	it.remove.Description = fmt.Sprintf("Remove item %d", i+1)
+	it.remove.Description = fmt.Sprintf("Remove %s item %d", f.spec.label(), i+1)
 	var children []layout.FlexChild
 	if f.kind == kindList {
 		children = append(children, layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 			return layout.Flex{Alignment: layout.Middle}.Layout(gtx,
 				layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
-					return editorBox(gtx, th, &it.editor, "", false)
+					return editorBox(gtx, th, &it.editor, "", fmt.Sprintf("%s item %d", f.spec.label(), i+1), false)
 				}),
 				layout.Rigid(layout.Spacer{Width: theme.Space8}.Layout),
 				layout.Rigid(func(gtx layout.Context) layout.Dimensions {
@@ -796,7 +845,7 @@ func group(gtx layout.Context, th *theme.Theme, w layout.Widget) layout.Dimensio
 
 // editorBox draws e in a bordered box as wide as gtx allows, with hint
 // while it is empty, in the monospaced face for YAML.
-func editorBox(gtx layout.Context, th *theme.Theme, e *widget.Editor, hint string, mono bool) layout.Dimensions {
+func editorBox(gtx layout.Context, th *theme.Theme, e *widget.Editor, hint, name string, mono bool) layout.Dimensions {
 	pad := gtx.Dp(theme.Space8)
 	inner := gtx
 	inner.Constraints = layout.Constraints{Max: image.Pt(max(gtx.Constraints.Max.X-2*pad, 0), gtx.Constraints.Max.Y)}
@@ -826,9 +875,8 @@ func editorBox(gtx layout.Context, th *theme.Theme, e *widget.Editor, hint strin
 	semanticArea(gtx, r, func() {
 		semantic.Editor.Add(gtx.Ops)
 		semantic.LabelOp(e.Text()).Add(gtx.Ops)
-		if hint != "" {
-			semantic.DescriptionOp(hint).Add(gtx.Ops)
-		}
+		// Named by its setting, so even an empty one can be found.
+		semantic.DescriptionOp(name).Add(gtx.Ops)
 	})
 	return layout.Dimensions{Size: size}
 }

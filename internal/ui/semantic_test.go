@@ -164,3 +164,40 @@ func TestConfigDialogEditorsSeenByAnotherRouter(t *testing.T) {
 		t.Error("no editor holding Asia/Tokyo")
 	}
 }
+
+// An empty editor is named by its setting, for uidebug.
+func TestEmptyEditorNamedBySetting(t *testing.T) {
+	var r input.Router
+	var d ConfigDialog
+	d.Open("c", "calendar", `{"type": "object", "properties": {"title": {"type": "string"}}}`, nil)
+	var gtx layout.Context
+	for range 2 {
+		gtx = context(&r, image.Pt(1000, 700), time.Now())
+		d.Layout(gtx, testTheme)
+		r.Frame(gtx.Ops)
+	}
+	if _, ok := findSemantic(foreignSemantics(gtx.Ops), func(d input.SemanticDesc) bool {
+		return d.Class == semantic.Editor && d.Description == "title"
+	}); !ok {
+		t.Error("no editor named title")
+	}
+}
+
+// An emptied text field is not described with its default, which it
+// does not hold.
+func TestEmptiedEditorNotDescribedByDefault(t *testing.T) {
+	var r input.Router
+	var d ConfigDialog
+	d.Open("c", "clock", `{"type": "object", "properties": {"title": {"type": "string", "default": "X"}}}`, config.Settings{"title": ""})
+	var gtx layout.Context
+	for range 2 {
+		gtx = context(&r, image.Pt(1000, 700), time.Now())
+		d.Layout(gtx, testTheme)
+		r.Frame(gtx.Ops)
+	}
+	if _, ok := findSemantic(foreignSemantics(gtx.Ops), func(d input.SemanticDesc) bool {
+		return d.Class == semantic.Editor && d.Description == "title"
+	}); !ok {
+		t.Error("no editor described as title alone")
+	}
+}

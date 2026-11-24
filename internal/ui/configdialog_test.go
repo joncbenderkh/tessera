@@ -111,8 +111,8 @@ func TestParseForm(t *testing.T) {
 		t.Errorf("rows default %#v, want int64 10", fields[1].def)
 	}
 
-	if fields, ok := parseForm(""); !ok || fields != nil {
-		t.Errorf("no schema: %v %v", fields, ok)
+	if fields, ok := parseForm(""); ok || fields != nil {
+		t.Errorf("no schema: %v %v, want the settings as YAML", fields, ok)
 	}
 	for _, s := range []string{`{"type": "array"}`, `{"type": "object"}`, `nope`, `{"type": ["object", "null"], "properties": {"a": {}}}`} {
 		if _, ok := parseForm(s); ok {
@@ -211,13 +211,14 @@ func TestConfigDialogEdits(t *testing.T) {
 		t.Errorf("general %q, want %q", d.general, want)
 	}
 
-	// Items come and go, and blank ones in a list are dropped.
+	// Items come and go, and a blank text item is "", so the items,
+	// and the schema's problems with them, keep their places.
 	d.Open("c", "calendar", calendarSchema, nil)
 	sources := d.fields[0]
 	sources.items = append(sources.items, newItem(sources.spec, nil), newItem(sources.spec, nil))
 	sources.items[0].editor.SetText("/a.ics")
 	got, ok = submit(&d)
-	if want := (config.Settings{"sources": []any{"/a.ics"}}); !ok || !reflect.DeepEqual(got, want) {
+	if want := (config.Settings{"sources": []any{"/a.ics", ""}}); !ok || !reflect.DeepEqual(got, want) {
 		t.Errorf("saved %#v, want %#v", got, want)
 	}
 
@@ -329,5 +330,209 @@ func TestConfigDialogBadSchema(t *testing.T) {
 	}
 	if got, ok := submit(&d); !ok || !reflect.DeepEqual(got, settings) {
 		t.Errorf("saved %#v, %v", got, ok)
+	}
+}
+
+// A schema whose properties name none is edited whole, in YAML.
+func TestEmptyPropertiesEditedWhole(t *testing.T) {
+	var d ConfigDialog
+	d.Open("x", "x", `{"type": "object", "properties": {}, "additionalProperties": true}`, config.Settings{"a": int64(1)})
+	if d.whole == nil || len(d.fields) != 0 {
+		t.Errorf("whole %v, %d fields; want the settings as YAML", d.whole != nil, len(d.fields))
+	}
+}
+
+// Choices that would read alike are told apart.
+func TestEnumLabelsDistinct(t *testing.T) {
+	got := enumLabels([]any{"1", int64(1), "a", true, "true"})
+	want := []string{`"1"`, "1", "a", "true", `"true"`}
+	if !slices.Equal(got, want) {
+		t.Errorf("labels %q, want %q", got, want)
+	}
+}
+
+// A blank number in a list is a problem at its item, not dropped.
+func TestBlankNumberItemIsAProblem(t *testing.T) {
+	var d ConfigDialog
+	d.Open("x", "x", `{"type": "object", "properties": {"n": {"type": "array", "items": {"type": "integer"}}}}`,
+		config.Settings{"n": []any{int64(1), int64(2)}})
+	d.fields[0].items[0].editor.SetText("")
+	if _, problems := d.collect(); len(problems) != 1 || !slices.Equal(problems[0].Path, []string{"n", "0"}) {
+		t.Errorf("problems %v, want one at n[0]", problems)
+	}
+}
+
+// A setting the schema does not list can be removed, and is then left
+// out; others are kept.
+func TestExtraSettingRemoved(t *testing.T) {
+	var d ConfigDialog
+	d.Open("c", "calendar", `{"type": "object", "properties": {"a": {"type": "string"}}, "additionalProperties": false}`,
+		config.Settings{"a": "x", "refesh": int64(5), "other": "y"})
+	if d.drop["refesh"] == nil {
+		t.Fatal("no Remove for refesh")
+	}
+	var r input.Router
+	gtx := context(&r, image.Pt(1000, 700), time.Now())
+	d.Layout(gtx, testTheme)
+	r.Frame(gtx.Ops)
+	// Activate the button as its key does.
+	gtx = context(&r, image.Pt(1000, 700), time.Now())
+	gtx.Execute(key.FocusCmd{Tag: &d.drop["refesh"].Clickable})
+	d.Layout(gtx, testTheme)
+	r.Frame(gtx.Ops)
+	r.Queue(key.Event{Name: key.NameReturn, State: key.Press}, key.Event{Name: key.NameReturn, State: key.Release})
+	gtx = context(&r, image.Pt(1000, 700), time.Now())
+	d.Layout(gtx, testTheme)
+	r.Frame(gtx.Ops)
+	got, _ := d.collect()
+	if want := (config.Settings{"a": "x", "other": "y"}); !reflect.DeepEqual(got, want) {
+		t.Errorf("collected %#v, want %#v", got, want)
+	}
+}
+
+// Choices keep their exact numbers, and composed schemas are YAML.
+func TestSpecOfEnumsAndComposition(t *testing.T) {
+	f := specOf("n", []byte(`{"type": "integer", "enum": [9007199254740993, 1]}`), false, true)
+	if f.kind != kindEnum || f.enum[0] != int64(9007199254740993) {
+		t.Errorf("enum %#v kind %v, want the exact integer", f.enum, f.kind)
+	}
+	for _, s := range []string{
+		`{"type": "string", "oneOf": [{"const": "a"}, {"const": "b"}]}`,
+		`{"type": "string", "anyOf": [{"minLength": 2}]}`,
+		`{"type": "string", "$ref": "#/$defs/x"}`,
+	} {
+		if f := specOf("x", []byte(s), false, true); f.kind != kindRaw {
+			t.Errorf("%s: kind %v, want YAML", s, f.kind)
+		}
+	}
+	if got := enumLabels([]any{"", "a"}); got[0] != `""` {
+		t.Errorf("blank choice labelled %q", got[0])
+	}
+}
+
+// The schema for no settings shows the note, not a YAML box.
+func TestMaxPropertiesZeroTakesNoSettings(t *testing.T) {
+	var d ConfigDialog
+	d.Open("x", "x", `{"type": "object", "maxProperties": 0}`, nil)
+	if d.whole != nil || len(d.fields) != 0 {
+		t.Errorf("whole %v, %d fields; want none", d.whole != nil, len(d.fields))
+	}
+}
+
+// Return in a text field adds no newline to its value.
+func TestReturnAddsNoNewline(t *testing.T) {
+	var d ConfigDialog
+	d.Open("x", "x", `{"type": "object", "properties": {"tz": {"type": "string"}}}`, config.Settings{"tz": "UTC"})
+	var r input.Router
+	gtx := context(&r, image.Pt(1000, 700), time.Now())
+	d.Layout(gtx, testTheme)
+	r.Frame(gtx.Ops)
+	gtx = context(&r, image.Pt(1000, 700), time.Now())
+	gtx.Execute(key.FocusCmd{Tag: &d.fields[0].editor})
+	d.Layout(gtx, testTheme)
+	r.Frame(gtx.Ops)
+	r.Queue(key.Event{Name: key.NameReturn, State: key.Press}, key.Event{Name: key.NameReturn, State: key.Release})
+	gtx = context(&r, image.Pt(1000, 700), time.Now())
+	d.Layout(gtx, testTheme)
+	r.Frame(gtx.Ops)
+	if got := d.fields[0].editor.Text(); got != "UTC" {
+		t.Errorf("text %q after Return, want UTC", got)
+	}
+}
+
+// A list or mapping where a choice is due opens as YAML, without a
+// panic, and multi-line text keeps its lines, in YAML.
+func TestOddValuesOpenAsYAML(t *testing.T) {
+	var d ConfigDialog
+	d.Open("x", "x", `{"type": "object", "properties": {
+		"e": {"type": "string", "enum": ["a", "b"]},
+		"body": {"type": "string"},
+		"l": {"type": "array", "items": {"type": "string"}}}}`,
+		config.Settings{"e": []any{"a"}, "body": "line1\nline2", "l": []any{"a\nb"}})
+	for _, f := range d.fields {
+		if f.kind != kindRaw {
+			t.Errorf("%s: kind %v, want YAML", f.spec.name, f.kind)
+		}
+	}
+	got, problems := d.collect()
+	if len(problems) != 0 || got["body"] != "line1\nline2" || !reflect.DeepEqual(got["l"], []any{"a\nb"}) {
+		t.Errorf("collected %#v %v, want the values as they were", got, problems)
+	}
+}
+
+// A YAML field holding only a comment is left out, like a blank one.
+func TestCommentOnlyYAMLLeftOut(t *testing.T) {
+	var d ConfigDialog
+	d.Open("x", "x", `{"type": "object", "properties": {"o": {"type": "object"}}}`, nil)
+	d.fields[0].editor.SetText("# later")
+	got, _ := d.collect()
+	if _, ok := got["o"]; ok || d.fields[0].isSet() {
+		t.Errorf("collected %#v, set %v; want o left out", got, d.fields[0].isSet())
+	}
+}
+
+// While Save is under way, the form takes no edits.
+func TestNoEditsWhileSaving(t *testing.T) {
+	var d ConfigDialog
+	d.Open("x", "x", `{"type": "object", "properties": {"tz": {"type": "string"}}}`, config.Settings{"tz": "A"})
+	d.busy = true
+	var r input.Router
+	gtx := context(&r, image.Pt(1000, 700), time.Now())
+	d.Layout(gtx, testTheme)
+	r.Frame(gtx.Ops)
+	gtx = context(&r, image.Pt(1000, 700), time.Now())
+	gtx.Execute(key.FocusCmd{Tag: &d.fields[0].editor})
+	d.Layout(gtx, testTheme)
+	r.Frame(gtx.Ops)
+	r.Queue(key.EditEvent{Text: "B"})
+	gtx = context(&r, image.Pt(1000, 700), time.Now())
+	d.Layout(gtx, testTheme)
+	r.Frame(gtx.Ops)
+	if got := d.fields[0].editor.Text(); got != "A" {
+		t.Errorf("text %q while saving, want A", got)
+	}
+}
+
+// maxItems 0 allows none, and composed items are YAML.
+func TestSpecOfMaxItemsAndComposedItems(t *testing.T) {
+	if f := specOf("l", []byte(`{"type": "array", "items": {"type": "string"}, "maxItems": 0}`), false, true); f.maxItems != 0 {
+		t.Errorf("maxItems %d, want 0", f.maxItems)
+	}
+	if f := specOf("l", []byte(`{"type": "array", "items": {"type": "string"}}`), false, true); f.maxItems != -1 {
+		t.Errorf("maxItems %d, want -1 for no limit", f.maxItems)
+	}
+	f := specOf("l", []byte(`{"type": "array", "items": {"type": "object", "properties": {"name": {"type": "string"}}, "allOf": [{"required": ["id"]}]}}`), false, true)
+	if f.kind != kindRaw {
+		t.Errorf("composed items: kind %v, want YAML", f.kind)
+	}
+}
+
+// An integer field takes whole numbers however written, as the schema
+// does.
+func TestParseScalarWholeNumbers(t *testing.T) {
+	for text, want := range map[string]any{"3": int64(3), "3.0": int64(3), "1e3": int64(1000), "-9007199254740992.0": int64(-9007199254740992)} {
+		if v, set, problem := parseScalar(kindInteger, text); !set || problem != "" || v != want {
+			t.Errorf("%q: %v %v %q, want %v", text, v, set, problem, want)
+		}
+	}
+	for _, text := range []string{"3.5", "inf", "NaN", "x", "6/2", "1e20", "9007199254740993.0", "0x10", "0b11", "1_000"} {
+		if _, _, problem := parseScalar(kindInteger, text); problem == "" {
+			t.Errorf("%q taken as a whole number", text)
+		}
+	}
+}
+
+// A number field reads decimals only, whole ones exactly and within
+// ±2^53 however written.
+func TestParseScalarNumbers(t *testing.T) {
+	for text, want := range map[string]any{"3": int64(3), "3.0": 3.0, "1e15": 1e15, "-.5": -0.5} {
+		if v, set, problem := parseScalar(kindNumber, text); !set || problem != "" || v != want {
+			t.Errorf("%q: %v %v %q, want %v", text, v, set, problem, want)
+		}
+	}
+	for _, text := range []string{"0x10", "1_0", "0x1p4", "inf", "9007199254740993", "9007199254740993.0", "9007199254740993e0", "1e20", "1e400"} {
+		if _, _, problem := parseScalar(kindNumber, text); problem == "" {
+			t.Errorf("%q taken as a number", text)
+		}
 	}
 }
