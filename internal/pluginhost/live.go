@@ -19,6 +19,7 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/durationpb"
 
+	"github.com/joncbenderkh/tessera/internal/config"
 	tesserav1 "github.com/joncbenderkh/tessera/proto/tessera/v1"
 )
 
@@ -171,6 +172,60 @@ func (w *live) run() (end, error) {
 		}
 		return end{}, false, nil
 	}
+	// tryOut configures the plugin with t's settings, which it keeps if
+	// it takes them, and answers t. One that rejects them is configured
+	// again with its own. It reports whether run ends, and how.
+	tryOut := func(t trial) (end, bool, error) {
+		cfg, columns := m.config(pn)
+		cfg.Settings = t.settings
+		stop, _, err := w.call(func(ctx context.Context) error {
+			return configure(ctx, inst, cfg, columns, m.opts.CallTimeout)
+		})
+		if stop != nil {
+			if stop.exited {
+				t.reply <- ErrTrialExited
+			} else {
+				t.reply <- ErrInterrupted
+			}
+			return *stop, true, nil
+		}
+		var rejected *RejectedError
+		var invalid *config.SettingsError
+		if errors.As(err, &rejected) || errors.As(err, &invalid) {
+			t.reply <- err
+			m.event(pn, "new settings tried: %v", err)
+			return reconfigure("settings tried")
+		}
+		if status.Code(err) == codes.Unavailable { // status.Code sees through the wrapping
+			// The connection went first: the plugin may be exiting,
+			// as the answer can beat the news of its exit.
+			select {
+			case <-inst.Done():
+				err = ErrTrialExited
+			case <-time.After(time.Second):
+			case <-pn.ctx.Done():
+				err = ErrInterrupted
+			}
+		}
+		t.reply <- err
+		if err != nil {
+			var hung hangError
+			if Retryable(err) && !errors.As(err, &hung) && !answered(err) {
+				if stop := w.settle(); stop != nil {
+					return *stop, true, nil
+				}
+			}
+			return end{}, true, err
+		}
+		w.alive()
+		m.event(pn, "new settings tried; plugin configured with them")
+		if w.polled && !w.off {
+			if stop, err := render(); stop != nil || err != nil {
+				return orClose(stop), true, err
+			}
+		}
+		return end{}, false, nil
+	}
 	for {
 		// An idle wait of more than a tick or two means the clock
 		// jumped, as across a sleep on some systems, rather than a call
@@ -249,6 +304,11 @@ func (w *live) run() (end, error) {
 				return end{restart: true, changed: true}, nil
 			}
 			if e, done, err := reconfigure("settings or size changed"); done {
+				return e, err
+			}
+		case t := <-pn.tries:
+			resumed()
+			if e, done, err := tryOut(t); done {
 				return e, err
 			}
 		case <-pn.reshown:

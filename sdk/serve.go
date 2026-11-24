@@ -38,7 +38,9 @@ type Plugin struct {
 	// Description is one line for the panel picker.
 	Description string
 	// ConfigSchema is a JSON Schema (draft 2020-12) for the panel's
-	// settings. Empty means the panel takes no settings.
+	// settings. Empty means the host does not check them; declare
+	// {"type": "object", "maxProperties": 0} for a panel that takes
+	// none.
 	ConfigSchema string
 	// DefaultSize is the size a new panel gets. A zero dimension means 1.
 	DefaultSize Size
@@ -97,7 +99,8 @@ type Config struct {
 	PanelID string
 	// Settings is the panel's settings block, with the JSON data model:
 	// objects are map[string]any, arrays []any, and every number a
-	// float64. The host does not validate them against the schema yet.
+	// float64. The host has left out those set to null and, if it
+	// could compile the schema, checked them against it.
 	Settings map[string]any
 	// Size is the panel's size in grid cells, as the config file has
 	// it.

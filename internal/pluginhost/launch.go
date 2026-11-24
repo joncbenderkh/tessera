@@ -25,6 +25,7 @@ import (
 	"google.golang.org/grpc/status"
 
 	"github.com/joncbenderkh/tessera"
+	"github.com/joncbenderkh/tessera/internal/config"
 	tesserav1 "github.com/joncbenderkh/tessera/proto/tessera/v1"
 )
 
@@ -77,6 +78,33 @@ type Instance struct {
 	rpc     plugin.ClientProtocol
 	runner  *procRunner
 	outputs []*lineWriter
+
+	schemaOnce sync.Once
+	schema     *config.Schema
+	schemaErr  error
+}
+
+// checkSettings checks settings against the plugin's config schema.
+// One the host cannot compile, as with a pattern Go's regexp lacks or a
+// reference to another document, checks nothing: the plugin checks its
+// own settings (see schemaError).
+func (inst *Instance) checkSettings(settings config.Settings) error {
+	if inst.schemaError() != nil {
+		return nil
+	}
+	if problems := inst.schema.Check(settings); problems != nil {
+		return &config.SettingsError{Problems: problems}
+	}
+	return nil
+}
+
+// schemaError is why the plugin's config schema does not compile, if
+// it does not.
+func (inst *Instance) schemaError() error {
+	inst.schemaOnce.Do(func() {
+		inst.schema, inst.schemaErr = config.CompileSchema(inst.Info.GetConfigSchema())
+	})
+	return inst.schemaErr
 }
 
 // Launch starts the plugin called name in dir, checks its versions, and

@@ -164,6 +164,40 @@ the window takes the file's layout when it reads the edit.
 
 ### Settings
 
+**Configure…** in a panel's menu, in edit mode or not, opens a form
+for the panel's settings, made from the config schema its plugin
+declares: a text field, number field, toggle, or set of choices per
+setting, a list with Add and Remove for one that holds several, and
+YAML text for anything else. A setting stays out of the file, so the
+plugin's default applies, until it is given a value; **Default**
+beside a setting leaves it out again. An emptied text field holds
+`""`, an emptied list `[]`, and a blank text item in a list `""`; a
+blank number in a list must be filled in or removed. A number field
+takes decimals (`3`, `-0.5`, `1e3`), and whole numbers only within
+±2^53, however written. Settings in the
+file the schema does not list are kept as they are, each with a
+**Remove** to leave it out, as for a misspelt name. **Save** checks the settings
+against the schema, and, if the panel is running, gives them to its
+plugin first; if either refuses them, the form says why, at the
+setting where it can, and nothing is saved. Nothing is saved either if
+the file changed the panel's settings or plugin while the form was
+open: reopen **Configure…** to start from the file. Otherwise the
+settings are saved at once, like a layout change, and the panel shows
+them. The
+form needs the plugin to have started at least once; for a panel whose
+plugin is missing, edit the file.
+
+Settings in the file are checked against the plugin's schema too,
+whenever the plugin starts or the file changes. A panel whose settings
+fail it is not configured: it shows an error tile listing the problems
+(**Logs** has them too), and starts again once its settings are fixed,
+from the form or in the file. The settings of a plugin that declares
+no schema are not checked by tessera, and the form edits them as YAML.
+A setting left blank, such as `title:`, is null, which means
+the plugin's default, as a missing one does, at any depth: a blank
+`label:` in a clock of a list of clocks is left out too. A blank item
+in a list stays, as null, since its place counts.
+
 A panel's settings reach its plugin as JSON-model values, so tessera
 reads them strictly by YAML 1.2's core schema, whatever the rest of the
 YAML tooling does: `017` is 17, `1e5` is a number, `1_000`, `0b101`,

@@ -77,7 +77,11 @@ can start it.
 - `Version` is the plugin's semver version.
 - `Description` is one line for the panel picker.
 - `ConfigSchema` is a JSON Schema (draft 2020-12) for the panel's
-  settings, if it takes any.
+  settings. Without one, the host does not check them, and the
+  Configure dialog edits them as YAML; a plugin that takes none can
+  declare `{"type": "object", "maxProperties": 0}`. The host
+  checks the settings against it before each `Configure`, and builds
+  the Configure dialog's form from it (see [Settings form](#settings-form)).
 - `DefaultSize` is the size, in grid cells, a new panel gets.
 - `MinBody` is the least room, in dp at the default text size, the
   view needs below the tile's head. The host scales it with the
@@ -189,7 +193,44 @@ live settings. An error from `Decode` or `InvalidSettings` rejects the
 settings: the panel shows the message until the user changes them. Any
 other error fails the plugin, which the host restarts, so a plugin whose
 data source is down accepts its settings and shows the outage in its
-view.
+view. When the user saves new settings from the Configure dialog, a
+live plugin is configured with them before they are saved; a rejection
+then shows its message in the dialog, and the plugin is configured
+again with the settings it had. Keep `Configure` free of side effects
+that a rejection would have to undo.
+
+### Settings form
+
+The Configure dialog, from a panel's menu, is a form made from
+`ConfigSchema`. It reads the schema's top-level `properties`, in the
+order written, and gives each a control by its schema:
+
+| Schema | Control |
+|---|---|
+| `"type": "string"` | a text field |
+| `"type": "integer"` or `"number"` | a text field, read as a number |
+| `"type": "boolean"` | an On/Off toggle |
+| `enum` of strings, numbers, or booleans | a button per value |
+| `"type": "array"` of strings or numbers | a text field per item, with Add and Remove |
+| `"type": "array"` of objects whose properties are all strings, numbers, booleans, or `enum`s (no lists) | a group of fields per item, with Add and Remove |
+
+Any other property (a nested object, `oneOf`, several types, and so
+on), and any value that does not fit its property's type, is edited as
+YAML text, as is a string of more than one line, since the text fields
+hold one. A schema without top-level `properties` gets one YAML field
+for all the settings. `title` replaces the property's name as its
+label, `description` is shown under it with the `default`, and
+properties named in `required` are marked. A setting is left out of
+the settings, so the plugin's default applies, until the user gives it
+a value, and again after its **Default** button (or a second click on
+the chosen value of a choice). A text field emptied after that holds
+`""`, and a list emptied `[]`; a blank text item in a list holds `""`,
+and a blank number item must be filled in or removed; a blank number
+or YAML field is left out. A schema the host cannot compile (see
+[protocol.md](protocol.md#settings)), or none, gets one YAML field.
+Settings the schema does not list are kept as they are, each with a
+**Remove** button. Write descriptions for the user: they are the
+form's help text.
 
 ## Input events
 

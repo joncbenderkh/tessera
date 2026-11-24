@@ -76,6 +76,12 @@ dialogs). Edit mode must be able to re-enable any disabled panel.
   own emitter. It is saved atomically (temp file and rename) and watched
   for changes through `fsnotify`. Rewrites by the host drop comments.
   The schema is versioned (`version: 1`); see `docs/config.md`.
+- **Settings schemas:** plugins' config schemas (JSON Schema draft
+  2020-12) are compiled and checked with
+  `github.com/santhosh-tekuri/jsonschema/v6` (Apache-2.0), wrapped in
+  `internal/config/schema.go`; no referenced document is ever loaded.
+  A schema that does not compile checks nothing (the plugin checks its
+  own settings), and a null setting means the plugin's default.
 - **Command lines:** the host and `cmd/build` parse theirs with
   `github.com/spf13/cobra` (GNU-style `--flags`; stray arguments are
   errors), the owner's choice.
@@ -101,13 +107,17 @@ dialogs). Edit mode must be able to re-enable any disabled panel.
 - `cmd/build`: the developer build: the host and every first-party
   plugin, installed into the plugins directory (`go run ./cmd/build`).
 - `internal/config`: loading, validating, saving, and watching the user
-  config, and the layout changes edit mode makes (`layout.go`).
+  config, the layout and settings changes the window makes
+  (`layout.go`), and checking settings against a plugin's config schema
+  (`schema.go`).
 - `internal/ui`: the host-owned UI drawn with Gio: the window header,
   the grid and its tiles (placement in `Arrange`, the menu, the
   starting and error bodies, and edit mode's drags and keys), the
   edit bar, the plugins' views in them (`view*.go`), the button, the
-  toast and dialog primitives, and the measures first-party plugins'
-  tests use to check that a view fits a tile (`measure.go`). An
+  toast and dialog primitives, the Configure dialog's settings form
+  (`configdialog.go`, made from the schema in `settingsform.go`), and
+  the measures first-party plugins' tests use to check that a view
+  fits a tile (`measure.go`). An
   element that takes input gives its semantics (class, label,
   description) in a `semanticArea` of its own, which keeps them
   readable by `uidebug`'s router; a scrolling list or grid marks the
@@ -244,9 +254,9 @@ plugin status, the Edit layout toggle, and a theme toggle), dark and
 light themes saved in the config, and toast and dialog primitives
 (#9). The grid lays the enabled panels out, compacted upward and
 flowed into fewer columns in narrow windows, as tiles with a title,
-the plugin on hover, an options menu (Disable panel works; Configure…
-is a stub until #16), and a body for starting and failed panels, with
-Restart and Logs; config changes apply live (#10). A
+the plugin on hover, an options menu (Configure… and Disable panel),
+and a body for starting and failed panels, with Restart and Logs;
+config changes apply live (#10). A
 live tile draws its plugin's view: every widget of view schema v1, in
 `internal/ui/view*.go`, with tables and lists that scroll, send
 activate and scroll events, and keep the row last activated (#11).
@@ -269,6 +279,10 @@ default size; plugins are told the size they are shown at, and a
 view that does not fit fades out where it is cut (#52). tessera
 supports Linux alone (#49). `cmd/uidrive` drives the window by
 element name on a private X display, for trying UI changes (#61).
+Configure… opens a form made from the plugin's config schema, which
+tries the settings on the live plugin before saving them; the host
+checks every panel's settings against its plugin's schema before
+configuring it (#16).
 
 ## Git workflow
 

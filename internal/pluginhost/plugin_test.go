@@ -226,7 +226,15 @@ func (testPlugin) GRPCClient(context.Context, *plugin.GRPCBroker, *grpc.ClientCo
 //   - rejects-later: rejects the settings of each Configure after the
 //     first.
 //   - hangs-configure-later: each Configure after the first never
-//     answers.
+//     answers, and says "configure hangs" on stderr.
+//   - schema: declares a config schema with one string setting,
+//     timezone, rejects the timezone "Mars" in Configure, and exits
+//     on "Crash". The
+//     rejects modes declare it too.
+//   - bad-schema: declares a config schema that does not compile.
+//   - no-schema: declares no config schema, so the host does not
+//     check its settings.
+//     The other modes take any.
 //
 // Any other name is a well-behaved plugin of that name, which reports
 // each Configure on stderr, and whose Watch sends a view naming it,
@@ -243,20 +251,30 @@ type server struct {
 	deep    bool     // polled-event-deep: an event came since the last Render
 }
 
+// testSchema is the schema plugin's config schema.
+const testSchema = `{"type": "object", "properties": {"timezone": {"type": "string"}}, "additionalProperties": false}`
+
 func (s *server) Describe(ctx context.Context, _ *tesserav1.DescribeRequest) (*tesserav1.DescribeResponse, error) {
 	resp := &tesserav1.DescribeResponse{
 		Name:            s.mode,
 		Version:         "0.0.0",
 		ProtocolVersion: tesserav1.ProtocolVersion,
 		ViewVersion:     tesserav1.ViewVersion,
+		ConfigSchema:    `{"type": "object"}`,
 	}
 	switch s.mode {
+	case "no-schema":
+		resp.ConfigSchema = ""
 	case "unimplemented":
 		return s.UnimplementedPanelServiceServer.Describe(ctx, nil)
 	case "misnamed", "misnamed-fails-shutdown":
 		resp.Name = "other"
 	case "view-nine":
 		resp.ViewVersion = 9
+	case "schema", "rejects", "rejects-later":
+		resp.ConfigSchema = testSchema
+	case "bad-schema":
+		resp.ConfigSchema = `{"type": 3}`
 	case "slow-describe":
 		<-ctx.Done()
 		return nil, ctx.Err()
@@ -305,6 +323,13 @@ func (s *server) Configure(ctx context.Context, req *tesserav1.ConfigureRequest)
 	switch s.mode {
 	case "rejects":
 		return nil, status.Error(codes.InvalidArgument, "timezone: unknown")
+	case "schema":
+		switch req.GetSettings().GetFields()["timezone"].GetStringValue() {
+		case "Mars":
+			return nil, status.Error(codes.InvalidArgument, "timezone: unknown")
+		case "Crash":
+			os.Exit(5)
+		}
 	case "rejects-later":
 		s.mu.Lock()
 		s.configs++
@@ -319,6 +344,7 @@ func (s *server) Configure(ctx context.Context, req *tesserav1.ConfigureRequest)
 		later := s.configs > 1
 		s.mu.Unlock()
 		if later {
+			fmt.Fprintln(os.Stderr, "configure hangs")
 			<-ctx.Done()
 			return nil, ctx.Err()
 		}

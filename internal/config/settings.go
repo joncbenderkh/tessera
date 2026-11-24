@@ -14,6 +14,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/goccy/go-yaml/ast"
+	"github.com/goccy/go-yaml/parser"
 	"github.com/goccy/go-yaml/token"
 )
 
@@ -433,4 +434,45 @@ func parseInt(text, digits string, base, line int) (any, error) {
 		return nil, fmt.Errorf("line %d: %w", line, errInexact(text))
 	}
 	return i, nil
+}
+
+// ParseValue reads one settings value written in YAML, as the Configure
+// dialog's text fields hold them, by the rules settings in the config
+// file follow. Blank text is nil.
+func ParseValue(text string) (any, error) {
+	if strings.TrimSpace(text) == "" {
+		return nil, nil
+	}
+	file, err := parser.ParseBytes([]byte(text), 0)
+	if err != nil {
+		return nil, err
+	}
+	// Directives, markers, and comments make no value.
+	docs := slices.DeleteFunc(slices.Clone(file.Docs), func(d *ast.DocumentNode) bool {
+		_, directive := d.Body.(*ast.DirectiveNode)
+		return d.Body == nil || directive
+	})
+	if len(docs) == 0 {
+		return nil, nil // blank
+	}
+	if len(docs) != 1 {
+		return nil, errors.New("want one YAML value, not several documents")
+	}
+	file.Docs = docs
+	// A value in settings, where merge keys are allowed, as in the file.
+	var err2 error
+	ast.Walk(sharingCheck{inSettings: true, err: &err2}, file.Docs[0])
+	if err2 != nil {
+		return nil, err2
+	}
+	return resolve(file.Docs[0].Body)
+}
+
+// FormatValue writes v in YAML, as ParseValue reads it back.
+func FormatValue(v any) (string, error) {
+	var b strings.Builder
+	if err := writeValue(&b, v, -2, "settings"); err != nil {
+		return "", err
+	}
+	return strings.TrimSuffix(strings.TrimPrefix(strings.TrimPrefix(b.String(), " "), "\n"), "\n"), nil
 }
