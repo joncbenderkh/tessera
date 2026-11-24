@@ -288,7 +288,10 @@ Configure… opens a form made from the plugin's config schema, which
 tries the settings on the live plugin before saving them; the host
 checks every panel's settings against its plugin's schema before
 configuring it (#16). The weather panel shows the current conditions
-at a place from Open-Meteo (#22).
+at a place from Open-Meteo (#22). A click on the header's plugin
+status lists the panels needing attention, each with its Restart and
+Logs; a window 1000 dp wide or narrower shows the status's dot alone
+(#17).
 
 ## Git workflow
 

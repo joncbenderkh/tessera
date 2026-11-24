@@ -37,6 +37,9 @@ type Button struct {
 	// Draw, if set, draws the icon in place of the label, in a square
 	// of the given side.
 	Draw func(gtx layout.Context, side int, c color.NRGBA)
+	// Content, if set, draws what the button shows in place of the
+	// label, which still names it for screen readers.
+	Content func(gtx layout.Context, fg color.NRGBA) layout.Dimensions
 }
 
 // Layout draws the button with label as its text.
@@ -67,6 +70,9 @@ func (b *Button) Layout(gtx layout.Context, th *theme.Theme, label string) layou
 		// A label too long for the width given is cut short.
 		gtx.Constraints.Max.X = max(gtx.Constraints.Max.X-2*gtx.Dp(pad), 0)
 		text := recordLabel(gtx, th, label, size, fg, theme.Body)
+		if b.Content != nil {
+			text = record(gtx, func(gtx layout.Context) layout.Dimensions { return b.Content(gtx, fg) })
+		}
 		if b.Draw != nil {
 			side := gtx.Sp(size)
 			text = record(gtx, func(gtx layout.Context) layout.Dimensions {

@@ -148,6 +148,7 @@ func run(window *app.Window, plugins *pluginhost.Manager, pluginDir string, cfg 
 		header    ui.Header
 		grid      ui.Grid
 		bar       ui.EditBar
+		attention ui.StatusList // the panels needing attention, from the header's status
 		dialog    ui.Dialog
 		configure ui.ConfigDialog
 		answers   = make(chan tried, 1) // TrySettings' answers for the Configure dialog
@@ -196,6 +197,13 @@ func run(window *app.Window, plugins *pluginhost.Manager, pluginDir string, cfg 
 				w.dark = !w.dark
 				saver.save(w.dark)
 			}
+			if header.Status.Clicked(behind) {
+				attention.Toggle(behind.Focused(&header.Status.Clickable))
+				if attention.IsOpen() {
+					grid.CloseMenus() // one menu at a time
+					bar.Close()
+				}
+			}
 			if header.Edit.Clicked(behind) {
 				editing = !editing
 				if editing {
@@ -241,7 +249,7 @@ func run(window *app.Window, plugins *pluginhost.Manager, pluginDir string, cfg 
 				top += dims.Size.Y
 				actions = append(actions, chosen...)
 			}
-			grid.Covered = editing && bar.MenuShown()
+			grid.Covered = editing && bar.MenuShown() || attention.IsOpen()
 			content := behind
 			content.Constraints = layout.Exact(image.Pt(gtx.Constraints.Max.X, max(gtx.Constraints.Max.Y-top, 0)))
 			st := op.Offset(image.Pt(0, top)).Push(gtx.Ops)
@@ -252,6 +260,10 @@ func run(window *app.Window, plugins *pluginhost.Manager, pluginDir string, cfg 
 				gtx.Execute(op.InvalidateCmd{})
 			}
 			actions = append(actions, chosen...)
+			if grid.MenuOpened() || bar.MenuOpened() {
+				attention.Close()
+			}
+			actions = append(actions, attention.Layout(behind, th, states, header.StatusAnchor(), &header.Status)...)
 			plugins.SetColumns(grid.ShownColumns())
 			for _, a := range actions {
 				if changeFor(a, w.cfg) != nil {
