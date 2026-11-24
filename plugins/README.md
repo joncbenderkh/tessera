@@ -27,6 +27,7 @@ builds the host as well.
 | `disk` | How full a file system is, on a gauge (warning from 80%, error from 95%), with the space free, its device, and its file system type | `mount` (default `/`); `interval` (default `30s`) |
 | `network` | Download and upload rates, in bits per second, each with a sparkline | `interface` (default: the physical interfaces added up, or every one but loopback if there is none); `interval` (default `2s`) |
 | `processes` | A table of processes; activating a row shows the process's details below the table, and activating it again hides them, though the row stays highlighted until another is activated | `sort`: `cpu` (default), `memory`, `pid`, or `name`; `rows`, 1 to 100 (default 10); `interval` (default `2s`) |
+| `weather` | The temperature now, the sky, how warm it feels, and the humidity at one place, from [Open-Meteo](https://open-meteo.com), with when they are for; the title names the place found, with its region or country | `location`: a place to look up by name, such as `Berlin`, optionally followed by its region or country after commas to pick among places of that name, as in `Springfield, Illinois`; or `latitude` and `longitude` instead, in degrees (not both). `label` (default: the place's name); `units`: `metric` (°C, the default) or `imperial` (°F); `refresh` (`5m`–`6h`, default `15m`) |
 
 `interval` is a duration from `1s` to `1h`, such as `2s` or `1m`.
 Changing it, or what a panel shows, clears its sparklines. A process's
@@ -44,6 +45,16 @@ mounted on it. A sample that takes longer than twice the interval
 shows as an error, and so do a process's details that take as long. A
 selected process that exits shows so once, and its details then
 close.
+
+The `weather` panel needs no API key: Open-Meteo is free for
+non-commercial use, and its data (CC BY 4.0) is credited in the
+panel. It looks a location up once, by name in English, and takes the
+first place found that lies in every region or country given. Its
+conditions are updated every 15 minutes. When a fetch fails, the
+panel keeps showing the last conditions, with when they are for and
+why they were not updated, and tries again after a minute, then after
+twice as long each time, up to `refresh`; conditions older than twice
+`refresh` and 15 minutes show as not updated even without a failure.
 
 Text settings are strings: quote one that would read as a number or
 boolean, such as `title: "2026"`, or the panel rejects it.

@@ -90,6 +90,11 @@ dialogs). Edit mode must be able to re-enable any disabled panel.
   input and screenshots, rather than running xdotool or ImageMagick.
   It finds elements through Gio's semantic tree, which the host serves
   only with its hidden `--debug-socket` flag.
+- **Weather data:** the `weather` plugin uses
+  [Open-Meteo](https://open-meteo.com) (#22), the owner's choice: no
+  API key or sign-up, worldwide, current conditions and a place-name
+  search in one service. Its free tier is for non-commercial use, and
+  its data is CC BY 4.0, which the panel credits.
 - **Module path:** `github.com/joncbenderkh/tessera`.
 
 ## Layout
@@ -282,7 +287,8 @@ element name on a private X display, for trying UI changes (#61).
 Configure… opens a form made from the plugin's config schema, which
 tries the settings on the live plugin before saving them; the host
 checks every panel's settings against its plugin's schema before
-configuring it (#16).
+configuring it (#16). The weather panel shows the current conditions
+at a place from Open-Meteo (#22).
 
 ## Git workflow
 
