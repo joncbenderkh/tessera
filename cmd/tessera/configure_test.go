@@ -6,6 +6,7 @@ import (
 	"errors"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"testing"
 
 	"github.com/joncbenderkh/tessera/internal/config"
@@ -51,7 +52,7 @@ func TestSettingsTried(t *testing.T) {
 			w, layouts, applied := configureWindow(t)
 			var d ui.ConfigDialog
 			d.Open("a", "clock", `{"type": "object", "properties": {"timezone": {"type": "string"}}}`, nil)
-			w.settingsTried(&d, tried{"a", utc, tc.err})
+			w.settingsTried(&d, tried{panel: "a", plugin: "clock", settings: utc, err: tc.err})
 			if d.IsOpen() == tc.saved {
 				t.Errorf("open %v after %v", d.IsOpen(), tc.err)
 			}
@@ -75,10 +76,10 @@ func TestSettingsTried(t *testing.T) {
 // meanwhile keeps the dialog open.
 func TestSetSettingsUnchanged(t *testing.T) {
 	w, layouts, applied := configureWindow(t)
-	if err := w.setSettings("a", config.Settings{}); err != nil {
+	if err := w.setSettings(tried{panel: "a", plugin: "clock", settings: config.Settings{}}); err != nil {
 		t.Fatal(err)
 	}
-	if err := w.setSettings("z", nil); !errors.Is(err, config.ErrNoPanel) {
+	if err := w.setSettings(tried{panel: "z"}); !errors.Is(err, config.ErrNoPanel) {
 		t.Errorf("unknown panel: %v", err)
 	}
 	layouts.wait()
@@ -100,5 +101,85 @@ func TestOpenConfigure(t *testing.T) {
 	openConfigure(&d, &toast, cfg, states, "a")
 	if !d.IsOpen() || d.Panel != "a" || d.Plugin != "clock" {
 		t.Errorf("open %v for %q of %q", d.IsOpen(), d.Panel, d.Plugin)
+	}
+}
+
+// Settings the plugin gets alike are the same: a null setting is a
+// missing one, and 3 is 3.0.
+func TestSameSettingsAsThePluginSeesThem(t *testing.T) {
+	file := config.Settings{"ratio": 3.0, "title": nil, "list": []any{int64(1), "a"}}
+	form := config.Settings{"ratio": int64(3), "list": []any{1.0, "a"}}
+	if !sameSettings(file, form) {
+		t.Error("settings alike to the plugin are not the same")
+	}
+	if sameSettings(file, config.Settings{"ratio": int64(4)}) {
+		t.Error("different settings are the same")
+	}
+}
+
+// A panel the file changed while the dialog was open is not saved over:
+// its settings, or its plugin.
+func TestStaleSaveRefused(t *testing.T) {
+	utc := config.Settings{"timezone": "UTC"}
+	for name, change := range map[string]func(*config.Panel){
+		"settings": func(p *config.Panel) { p.Settings = config.Settings{"hour12": true} },
+		"plugin":   func(p *config.Panel) { p.Plugin = "worldclock" },
+	} {
+		t.Run(name, func(t *testing.T) {
+			w, _, applied := configureWindow(t)
+			var reconfigured []string
+			w.reconfigure = func(id string) { reconfigured = append(reconfigured, id) }
+			var d ui.ConfigDialog
+			d.Open("a", "clock", `{"type": "object", "properties": {"timezone": {"type": "string"}}}`, nil)
+			change(&w.cfg.Panels[0])
+			tr := tried{panel: "a", plugin: "clock", settings: utc}
+			if !w.changedSince(tr) {
+				t.Error("changedSince missed the change")
+			}
+			w.settingsTried(&d, tr)
+			if !d.IsOpen() || len(*applied) != 0 {
+				t.Errorf("saved over a changed panel: open %v, applied %d", d.IsOpen(), len(*applied))
+			}
+			// The plugin took the settings tried: it gets the file's back.
+			if !slices.Equal(reconfigured, []string{"a"}) {
+				t.Errorf("reconfigured %v, want [a]", reconfigured)
+			}
+		})
+	}
+}
+
+// Whole numbers past 2^53 differ when they do, though a plugin gets
+// them alike, so the edit is saved.
+func TestSameSettingsLargeWholeNumbers(t *testing.T) {
+	if sameSettings(config.Settings{"n": int64(9007199254740993)}, config.Settings{"n": int64(9007199254740992)}) {
+		t.Error("different whole numbers are the same")
+	}
+	if sameSettings(config.Settings{"n": int64(9007199254740993)}, config.Settings{"n": 9007199254740992.0}) {
+		t.Error("a whole number and a float64 it rounds to are the same")
+	}
+}
+
+// A panel the file changes after the window's check, before the save is
+// written, is not saved over either.
+func TestStaleSaveRefusedAsWritten(t *testing.T) {
+	w, layouts, _ := configureWindow(t)
+	hour12 := config.Settings{"hour12": true}
+	if err := config.Update(layouts.path, func(c *config.Config) error { return c.SetSettings("a", hour12) }); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.setSettings(tried{panel: "a", plugin: "clock", settings: config.Settings{"timezone": "UTC"}}); err != nil {
+		t.Fatal(err)
+	}
+	layouts.wait()
+	select {
+	case err := <-layouts.done:
+		if !errors.Is(err, errChanged) {
+			t.Errorf("write error %v, want errChanged", err)
+		}
+	default:
+		t.Error("written over the file's change")
+	}
+	if saved, _ := readConfig(t, layouts); !reflect.DeepEqual(saved.Panels[0].Settings, hour12) {
+		t.Errorf("file has settings %v, want %v", saved.Panels[0].Settings, hour12)
 	}
 }

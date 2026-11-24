@@ -264,8 +264,11 @@ type windowConfig struct {
 	themes   *themeSaver
 	toast    *ui.Toaster
 	apply    func(config.Config) // gives the plugins a config
-	redraw   func()              // asks for a frame
-	added    func(id string)     // is told the id of each panel Add panel makes, if set
+	// reconfigure has the panel's plugin configured again from the
+	// config, as after a trial whose settings were not saved.
+	reconfigure func(id string)
+	redraw      func()          // asks for a frame
+	added       func(id string) // is told the id of each panel Add panel makes, if set
 }
 
 // takeReload takes a reload of the config file, if one is waiting.

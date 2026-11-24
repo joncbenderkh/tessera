@@ -127,15 +127,16 @@ func run(window *app.Window, plugins *pluginhost.Manager, pluginDir string, cfg 
 	shaper := theme.NewShaper(true)
 	var toast ui.Toaster
 	w := &windowConfig{
-		cfg:      cfg,
-		dark:     cfg.Theme != config.ThemeLight,
-		fileDark: cfg.Theme != config.ThemeLight,
-		reloads:  reloads,
-		layouts:  layouts,
-		themes:   saver,
-		toast:    &toast,
-		apply:    plugins.Apply,
-		redraw:   window.Invalidate,
+		cfg:         cfg,
+		dark:        cfg.Theme != config.ThemeLight,
+		fileDark:    cfg.Theme != config.ThemeLight,
+		reloads:     reloads,
+		layouts:     layouts,
+		themes:      saver,
+		toast:       &toast,
+		apply:       plugins.Apply,
+		reconfigure: plugins.Reconfigure,
+		redraw:      window.Invalidate,
 	}
 	dark := w.dark // the theme th has
 	th := theme.New(dark, shaper)
@@ -286,11 +287,17 @@ func run(window *app.Window, plugins *pluginhost.Manager, pluginDir string, cfg 
 			toast.Layout(gtx, th)
 			configure.Layout(gtx, th)
 			if s, ok := configure.Submitted(); ok {
-				id := configure.Panel
-				go func() {
-					answers <- tried{id, s, plugins.TrySettings(context.Background(), id, s)}
-					window.Invalidate()
-				}()
+				t := tried{panel: configure.Panel, plugin: configure.Plugin, original: configure.Original, settings: s}
+				if w.changedSince(t) {
+					// Not tried either: the plugin keeps the file's.
+					configure.Failed(nil, "Not saved: "+errChanged.Error())
+				} else {
+					go func() {
+						t.err = plugins.TrySettings(context.Background(), t.panel, t.settings)
+						answers <- t
+						window.Invalidate()
+					}()
+				}
 			}
 			dialog.Layout(gtx, th)
 			op.Defer(gtx.Ops, over.Stop())
