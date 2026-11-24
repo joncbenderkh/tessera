@@ -39,9 +39,9 @@ func view(now time.Time, s panelState) sdk.View {
 			sdk.Text("Fetching the weather").Size(sdk.SizeSmall).Tone(sdk.ToneMuted),
 		).Gap(sdk.SpacingSmall)
 	case s.cur == nil:
-		text := s.err.Error()
+		text := "Cannot get the weather: " + brief(s.err)
 		if errors.Is(s.err, errNoPlace) {
-			text += "; check the location setting"
+			text = s.err.Error() + "; check the location setting"
 		}
 		v.Body = sdk.Column(
 			sdk.Text(text).Tone(sdk.ToneError),
@@ -56,14 +56,15 @@ func view(now time.Time, s panelState) sdk.View {
 			sdk.Stat("", degrees(c.temperature)).Unit(unit).Caption(condition(c.code, c.day)).CaptionTone(sdk.ToneDefault),
 			sdk.Text(fmt.Sprintf("Feels like %s%s · Humidity %s%%", degrees(c.feelsLike), unit, strconv.FormatFloat(math.Round(c.humidity), 'f', 0, 64))).Size(sdk.SizeSmall),
 		).Gap(sdk.SpacingSmall)
-		age := "As of " + clock(now, c.at)
+		// Open-Meteo's data is CC BY 4.0: credited wherever it shows.
+		footer := "As of " + clock(now, c.at) + " · Open-Meteo"
 		switch {
 		case s.err != nil:
-			body.Add(sdk.Text(age + "; " + s.err.Error()).Size(sdk.SizeSmall).Tone(sdk.ToneWarn))
+			body.Add(sdk.Text(footer + " · " + brief(s.err)).Size(sdk.SizeSmall).Tone(sdk.ToneWarn))
 		case now.Sub(c.at) > staleAfter(s.refresh):
-			body.Add(sdk.Text(age + "; not updated since").Size(sdk.SizeSmall).Tone(sdk.ToneWarn))
+			body.Add(sdk.Text(footer + " · not updated").Size(sdk.SizeSmall).Tone(sdk.ToneWarn))
 		default:
-			body.Add(sdk.Text(age + " · Open-Meteo").Size(sdk.SizeSmall).Tone(sdk.ToneMuted))
+			body.Add(sdk.Text(footer).Size(sdk.SizeSmall).Tone(sdk.ToneMuted))
 		}
 		v.Body = body
 	}

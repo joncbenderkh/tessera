@@ -7,11 +7,17 @@ import (
 	"encoding/json"
 	"errors"
 	"image"
+	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"slices"
+	"strconv"
 	"strings"
+	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
@@ -44,18 +50,37 @@ func fakeOpenMeteo(t *testing.T) *httptest.Server {
 	t.Helper()
 	places := []map[string]any{
 		{"name": "Springfield", "latitude": 37.21, "longitude": -93.29, "country": "United States", "country_code": "US", "admin1": "Missouri"},
-		{"name": "Springfield", "latitude": 39.80, "longitude": -89.64, "country": "United States", "country_code": "US", "admin1": "Illinois"},
+		{"name": "Springfield", "latitude": 39.80, "longitude": -89.64, "country": "United States", "country_code": "US", "admin1": "Illinois", "admin2": "Sangamon", "admin3": "Capital Township"},
+		{"name": "Springfield Park", "latitude": 41.90, "longitude": -88.10, "country": "United States", "country_code": "US", "admin1": "Illinois", "admin2": "DuPage County"},
 		{"name": "Berlin", "latitude": 52.52, "longitude": 13.41, "country": "Germany", "country_code": "DE", "admin1": "Land Berlin"},
 	}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		q := r.URL.Query()
 		switch r.URL.Path {
 		case "/v1/search":
+			// As Open-Meteo: a state or country after a comma narrows
+			// the search, which then finds names like the one asked
+			// for too; another region finds nothing.
+			parts := strings.Split(q.Get("name"), ",")
 			var found []map[string]any
+		places:
 			for _, p := range places {
-				if strings.EqualFold(p["name"].(string), q.Get("name")) {
-					found = append(found, p)
+				name := p["name"].(string)
+				if !strings.EqualFold(name, parts[0]) && (len(parts) == 1 || !strings.HasPrefix(name, parts[0])) {
+					continue
 				}
+				// Only the first: Open-Meteo ignores the rest.
+				for _, w := range parts[1:min(len(parts), 2)] {
+					w = strings.TrimSpace(w)
+					if !strings.EqualFold(w, p["admin1"].(string)) && !strings.EqualFold(w, p["country"].(string)) && !strings.EqualFold(w, p["country_code"].(string)) &&
+						!strings.EqualFold(usStates[strings.ToUpper(w)], p["admin1"].(string)) {
+						continue places
+					}
+				}
+				found = append(found, p)
+			}
+			if n, _ := strconv.Atoi(q.Get("count")); n < len(found) {
+				found = found[:n]
 			}
 			answer := map[string]any{"generationtime_ms": 0.5}
 			if found != nil {
@@ -131,13 +156,24 @@ func TestCheck(t *testing.T) {
 func TestLookup(t *testing.T) {
 	useFake(t, fakeOpenMeteo(t))
 	for location, want := range map[string]place{
-		"berlin":                    {name: "Berlin", region: "Germany", lat: 52.52, lon: 13.41},
-		"Springfield":               {name: "Springfield", region: "Missouri", lat: 37.21, lon: -93.29},
-		"Springfield, illinois":     {name: "Springfield", region: "Illinois", lat: 39.80, lon: -89.64},
-		"Springfield, IL, US":       {},
-		"Springfield, Illinois,":    {name: "Springfield", region: "Illinois", lat: 39.80, lon: -89.64},
-		"Springfield, US, Illinois": {name: "Springfield", region: "Illinois", lat: 39.80, lon: -89.64},
-		"Atlantis":                  {},
+		"berlin":                        {name: "Berlin", region: "Germany", lat: 52.52, lon: 13.41},
+		"Springfield":                   {name: "Springfield", region: "Missouri", lat: 37.21, lon: -93.29},
+		"Springfield, illinois":         {name: "Springfield", region: "Illinois", lat: 39.80, lon: -89.64},
+		"Springfield, IL, US":           {name: "Springfield", region: "Illinois", lat: 39.80, lon: -89.64},
+		"Springfield, US, IL":           {name: "Springfield", region: "Illinois", lat: 39.80, lon: -89.64},
+		"Springfield, Sangamon, IL":     {name: "Springfield", region: "Illinois", lat: 39.80, lon: -89.64},
+		"Springfield, US, MO":           {name: "Springfield", region: "Missouri", lat: 37.21, lon: -93.29},
+		"Springfield, Sangamon":         {name: "Springfield", region: "Illinois", lat: 39.80, lon: -89.64},
+		"Springfield, Sangamon, US":     {name: "Springfield", region: "Illinois", lat: 39.80, lon: -89.64},
+		"Springfield, Cook":             {},
+		"Springfield, Sangamon County":  {name: "Springfield", region: "Illinois", lat: 39.80, lon: -89.64},
+		"Springfield Park, DuPage, US":  {name: "Springfield Park", region: "Illinois", lat: 41.90, lon: -88.10},
+		"Springfield, Illinois, France": {},
+		"Springfield, Illinois, US":     {name: "Springfield", region: "Illinois", lat: 39.80, lon: -89.64},
+		"Springfield, capital township": {name: "Springfield", region: "Illinois", lat: 39.80, lon: -89.64},
+		"Springfield, Illinois,":        {name: "Springfield", region: "Illinois", lat: 39.80, lon: -89.64},
+		"Springfield, US, Illinois":     {name: "Springfield", region: "Illinois", lat: 39.80, lon: -89.64},
+		"Atlantis":                      {},
 	} {
 		p, err := lookup(t.Context(), location)
 		if want.name == "" {
@@ -184,15 +220,18 @@ func TestFetchErrors(t *testing.T) {
 	}))
 	t.Cleanup(server.Close)
 	useFake(t, server)
-	if _, _, err := fetch(t.Context(), query{lat: 2}, nil); err == nil || !strings.Contains(err.Error(), "HTTP 400 Bad Request: Latitude must be") {
+	if _, _, err := fetch(t.Context(), query{lat: 2}, nil); err == nil || brief(err) != "HTTP 400" || !strings.Contains(err.Error(), "HTTP 400 Bad Request: Latitude must be") {
 		t.Errorf("refused: %v", err)
 	}
-	if _, _, err := fetch(t.Context(), query{lat: 1}, nil); err == nil || !strings.Contains(err.Error(), "lacks the current conditions") {
+	if _, _, err := fetch(t.Context(), query{lat: 1}, nil); err == nil || brief(err) != "unreadable answer" || !strings.Contains(err.Error(), "lacks the current conditions") {
 		t.Errorf("incomplete: %v", err)
 	}
 	server.Close()
-	if _, _, err := fetch(t.Context(), query{lat: 2}, nil); err == nil || !strings.HasPrefix(err.Error(), "cannot reach Open-Meteo") {
-		t.Errorf("closed: %v", err)
+	// A connection refused says so in a few words, and its detail names
+	// the address only, never the URL with the place in it.
+	_, _, err := fetch(t.Context(), query{lat: 2}, nil)
+	if err == nil || brief(err) != "connection refused" || strings.Contains(err.Error(), "latitude") || strings.Contains(err.Error(), "http") {
+		t.Errorf("closed: %q, %v", brief(err), err)
 	}
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
@@ -221,6 +260,10 @@ func TestView(t *testing.T) {
 	if v := view(now, s); v.Title != "berlin" || !slices.Equal(texts(v), []string{"Fetching the weather"}) {
 		t.Errorf("loading: %q %q", v.Title, texts(v))
 	}
+	s.err = &fetchError{"connection refused", "dial tcp 1.2.3.4:443: connect: connection refused"}
+	if got := texts(view(now, s)); got[0] != "Cannot get the weather: connection refused" {
+		t.Errorf("failed: %q", got)
+	}
 	s.err = errNoPlace
 	if got := texts(view(now, s)); !strings.Contains(got[0], "check the location setting") {
 		t.Errorf("no place: %q", got)
@@ -235,13 +278,14 @@ func TestView(t *testing.T) {
 		t.Errorf("texts %q, want %q", texts(v), want)
 	}
 
-	// Stale: a failed fetch, or conditions long not updated.
-	s.err = errors.New("cannot reach Open-Meteo")
-	if got := texts(view(now, s)); got[1] != "As of 13:15; cannot reach Open-Meteo" {
+	// Stale: a failed fetch, or conditions long not updated, still
+	// credited.
+	s.err = &fetchError{"timed out", "Open-Meteo did not answer within 30s"}
+	if got := texts(view(now, s)); got[1] != "As of 13:15 · Open-Meteo · timed out" {
 		t.Errorf("failed: %q", got)
 	}
 	s.err = nil
-	if got := texts(view(now.Add(46*time.Minute), s)); got[1] != "As of 13:15; not updated since" {
+	if got := texts(view(now.Add(46*time.Minute), s)); got[1] != "As of 13:15 · Open-Meteo · not updated" {
 		t.Errorf("old: %q", got)
 	}
 	if got := texts(view(now.Add(24*time.Hour), s)); !strings.HasPrefix(got[1], "As of Nov 24 13:15") {
@@ -325,11 +369,14 @@ func TestPlugin(t *testing.T) {
 func TestMinBody(t *testing.T) {
 	now := time.Now()
 	cur := &current{at: now.Add(-24 * time.Hour), temperature: -12, feelsLike: -20, humidity: 100, code: 56}
+	// The longest error a fetch gives in a few words.
+	refused := describe(&net.OpError{Op: "dial", Net: "tcp", Err: os.NewSyscallError("connect", syscall.ENETUNREACH)})
 	views := []sdk.View{
 		view(now, panelState{query: query{location: "Berlin"}}),
-		view(now, panelState{query: query{location: "Llanfairpwllgwyngyll"}, err: errors.New("Open-Meteo did not answer within 30s")}),
+		view(now, panelState{query: query{location: "Berlin"}, err: refused}),
 		view(now, panelState{query: query{lat: -33.8688, lon: -151.2093, imperial: true}, cur: cur, refresh: 15 * time.Minute}),
-		view(now, panelState{place: &place{name: "Springfield", region: "Illinois"}, cur: cur, err: errors.New("cannot find api.open-meteo.com")}),
+		view(now, panelState{place: &place{name: "Springfield", region: "Illinois"}, cur: cur, err: refused}),
+		view(now, panelState{place: &place{name: "Springfield", region: "Illinois"}, cur: cur, err: describe(&net.DNSError{Name: "api.open-meteo.com", Err: "no such host"})}),
 	}
 	for _, width := range []int{124, 168, 300, 432, 600, 900} {
 		width = max(width, minBody.Width)
@@ -362,9 +409,151 @@ func TestTitle(t *testing.T) {
 		{"Singapore", "", "Singapore", ""},
 		{"Monaco", "", "Monaco", ""},
 		{"Atlantis", "Western Cape", "South Africa", "Western Cape"},
+		{"York", "New York", "United States", "New York"},
+		{"Hamburg", "Hamburg", "Germany", "Germany"},
+		{"Hamburg", "Land Hamburg", "Germany", "Germany"},
+		{"Mexico City", "Mexico City", "Mexico", "Mexico"},
 	} {
 		if got := region(tc[0], tc[1], tc[2]); got != tc[3] {
 			t.Errorf("region(%q, %q, %q) = %q, want %q", tc[0], tc[1], tc[2], got, tc[3])
+		}
+	}
+}
+
+// The loop keeps the last conditions on show when a fetch fails,
+// retries, and shows fresh ones when it succeeds again; a new label
+// alone fetches nothing.
+func TestLoop(t *testing.T) {
+	var failing atomic.Bool
+	var forecasts, searches atomic.Int32
+	fake := fakeOpenMeteo(t)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/forecast":
+			forecasts.Add(1)
+			if failing.Load() {
+				w.WriteHeader(http.StatusServiceUnavailable)
+				return
+			}
+		case "/v1/search":
+			searches.Add(1)
+		}
+		fake.Config.Handler.ServeHTTP(w, r)
+	}))
+	t.Cleanup(server.Close)
+	useFake(t, server)
+	tick, base := tickEvery, retryBase
+	tickEvery, retryBase = 5*time.Millisecond, 5*time.Millisecond
+	t.Cleanup(func() { tickEvery, retryBase = tick, base })
+
+	views := make(chan sdk.View)
+	w := &weather{views: views, wake: make(chan struct{}, 1), quit: make(chan struct{}), stopped: make(chan struct{})}
+	// Stopped before the fakes and the waits go back, reading its views
+	// meanwhile.
+	t.Cleanup(func() {
+		close(w.quit)
+		for {
+			select {
+			case <-views:
+			case <-w.stopped:
+				return
+			}
+		}
+	})
+	// Each view the plugin sends, read by the test until ok.
+	await := func(what string, ok func(v sdk.View) bool) {
+		t.Helper()
+		deadline := time.After(10 * time.Second)
+		for {
+			select {
+			case v := <-views:
+				if ok(v) {
+					return
+				}
+			case <-deadline:
+				t.Fatalf("no view with %s", what)
+			}
+		}
+	}
+	configure := func(settings map[string]any) {
+		t.Helper()
+		done := make(chan error)
+		go func() { done <- w.configure(t.Context(), sdk.Config{Settings: settings}) }()
+		for {
+			select {
+			case err := <-done:
+				if err != nil {
+					t.Fatal(err)
+				}
+				return
+			case <-views:
+			}
+		}
+	}
+	footer := func(v sdk.View) string {
+		if t := texts(v); len(t) == 2 {
+			return t[1]
+		}
+		return ""
+	}
+
+	configure(map[string]any{"location": "Berlin"})
+	await("the conditions", func(v sdk.View) bool { return strings.HasSuffix(footer(v), " · Open-Meteo") })
+	if f, s := forecasts.Load(), searches.Load(); f != 1 || s != 1 {
+		t.Errorf("%d forecasts and %d searches, want 1 and 1", f, s)
+	}
+	configure(map[string]any{"location": "Berlin", "label": "Home"})
+	await("the label", func(v sdk.View) bool { return v.Title == "Home" && strings.HasSuffix(footer(v), " · Open-Meteo") })
+	if f, s := forecasts.Load(), searches.Load(); f != 1 || s != 1 {
+		t.Errorf("after a new label: %d forecasts and %d searches, want 1 and 1", f, s)
+	}
+
+	// Due again at once, and failing: the conditions stay, marked.
+	failing.Store(true)
+	w.mu.Lock()
+	w.cfg.refresh = 20 * time.Millisecond
+	w.mu.Unlock()
+	await("the failure", func(v sdk.View) bool {
+		return stat(v).GetValue() == "12" && strings.HasSuffix(footer(v), " · Open-Meteo · HTTP 503")
+	})
+	n := forecasts.Load()
+	await("a retry", func(sdk.View) bool { return forecasts.Load() > n })
+	failing.Store(false)
+	await("fresh conditions", func(v sdk.View) bool { return strings.HasSuffix(footer(v), " · Open-Meteo") })
+	if s := searches.Load(); s != 1 {
+		t.Errorf("Berlin looked up %d times, want once", s)
+	}
+}
+
+// A failure describe does not know keeps its cause in the detail, but
+// not the URL.
+func TestDescribeOther(t *testing.T) {
+	err := describe(&url.Error{Op: "Get", URL: "https://api.open-meteo.com/v1/forecast?latitude=52.52", Err: io.ErrUnexpectedEOF})
+	if brief(err) != "request failed" || err.Error() != "the request to Open-Meteo failed: unexpected EOF" {
+		t.Errorf("describe = %q, %q", brief(err), err)
+	}
+}
+
+// A clock set back after a fetch makes the next one due at once.
+func TestClockSetBack(t *testing.T) {
+	tick := tickEvery
+	tickEvery = time.Millisecond
+	t.Cleanup(func() { tickEvery = tick })
+	views := make(chan sdk.View, 1)
+	w := &weather{views: views, cfg: config{refresh: time.Hour}, tried: time.Now().Add(8 * time.Hour)}
+	done := make(chan bool)
+	go func() { done <- w.waitDue() }()
+	deadline := time.After(5 * time.Second)
+	for {
+		select {
+		case due := <-done:
+			if !due {
+				t.Error("waitDue reported quit")
+			}
+			return
+		case <-views:
+		case <-deadline:
+			t.Fatal("not due with the latest fetch in the future")
 		}
 	}
 }

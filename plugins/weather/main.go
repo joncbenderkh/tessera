@@ -26,7 +26,7 @@ const schema = `{
   "properties": {
     "location": {
       "type": "string",
-      "description": "A place to look up by name, such as Berlin, or Springfield, Illinois; or give latitude and longitude instead."
+      "description": "A place to look up by name, such as Berlin, or Springfield, Illinois (a region by name or US state code, a country by name or two-letter code, as GB); or give latitude and longitude instead."
     },
     "latitude": {
       "type": "number",
@@ -42,7 +42,7 @@ const schema = `{
     },
     "label": {
       "type": "string",
-      "description": "The panel's title; by default the place's name."
+      "description": "The panel's title; by default the place found, with its region or country."
     },
     "units": {
       "enum": ["metric", "imperial"],
@@ -92,6 +92,9 @@ type weather struct {
 	start sync.Once
 	// wake tells the loop to fetch now: what to fetch changed.
 	wake chan struct{}
+	// quit, closed, stops the loop, which then closes stopped; the
+	// plugin's runs until it exits, so it has none.
+	quit, stopped chan struct{}
 
 	mu  sync.Mutex
 	cfg config
@@ -144,14 +147,15 @@ func (w *weather) configure(_ context.Context, c sdk.Config) error {
 			w.cancel()
 		}
 	}
-	w.show(time.Now())
-	w.mu.Unlock()
 	if !same {
+		// Before unlocking, so a fetch starting meanwhile spends it.
 		select {
 		case w.wake <- struct{}{}:
 		default:
 		}
 	}
+	w.show(time.Now())
+	w.mu.Unlock()
 	w.start.Do(func() { go w.loop() })
 	return nil
 }
@@ -162,18 +166,18 @@ func check(s settings) (config, error) {
 	location := strings.TrimSpace(s.Location)
 	switch {
 	case location != "" && (s.Latitude != nil || s.Longitude != nil):
-		return config{}, fmt.Errorf("give a location or latitude and longitude, not both")
+		return config{}, fmt.Errorf("settings \"location\" and \"latitude\"/\"longitude\": want one or the other, not both")
 	case location != "":
 		if strings.TrimSpace(strings.Split(location, ",")[0]) == "" {
-			return config{}, fmt.Errorf("location: %q names no place", s.Location)
+			return config{}, fmt.Errorf("setting \"location\": want a place's name first, not %q", s.Location)
 		}
 		cfg.query.location = location
 	case s.Latitude == nil || s.Longitude == nil:
-		return config{}, fmt.Errorf("give a location, such as Berlin, or latitude and longitude")
+		return config{}, fmt.Errorf("setting \"location\": want a place, such as Berlin, or \"latitude\" and \"longitude\"")
 	case math.IsNaN(*s.Latitude) || math.Abs(*s.Latitude) > 90:
-		return config{}, fmt.Errorf("latitude: %v is not from -90 to 90", *s.Latitude)
+		return config{}, fmt.Errorf("setting \"latitude\": want -90 to 90, not %v", *s.Latitude)
 	case math.IsNaN(*s.Longitude) || math.Abs(*s.Longitude) > 180:
-		return config{}, fmt.Errorf("longitude: %v is not from -180 to 180", *s.Longitude)
+		return config{}, fmt.Errorf("setting \"longitude\": want -180 to 180, not %v", *s.Longitude)
 	default:
 		cfg.query.lat, cfg.query.lon = *s.Latitude, *s.Longitude
 	}
@@ -182,11 +186,11 @@ func check(s settings) (config, error) {
 	case "imperial":
 		cfg.query.imperial = true
 	default:
-		return config{}, fmt.Errorf("units: %q is not metric or imperial", s.Units)
+		return config{}, fmt.Errorf("setting \"units\": want metric or imperial, not %q", s.Units)
 	}
 	refresh, err := time.ParseDuration(cmp.Or(strings.TrimSpace(s.Refresh), "15m"))
 	if err != nil || refresh < 5*time.Minute || refresh > 6*time.Hour {
-		return config{}, fmt.Errorf("refresh: %q is not a duration from 5m to 6h, such as 15m", s.Refresh)
+		return config{}, fmt.Errorf("setting \"refresh\": want a duration from 5m to 6h, such as 15m, not %q", s.Refresh)
 	}
 	cfg.refresh = refresh
 	return cfg, nil
@@ -196,6 +200,9 @@ func check(s settings) (config, error) {
 // or the refresh interval passes, and shows each minute how old what it
 // shows is.
 func (w *weather) loop() {
+	if w.stopped != nil {
+		defer close(w.stopped)
+	}
 	for {
 		w.mu.Lock()
 		// This fetch is for the settings now, so a wake from Configure
@@ -228,30 +235,40 @@ func (w *weather) loop() {
 			w.show(time.Now())
 		}
 		w.mu.Unlock()
-		w.waitDue()
+		if !w.waitDue() {
+			return
+		}
 	}
 }
 
 // waitDue returns when the next fetch is due: on a wake, or when the
 // time to wait after the latest fetch has passed by the wall clock,
 // which a timer alone misses while the computer sleeps. Meanwhile it
-// shows the view each minute, as what it shows ages.
-func (w *weather) waitDue() {
-	tick := time.NewTicker(time.Minute)
+// shows the view each minute, as what it shows ages. It reports false
+// if quit closed instead.
+func (w *weather) waitDue() bool {
+	tick := time.NewTicker(tickEvery)
 	defer tick.Stop()
 	for {
 		select {
 		case <-w.wake:
-			return
+			return true
+		case <-w.quit:
+			return false
 		case <-tick.C:
 		}
 		w.mu.Lock()
 		now := time.Now()
 		w.show(now)
-		due := now.Round(0).Sub(w.tried) >= retryAfter(w.failures, w.cfg.refresh)
+		// A clock set back since puts the latest fetch ahead of now:
+		// due, as the wait cannot be told.
+		since := now.Round(0).Sub(w.tried)
+		// A little early is due, so a wall clock running slow next to
+		// the ticker's does not put the fetch off a whole tick.
+		due := since < 0 || since >= retryAfter(w.failures, w.cfg.refresh)-min(time.Second, tickEvery/2)
 		w.mu.Unlock()
 		if due {
-			return
+			return true
 		}
 	}
 }
@@ -263,8 +280,16 @@ func retryAfter(failures int, refresh time.Duration) time.Duration {
 	if failures == 0 {
 		return refresh
 	}
-	return min(refresh, time.Minute<<min(failures-1, 10))
+	return min(refresh, retryBase<<min(failures-1, 10))
 }
+
+// tickEvery is how often waitDue shows the view and checks whether a
+// fetch is due, and retryBase the wait after one failed fetch; tests
+// shorten them.
+var (
+	tickEvery = time.Minute
+	retryBase = time.Minute
+)
 
 // show sends the view at now. w.mu is held.
 func (w *weather) show(now time.Time) {
