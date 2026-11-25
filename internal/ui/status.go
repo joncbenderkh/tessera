@@ -5,10 +5,12 @@ package ui
 import (
 	"fmt"
 	"image"
+	"slices"
 	"strings"
 
 	"gioui.org/gesture"
 	"gioui.org/io/key"
+	"gioui.org/io/pointer"
 	"gioui.org/layout"
 	"gioui.org/op"
 	"gioui.org/op/clip"
@@ -99,21 +101,27 @@ type StatusList struct {
 	logs    map[string]*Button
 	outside gesture.Click
 	inside  gesture.Click
-	list    layout.List
 	box     image.Rectangle // where it was drawn; for tests
+	// Every row is drawn, cut to the card, so that the keys reach every
+	// button; offset is how far the rows are scrolled up, by the wheel
+	// or to show the row the focus moves to.
+	wheel  gesture.Scroll
+	offset int
+	// shown is the panels listed in the last frame, in order, and
+	// focused the row whose button had the focus then, or -1.
+	shown   []string
+	focused int
 }
 
 // Toggle opens the list, or closes it; keyed moves the focus into it.
 func (l *StatusList) Toggle(keyed bool) {
 	l.open = !l.open
 	l.focus = l.open && keyed
-	if l.open {
-		l.list.ScrollTo(0)
-	}
+	l.offset, l.focused = 0, -1
 }
 
 // Close closes the list.
-func (l *StatusList) Close() { l.open = false }
+func (l *StatusList) Close() { l.open, l.focused = false, -1 }
 
 // IsOpen reports whether the list is showing.
 func (l *StatusList) IsOpen() bool { return l.open }
@@ -136,6 +144,24 @@ func (l *StatusList) Layout(gtx layout.Context, th *theme.Theme, states []plugin
 	if l.restart == nil {
 		l.restart, l.logs = map[string]*Button{}, map[string]*Button{}
 	}
+	// Only the panels listed keep their buttons. A row that goes with
+	// the focus hands it to the row now in its place, or to the status.
+	listed := func(id string) bool {
+		return slices.ContainsFunc(panels, func(s pluginhost.PanelState) bool { return s.ID == id })
+	}
+	gone := -1
+	for i, id := range l.shown {
+		if !listed(id) && (l.hasFocus(gtx, l.restart[id]) || l.hasFocus(gtx, l.logs[id])) {
+			gone = i
+		}
+	}
+	for _, m := range []map[string]*Button{l.restart, l.logs} {
+		for id := range m {
+			if !listed(id) {
+				delete(m, id)
+			}
+		}
+	}
 	var actions []Action
 	for _, s := range panels {
 		for _, b := range []struct {
@@ -147,10 +173,32 @@ func (l *StatusList) Layout(gtx layout.Context, th *theme.Theme, states []plugin
 			}
 			if b.m[s.ID].Clicked(gtx) {
 				actions = append(actions, Action{Kind: b.kind, Panel: s.ID})
-				if b.kind == ActionLogs {
+				switch {
+				case b.kind == ActionLogs:
 					l.open = false
+				case gtx.Focused(&b.m[s.ID].Clickable):
+					// Restart goes while the panel starts: the focus
+					// stays in its row.
+					gtx.Execute(key.FocusCmd{Tag: &l.logs[s.ID].Clickable})
 				}
 			}
+		}
+	}
+	l.shown = l.shown[:0]
+	for _, s := range panels {
+		l.shown = append(l.shown, s.ID)
+		// A focused Restart goes when its panel starts, as by itself
+		// after a backoff: the focus stays in its row.
+		if kindOf(s) == kindStarting && l.hasFocus(gtx, l.restart[s.ID]) {
+			gtx.Execute(key.FocusCmd{Tag: &l.logs[s.ID].Clickable})
+		}
+	}
+	if gone >= 0 {
+		switch {
+		case len(panels) > 0:
+			gtx.Execute(key.FocusCmd{Tag: &l.firstButton(panels[min(gone, len(panels)-1)]).Clickable})
+		case refocus != nil:
+			gtx.Execute(key.FocusCmd{Tag: &refocus.Clickable})
 		}
 	}
 	for {
@@ -197,17 +245,17 @@ func (l *StatusList) Layout(gtx layout.Context, th *theme.Theme, states []plugin
 	inner := max(width-2*pad, 0)
 	igtx := gtx
 	igtx.Constraints = layout.Constraints{Max: image.Pt(inner, 1<<20)}
+	none := "Every panel is running."
+	if len(states) == 0 {
+		none = "No panels are enabled."
+	}
 	var rows []recorded
 	if len(panels) == 0 {
-		rows = append(rows, record(igtx, label(th, "Every panel is running.", theme.TextSmall, th.Muted, theme.Body).Layout))
+		rows = append(rows, record(igtx, label(th, none, theme.TextSmall, th.Muted, theme.Body).Layout))
 	}
 	for i, s := range panels {
 		if i == 0 && l.focus {
-			first := l.logs[s.ID]
-			if kindOf(s) != kindStarting {
-				first = l.restart[s.ID]
-			}
-			gtx.Execute(key.FocusCmd{Tag: &first.Clickable})
+			gtx.Execute(key.FocusCmd{Tag: &l.firstButton(s).Clickable})
 		}
 		rows = append(rows, record(igtx, func(gtx layout.Context) layout.Dimensions {
 			return l.row(gtx, th, s)
@@ -223,10 +271,42 @@ func (l *StatusList) Layout(gtx layout.Context, th *theme.Theme, states []plugin
 		height += r.dims.Size.Y
 	}
 
-	box := image.Rectangle{Max: image.Pt(width, min(height+2*pad, area.Y))}
-	at := image.Pt(anchor.Max.X-box.Dx(), anchor.Max.Y+gtx.Dp(4))
-	at.X = max(min(at.X, area.X-box.Dx()), 0)
-	at.Y = max(min(at.Y, area.Y-box.Dy()), 0)
+	// Below the status, as tall as the room there, scrolling if it is
+	// taller, so it never covers the status that closes it.
+	at := image.Pt(0, anchor.Max.Y+gtx.Dp(4))
+	below := area.Y - at.Y - gtx.Dp(theme.Space8)
+	box := image.Rectangle{Max: image.Pt(width, max(min(height+2*pad, below), 0))}
+	margin := gtx.Dp(theme.Space8)
+	at.X = max(min(anchor.Max.X-box.Dx(), area.X-box.Dx()-margin), min(margin, max(area.X-box.Dx(), 0)))
+
+	view := max(box.Dy()-2*pad, 0)
+	tops := make([]int, len(rows))
+	y := 0
+	for i, r := range rows {
+		if i > 0 {
+			y += gap
+		}
+		tops[i] = y
+		y += r.dims.Size.Y
+	}
+	// The wheel scrolls; a row the focus moves to scrolls into view.
+	l.offset += l.wheel.Update(gtx.Metric, gtx.Source, gtx.Now, gesture.Vertical,
+		pointer.ScrollRange{}, pointer.ScrollRange{Min: -l.offset, Max: max(height-view-l.offset, 0)})
+	focused := slices.IndexFunc(panels, func(s pluginhost.PanelState) bool {
+		return l.hasFocus(gtx, l.restart[s.ID]) || l.hasFocus(gtx, l.logs[s.ID])
+	})
+	if focused >= 0 && focused != l.focused {
+		top, bottom := tops[focused], tops[focused]+rows[focused].dims.Size.Y
+		switch {
+		case top < l.offset:
+			l.offset = top
+		case bottom > l.offset+view:
+			l.offset = bottom - view
+		}
+	}
+	l.focused = focused
+	l.offset = max(min(l.offset, height-view), 0)
+
 	l.box = box.Add(at)
 	defer op.Offset(at).Push(gtx.Ops).Pop()
 	rr := gtx.Dp(theme.RadiusSmall)
@@ -234,32 +314,35 @@ func (l *StatusList) Layout(gtx layout.Context, th *theme.Theme, states []plugin
 	strokeRRect(gtx, box, rr, gtx.Dp(1), th.Border)
 	card := clip.Rect(box).Push(gtx.Ops)
 	l.inside.Add(gtx.Ops)
+	l.wheel.Add(gtx.Ops)
 	card.Pop()
 	defer op.Offset(image.Pt(pad, pad)).Push(gtx.Ops).Pop()
-	lgtx := gtx
-	lgtx.Constraints = layout.Constraints{Min: image.Pt(inner, 0), Max: image.Pt(inner, max(box.Dy()-2*pad, 0))}
-	l.list.Axis = layout.Vertical
-	defer viewport(gtx, image.Rectangle{Max: lgtx.Constraints.Max})()
-	l.list.Layout(lgtx, len(rows), func(gtx layout.Context, i int) layout.Dimensions {
+	shown := image.Rectangle{Max: image.Pt(inner, view)}
+	defer viewport(gtx, shown)()
+	defer clip.Rect(shown).Push(gtx.Ops).Pop()
+	defer op.Offset(image.Pt(0, -l.offset)).Push(gtx.Ops).Pop()
+	for i, r := range rows {
 		if i > 0 {
-			line := gtx.Dp(theme.Space12)
+			line := tops[i] - gap + gtx.Dp(theme.Space12)
 			fillRect(gtx, image.Rect(0, line, inner, line+gtx.Dp(1)), th.Border)
-			defer op.Offset(image.Pt(0, gap)).Push(gtx.Ops).Pop()
 		}
-		// Recorded above at this width; laid out again here, so its
-		// buttons are live where they show.
-		var dims layout.Dimensions
-		if len(panels) == 0 {
-			dims = label(th, "Every panel is running.", theme.TextSmall, th.Muted, theme.Body).Layout(gtx)
-		} else {
-			dims = l.row(gtx, th, panels[i])
-		}
-		if i > 0 {
-			dims.Size.Y += gap
-		}
-		return dims
-	})
+		r.at(gtx, image.Pt(0, tops[i]))
+	}
 	return actions
+}
+
+// hasFocus reports whether b, if any, has the focus.
+func (l *StatusList) hasFocus(gtx layout.Context, b *Button) bool {
+	return b != nil && gtx.Focused(&b.Clickable)
+}
+
+// firstButton is the first button in s's row: its Restart, or its Logs
+// if it is starting.
+func (l *StatusList) firstButton(s pluginhost.PanelState) *Button {
+	if kindOf(s) != kindStarting {
+		return l.restart[s.ID]
+	}
+	return l.logs[s.ID]
 }
 
 // row is one panel in the list: its title, its plugin and what is
