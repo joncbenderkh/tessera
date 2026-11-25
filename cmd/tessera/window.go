@@ -260,7 +260,7 @@ func run(window *app.Window, plugins *pluginhost.Manager, pluginDir string, cfg 
 				gtx.Execute(op.InvalidateCmd{})
 			}
 			actions = append(actions, chosen...)
-			if grid.MenuOpened() || bar.MenuOpened() {
+			if grid.MenuOpened() || editing && bar.MenuOpened() {
 				attention.Close()
 			}
 			actions = append(actions, attention.Layout(behind, th, states, header.StatusAnchor(), &header.Status)...)
