@@ -16,7 +16,8 @@ import (
 )
 
 // Window widths, in dp, at or below which the chrome tightens: Compact
-// drops the plugin status, Narrow the layout selector.
+// shows the plugin status as its dot alone, Narrow drops the layout
+// selector.
 const (
 	Compact unit.Dp = 1000
 	Narrow  unit.Dp = 560
@@ -31,17 +32,26 @@ const LayoutName = "Default"
 
 // Header is the window header: the app name, the layout selector, the
 // plugin status, and the Edit layout and theme toggles. The caller reads
-// the toggles' clicks, and makes Edit a toggle and sets Edit.Pressed.
+// the toggles' clicks, and makes Edit a toggle and sets Edit.Pressed,
+// and opens its StatusList when Status is clicked.
 type Header struct {
-	Edit  Button
-	Theme Button
+	Edit   Button
+	Theme  Button
+	Status Button
 
-	placed []image.Rectangle // the items' bounds in the last Layout
+	placed   []image.Rectangle // the items' bounds in the last Layout
+	statusAt image.Rectangle   // where Status was drawn
 }
+
+// StatusAnchor is where the status was drawn in the last Layout, which
+// its list opens below.
+func (h *Header) StatusAnchor() image.Rectangle { return h.statusAt }
 
 // headerFit is what the header shows, and its spacing, at a window
 // width.
 type headerFit struct {
+	// status is the status in full, with its text; otherwise its dot
+	// alone shows.
 	status, selector bool
 	pad, gap, endGap unit.Dp
 }
@@ -60,8 +70,8 @@ func fitHeader(width unit.Dp) headerFit {
 // Layout draws the header across the top of gtx's constraints. It is
 // HeaderHeight tall, or taller if a large text scale needs it. When its
 // items do not fit across, it drops, in turn, the layout selector, the
-// plugin status, the app name (keeping the mark), and Edit's label
-// (keeping an icon).
+// plugin status's text (keeping its dot), the app name (keeping the
+// mark), and Edit's label (keeping an icon).
 func (h *Header) Layout(gtx layout.Context, th *theme.Theme, status Status) layout.Dimensions {
 	fit := fitHeader(widthDp(gtx))
 	pad, gap, endGap := gtx.Dp(fit.pad), gtx.Dp(fit.gap), gtx.Dp(fit.endGap)
@@ -88,7 +98,11 @@ func (h *Header) Layout(gtx layout.Context, th *theme.Theme, status Status) layo
 	sel := record(gtx, func(gtx layout.Context) layout.Dimensions {
 		return layout.UniformInset(theme.Space8).Layout(gtx, label(th, LayoutName, theme.TextSmall, th.Fg, theme.Body).Layout)
 	})
-	stat := record(gtx, func(gtx layout.Context) layout.Dimensions { return statusLine(gtx, th, status) })
+	h.Status.Bare, h.Status.Description = true, "Panels needing attention"
+	h.Status.Content = func(gtx layout.Context, _ color.NRGBA) layout.Dimensions { return statusLine(gtx, th, status) }
+	stat := record(gtx, func(gtx layout.Context) layout.Dimensions { return h.Status.Layout(gtx, th, status.Text) })
+	h.Status.Content = func(gtx layout.Context, _ color.NRGBA) layout.Dimensions { return statusDot(gtx, th, status) }
+	statDot := record(gtx, func(gtx layout.Context) layout.Dimensions { return h.Status.Layout(gtx, th, status.Text) })
 	h.Edit.Icon, h.Edit.Draw, h.Edit.Description = false, nil, ""
 	editText := record(gtx, func(gtx layout.Context) layout.Dimensions { return h.Edit.Layout(gtx, th, editLabel) })
 	h.Edit.Icon, h.Edit.Draw, h.Edit.Description = true, gridIcon, editLabel
@@ -106,9 +120,9 @@ func (h *Header) Layout(gtx layout.Context, th *theme.Theme, status Status) layo
 		if showSel {
 			left = append(left, sel)
 		}
-		end = nil
+		end = []recorded{statDot}
 		if showStatus {
-			end = append(end, stat)
+			end[0] = stat
 		}
 		if showEditText {
 			end = append(end, editText)
@@ -174,6 +188,8 @@ func (h *Header) Layout(gtx layout.Context, th *theme.Theme, status Status) layo
 		place(end[i], ex)
 		ex -= endGap
 	}
+	// The status is the first of the end's items.
+	h.statusAt = h.placed[len(h.placed)-1]
 	return layout.Dimensions{Size: size}
 }
 
@@ -227,6 +243,14 @@ func statusLine(gtx layout.Context, th *theme.Theme, s Status) layout.Dimensions
 	paint.FillShape(gtx.Ops, toneColor(th, s.Tone), clip.Ellipse(r).Op(gtx.Ops))
 	text.at(gtx, image.Pt(dot+gtx.Dp(7), 0))
 	return layout.Dimensions{Size: image.Pt(dot+gtx.Dp(7)+text.dims.Size.X, text.dims.Size.Y)}
+}
+
+// statusDot is the status's tone dot alone, for a narrow window; the
+// status's text names its button.
+func statusDot(gtx layout.Context, th *theme.Theme, s Status) layout.Dimensions {
+	d := gtx.Dp(8)
+	paint.FillShape(gtx.Ops, toneColor(th, s.Tone), clip.Ellipse(image.Rect(0, 0, d, d)).Op(gtx.Ops))
+	return layout.Dimensions{Size: image.Pt(d, d)}
 }
 
 func toneColor(th *theme.Theme, t Tone) color.NRGBA {
