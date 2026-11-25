@@ -263,7 +263,12 @@ func run(window *app.Window, plugins *pluginhost.Manager, pluginDir string, cfg 
 			if grid.MenuOpened() || editing && bar.MenuOpened() {
 				attention.Close()
 			}
+			listed := attention.IsOpen()
 			actions = append(actions, attention.Layout(behind, th, states, header.StatusAnchor(), &header.Status)...)
+			if listed && !attention.IsOpen() {
+				// The grid was drawn covered: drawn again, uncovered.
+				gtx.Execute(op.InvalidateCmd{})
+			}
 			plugins.SetColumns(grid.ShownColumns())
 			for _, a := range actions {
 				if changeFor(a, w.cfg) != nil {
