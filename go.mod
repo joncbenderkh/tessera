@@ -5,6 +5,7 @@ go 1.25.0
 require (
 	gioui.org v0.10.3
 	github.com/adrg/xdg v0.5.3
+	github.com/coreos/go-systemd/v22 v22.7.0
 	github.com/emersion/go-ical v0.0.0-20250609112844-439c63cef608
 	github.com/fsnotify/fsnotify v1.10.1
 	github.com/goccy/go-yaml v1.19.2
