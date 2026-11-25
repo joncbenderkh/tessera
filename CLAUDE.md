@@ -115,7 +115,8 @@ dialogs). Edit mode must be able to re-enable any disabled panel.
   config, the layout and settings changes the window makes
   (`layout.go`), and checking settings against a plugin's config schema
   (`schema.go`).
-- `internal/ui`: the host-owned UI drawn with Gio: the window header,
+- `internal/ui`: the host-owned UI drawn with Gio: the window header
+  and its status's list of the panels needing attention (`status.go`),
   the grid and its tiles (placement in `Arrange`, the menu, the
   starting and error bodies, and edit mode's drags and keys), the
   edit bar, the plugins' views in them (`view*.go`), the button, the
