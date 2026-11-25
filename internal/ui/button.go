@@ -16,6 +16,9 @@ import (
 	"github.com/joncbenderkh/tessera/internal/ui/theme"
 )
 
+// focusRing is how far a focused button's ring reaches outside it.
+const focusRing unit.Dp = 5
+
 // Button is the mockups' button: a bordered label that fills on hover,
 // shows a focus ring, and activates on click, Return, or Space.
 type Button struct {
@@ -114,7 +117,8 @@ func (b *Button) Layout(gtx layout.Context, th *theme.Theme, label string) layou
 		return layout.Dimensions{Size: bounds.Max}
 	})
 	if gtx.Focused(&b.Clickable) {
-		// A 2 dp ring 3 dp outside the border, as CSS outline-offset.
+		// A 2 dp ring 3 dp outside the border, as CSS outline-offset:
+		// focusRing in all.
 		ring, off := gtx.Dp(2), gtx.Dp(3)
 		bounds := image.Rectangle{Max: dims.Size}.Inset(-off - ring)
 		strokeRRect(gtx, bounds, gtx.Dp(theme.RadiusSmall)+off+ring, ring, th.Accent)

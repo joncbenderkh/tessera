@@ -108,20 +108,29 @@ type StatusList struct {
 	wheel  gesture.Scroll
 	offset int
 	// shown is the panels listed in the last frame, in order, and
-	// focused the row whose button had the focus then, or -1.
-	shown   []string
-	focused int
+	// followed the focused button and where its row and the view were
+	// then: when any of them changes, the row scrolls into view, and
+	// otherwise the wheel may take it out.
+	shown    []string
+	followed followed
+	// buttonsAt is where each row's buttons are, from its top.
+	buttonsAt map[string][2]int
+}
+
+type followed struct {
+	button            *Button
+	top, bottom, view int
 }
 
 // Toggle opens the list, or closes it; keyed moves the focus into it.
 func (l *StatusList) Toggle(keyed bool) {
 	l.open = !l.open
 	l.focus = l.open && keyed
-	l.offset, l.focused = 0, -1
+	l.offset, l.followed = 0, followed{}
 }
 
 // Close closes the list.
-func (l *StatusList) Close() { l.open, l.focused = false, -1 }
+func (l *StatusList) Close() { l.open, l.followed = false, followed{} }
 
 // IsOpen reports whether the list is showing.
 func (l *StatusList) IsOpen() bool { return l.open }
@@ -144,6 +153,7 @@ func (l *StatusList) Layout(gtx layout.Context, th *theme.Theme, states []plugin
 	if l.restart == nil {
 		l.restart, l.logs = map[string]*Button{}, map[string]*Button{}
 	}
+	l.buttonsAt = map[string][2]int{}
 	// Only the panels listed keep their buttons. A row that goes with
 	// the focus hands it to the row now in its place, or to the status.
 	listed := func(id string) bool {
@@ -243,8 +253,11 @@ func (l *StatusList) Layout(gtx layout.Context, th *theme.Theme, states []plugin
 	area := gtx.Constraints.Max
 	width := max(min(gtx.Dp(360), area.X-2*gtx.Dp(theme.Space8)), 0)
 	inner := max(width-2*pad, 0)
+	// Room around the rows for a focused button's ring, drawn outside
+	// it, which the view would cut otherwise.
+	ring := gtx.Dp(focusRing)
 	igtx := gtx
-	igtx.Constraints = layout.Constraints{Max: image.Pt(inner, 1<<20)}
+	igtx.Constraints = layout.Constraints{Max: image.Pt(max(inner-2*ring, 0), 1<<20)}
 	none := "Every panel is running."
 	if len(states) == 0 {
 		none = "No panels are enabled."
@@ -262,7 +275,7 @@ func (l *StatusList) Layout(gtx layout.Context, th *theme.Theme, states []plugin
 		}))
 	}
 	l.focus = false
-	height := 0
+	height := 2 * ring
 	gap := 2*gtx.Dp(theme.Space12) + gtx.Dp(1) // a divider between rows
 	for i, r := range rows {
 		if i > 0 {
@@ -281,7 +294,7 @@ func (l *StatusList) Layout(gtx layout.Context, th *theme.Theme, states []plugin
 
 	view := max(box.Dy()-2*pad, 0)
 	tops := make([]int, len(rows))
-	y := 0
+	y := ring
 	for i, r := range rows {
 		if i > 0 {
 			y += gap
@@ -292,11 +305,23 @@ func (l *StatusList) Layout(gtx layout.Context, th *theme.Theme, states []plugin
 	// The wheel scrolls; a row the focus moves to scrolls into view.
 	l.offset += l.wheel.Update(gtx.Metric, gtx.Source, gtx.Now, gesture.Vertical,
 		pointer.ScrollRange{}, pointer.ScrollRange{Min: -l.offset, Max: max(height-view-l.offset, 0)})
-	focused := slices.IndexFunc(panels, func(s pluginhost.PanelState) bool {
-		return l.hasFocus(gtx, l.restart[s.ID]) || l.hasFocus(gtx, l.logs[s.ID])
-	})
-	if focused >= 0 && focused != l.focused {
-		top, bottom := tops[focused], tops[focused]+rows[focused].dims.Size.Y
+	var now followed
+	for i, s := range panels {
+		for _, b := range []*Button{l.restart[s.ID], l.logs[s.ID]} {
+			if l.hasFocus(gtx, b) {
+				// The row, or its buttons' line if the row is taller
+				// than the view.
+				now = followed{b, tops[i], tops[i] + rows[i].dims.Size.Y, view}
+				if now.bottom-now.top > view {
+					at := l.buttonsAt[s.ID]
+					now.top, now.bottom = tops[i]+at[0], tops[i]+at[1]
+				}
+			}
+		}
+	}
+	if now.button != nil && now != l.followed {
+		// With its button's ring.
+		top, bottom := now.top-ring, now.bottom+ring
 		switch {
 		case top < l.offset:
 			l.offset = top
@@ -304,7 +329,7 @@ func (l *StatusList) Layout(gtx layout.Context, th *theme.Theme, states []plugin
 			l.offset = bottom - view
 		}
 	}
-	l.focused = focused
+	l.followed = now
 	l.offset = max(min(l.offset, height-view), 0)
 
 	l.box = box.Add(at)
@@ -312,10 +337,12 @@ func (l *StatusList) Layout(gtx layout.Context, th *theme.Theme, states []plugin
 	rr := gtx.Dp(theme.RadiusSmall)
 	paint.FillShape(gtx.Ops, th.Surface, clip.UniformRRect(box, rr).Op(gtx.Ops))
 	strokeRRect(gtx, box, rr, gtx.Dp(1), th.Border)
-	card := clip.Rect(box).Push(gtx.Ops)
+	// Kept pushed around the rows, so that the wheel scrolls over their
+	// buttons too: a handler's area takes the events its children pass
+	// up, not its siblings'.
+	defer clip.Rect(box).Push(gtx.Ops).Pop()
 	l.inside.Add(gtx.Ops)
 	l.wheel.Add(gtx.Ops)
-	card.Pop()
 	defer op.Offset(image.Pt(pad, pad)).Push(gtx.Ops).Pop()
 	shown := image.Rectangle{Max: image.Pt(inner, view)}
 	defer viewport(gtx, shown)()
@@ -326,7 +353,7 @@ func (l *StatusList) Layout(gtx layout.Context, th *theme.Theme, states []plugin
 			line := tops[i] - gap + gtx.Dp(theme.Space12)
 			fillRect(gtx, image.Rect(0, line, inner, line+gtx.Dp(1)), th.Border)
 		}
-		r.at(gtx, image.Pt(0, tops[i]))
+		r.at(gtx, image.Pt(ring, tops[i]))
 	}
 	return actions
 }
@@ -393,6 +420,9 @@ func (l *StatusList) row(gtx layout.Context, th *theme.Theme, s pluginhost.Panel
 	lg.Description = "Logs of " + name
 	b := record(gtx, func(gtx layout.Context) layout.Dimensions { return lg.Layout(gtx, th, "Logs") })
 	b.at(gtx, image.Pt(x, y))
+	// The buttons' line, from the row's top: what the focus needs in
+	// view when the whole row does not fit.
+	l.buttonsAt[s.ID] = [2]int{y, y + b.dims.Size.Y}
 	y += b.dims.Size.Y
 	return layout.Dimensions{Size: image.Pt(width, y)}
 }

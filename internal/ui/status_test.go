@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"image"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -454,5 +455,119 @@ func TestStatusListWheelThenTab(t *testing.T) {
 	frame()
 	if got := focusedRow(&r, &l); got != "p0" || l.offset != 0 {
 		t.Errorf("Tab into the scrolled list: focus on %q, offset %d; want p0, 0", got, l.offset)
+	}
+}
+
+// The wheel scrolls over a row's buttons too; Tab within a row the wheel
+// took out of view, and a view grown shorter, bring the focus back in.
+func TestStatusListWheelAndFocus(t *testing.T) {
+	states := manyFailing(12)
+	size := image.Pt(1440, 600)
+	var r input.Router
+	var l StatusList
+	frame := func() {
+		gtx := context(&r, size, time.Now())
+		l.Layout(gtx, testTheme, states, image.Rect(1000, 13, 1100, 45), nil)
+		r.Frame(gtx.Ops)
+	}
+	wheel := func(at image.Point, dy float32) {
+		p := f32.Pt(float32(at.X), float32(at.Y))
+		r.Queue(pointer.Event{Kind: pointer.Move, Source: pointer.Mouse, Position: p},
+			pointer.Event{Kind: pointer.Scroll, Source: pointer.Mouse, Position: p, Scroll: f32.Pt(0, dy)})
+		frame()
+	}
+	l.Toggle(true) // the focus on p0's Restart
+	frame()
+	frame()
+	gtx := context(&r, size, time.Now())
+	l.Layout(gtx, testTheme, states, image.Rect(1000, 13, 1100, 45), nil)
+	r.Frame(gtx.Ops)
+	wheel(center(buttons(gtx.Ops)["Restart p0"]), 400)
+	if l.offset == 0 {
+		t.Fatal("the wheel over a button did not scroll")
+	}
+	r.MoveFocus(key.FocusForward) // p0's Logs, out of view
+	frame()
+	frame()
+	if !r.Source().Focused(&l.logs["p0"].Clickable) || l.offset != 0 {
+		t.Errorf("Tab within a scrolled-away row: offset %d, want 0", l.offset)
+	}
+
+	// The focus on a lower row, then the window shorter.
+	for range 10 {
+		r.MoveFocus(key.FocusForward)
+		frame()
+	}
+	size.Y = 300
+	frame()
+	frame()
+	f := l.followed
+	if f.button == nil || f.top < l.offset || f.bottom > l.offset+f.view {
+		t.Errorf("after the window shrank, the focused row %d-%d is out of view %d-%d", f.top, f.bottom, l.offset, l.offset+f.view)
+	}
+}
+
+// In a row taller than the view, the focus keeps the buttons' line in
+// view, moving from Restart to Logs too.
+func TestStatusListTallRow(t *testing.T) {
+	long := strings.Repeat("a long reason why the plugin failed ", 20)
+	states := []pluginhost.PanelState{{ID: "a", Plugin: "weather", State: pluginhost.Crashed, Err: errors.New("failed")},
+		{ID: "b", Plugin: "weather", State: pluginhost.Crashed, Err: errors.New(long)}}
+	size := image.Pt(1440, 110)
+	var r input.Router
+	var l StatusList
+	var ops *op.Ops
+	frame := func() {
+		gtx := context(&r, size, time.Now())
+		l.Layout(gtx, testTheme, states, image.Rect(1000, 0, 1100, 4), nil)
+		r.Frame(gtx.Ops)
+		ops = gtx.Ops
+	}
+	l.Toggle(true)
+	frame()
+	frame()
+	for i := range 3 { // a's Logs, then b's Restart and Logs
+		r.MoveFocus(key.FocusForward)
+		frame()
+		frame()
+		want := []string{"Logs of a", "Restart b", "Logs of b"}[i]
+		if b, ok := buttons(ops)[want]; !ok || !b.In(l.box) {
+			t.Errorf("%s focused at %v, out of the list %v", want, b, l.box)
+		}
+	}
+}
+
+// A focused button's ring stays inside the list's view: on its first
+// button, scrolled into view from below, and on its last row when all
+// fit.
+func TestStatusListRingInView(t *testing.T) {
+	for _, n := range []int{12, 2} {
+		states := manyFailing(n)
+		var r input.Router
+		var l StatusList
+		var ops *op.Ops
+		frame := func() {
+			gtx := context(&r, image.Pt(1440, 600), time.Now())
+			l.Layout(gtx, testTheme, states, image.Rect(1000, 13, 1100, 45), nil)
+			r.Frame(gtx.Ops)
+			ops = gtx.Ops
+		}
+		l.Toggle(true)
+		frame()
+		frame()
+		check := func(name string) {
+			t.Helper()
+			view := l.box.Inset(12) // the card's padding
+			if b := buttons(ops)[name].Inset(-5); !b.In(view) {
+				t.Errorf("%d rows: %s's ring %v outside the view %v", n, name, b, view)
+			}
+		}
+		check("Restart p0")
+		for range 2*n - 1 {
+			r.MoveFocus(key.FocusForward)
+			frame()
+			frame()
+		}
+		check(fmt.Sprintf("Logs of p%d", n-1))
 	}
 }
