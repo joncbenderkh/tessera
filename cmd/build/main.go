@@ -77,9 +77,9 @@ func build(noHost, run bool, dest string, extra []string) {
 	log.SetFlags(0)
 	log.SetPrefix("build: ")
 	// One channel takes every stop signal from the start. During the
-	// build the first stops go build and leaves this to remove what it
-	// staged; one from the terminal reaches go build as well. Unlike
-	// Ignore, this does not pass on to it. Later ones go to the host.
+	// build the first stops go build, in a group of its own, and leaves
+	// this to remove what it staged. Unlike Ignore, this does not pass
+	// on to it. Later ones go to the host.
 	signals := make(chan os.Signal, len(stopSignals))
 	signal.Notify(signals, stopSignals...)
 	ctx, stopped := watch(signals)
@@ -89,7 +89,7 @@ func build(noHost, run bool, dest string, extra []string) {
 	}
 	host := filepath.Join(root, "tessera")
 	if !noHost {
-		if err := goBuild(ctx, root, nil, "-o", host, "./cmd/tessera"); err != nil {
+		if err := buildHost(ctx, root, host); err != nil {
 			fatalUnlessStopped(ctx, "building the host", err)
 		}
 		log.Printf("host: %s", host)
@@ -189,15 +189,87 @@ func modulePath(goMod []byte) string {
 // stopping it when ctx is done. There is no library for compiling Go,
 // so it runs the go command.
 func goBuild(ctx context.Context, root string, env []string, args ...string) error {
+	// go build's work directory is its own, and removed here: a stopped
+	// go build does not remove it itself. It is made where go's
+	// GOTMPDIR says, as go build would, else in the temporary
+	// directory; only a kill of this command leaves it, empty once go
+	// build ends.
+	parent, err := goTmpDir(ctx, root, env)
+	if err != nil {
+		return err
+	}
+	work, err := os.MkdirTemp(parent, "tessera-build-")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(work)
+	// go build runs in root, so a relative one must not reach it.
+	if work, err = filepath.Abs(work); err != nil {
+		return err
+	}
 	cmd := exec.CommandContext(ctx, "go", append([]string{"build"}, args...)...)
 	cmd.Dir = root
-	cmd.Env = append(os.Environ(), env...)
+	cmd.Env = append(append(os.Environ(), env...), "GOTMPDIR="+work)
 	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
-	// Interrupted, go build finishes writing its output, which a kill
-	// could leave half copied; it is killed if it lingers.
-	cmd.Cancel = func() error { return cmd.Process.Signal(os.Interrupt) }
+	// Stopped, go build and the compilers it runs are interrupted
+	// together, in a group of their own: go build dies at once, and its
+	// compilers would run on. go build is killed if it lingers. Anything
+	// left half written is in staging, never the installed host or
+	// plugins. A terminal's Ctrl-C reaches them through ctx; its Ctrl-Z
+	// does not, so they build on while this is suspended, as the host
+	// runs on.
+	ownGroup(cmd)
+	cmd.Cancel = func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGINT) }
 	cmd.WaitDelay = 10 * time.Second
-	return cmd.Run()
+	err = cmd.Run()
+	if ctx.Err() != nil && cmd.Process != nil {
+		// Any of them that ignored the interrupt must not outlive its
+		// work directory.
+		syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+	}
+	return err
+}
+
+// goTmpDir is GOTMPDIR as go in root sees it, from the environment or
+// its env file (go env -w), relative to root; "" if unset.
+func goTmpDir(ctx context.Context, root string, env []string) (string, error) {
+	cmd := exec.CommandContext(ctx, "go", "env", "GOTMPDIR")
+	cmd.Dir = root
+	cmd.Env = append(os.Environ(), env...)
+	cmd.Stderr = os.Stderr
+	out, err := cmd.Output()
+	if err != nil {
+		return "", fmt.Errorf("go env GOTMPDIR: %w", err)
+	}
+	// Only the newline go adds: the path itself may end in spaces.
+	dir := strings.TrimSuffix(string(out), "\n")
+	if dir != "" && !filepath.IsAbs(dir) {
+		dir = filepath.Join(root, dir)
+	}
+	return dir, nil
+}
+
+// buildHost builds the host beside host and renames it into place, so
+// a build stopped or failed partway leaves the old one whole.
+func buildHost(ctx context.Context, root, host string) error {
+	return stageHost(ctx, root, host, func(ctx context.Context, out string) error {
+		return goBuild(ctx, root, nil, "-o", out, "./cmd/tessera")
+	})
+}
+
+// stageHost has build write the host to a file in a staging directory
+// in root, and renames that onto host once build succeeds.
+func stageHost(ctx context.Context, root, host string, build func(ctx context.Context, out string) error) error {
+	staging, err := os.MkdirTemp(root, ".build-")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(staging)
+	built := filepath.Join(staging, filepath.Base(host))
+	if err := build(ctx, built); err != nil {
+		return err
+	}
+	return os.Rename(built, host)
 }
 
 // installPlugins builds every plugin under root's plugins directory,
