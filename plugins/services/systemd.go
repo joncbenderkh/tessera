@@ -7,9 +7,11 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	sd "github.com/coreos/go-systemd/v22/dbus"
@@ -47,10 +49,13 @@ type unit struct {
 type manager interface {
 	// units is the status of the units named, in that order.
 	units(ctx context.Context, names []string) ([]unit, error)
-	// failed is the units that have failed.
-	failed(ctx context.Context) ([]unit, error)
+	// failed is the units that have failed, but for those of ids, which
+	// show already as named.
+	failed(ctx context.Context, ids []string) ([]unit, error)
 	// restart restarts the unit named and waits for the job to end.
 	restart(ctx context.Context, name string) error
+	// alive reports whether the connection is still open.
+	alive() bool
 	close()
 }
 
@@ -61,62 +66,99 @@ var handshake = 30 * time.Second
 // errHandshake is a bus that did not finish a connection in time.
 var errHandshake = errors.New("the bus did not answer")
 
+// buses opens a private connection to each scope's bus; tests replace
+// them. Neither starts a bus where there is none, as go-systemd's own
+// does: that runs dbus-launch, and leaves its daemon behind.
+var buses = [2]func(...godbus.ConnOption) (*godbus.Conn, error){
+	system: godbus.SystemBusPrivate,
+	user:   godbus.SessionBusPrivateNoAutoStartup,
+}
+
+// stuck says, of each scope, whether a connection is being made.
+var stuck [2]atomic.Bool
+
 // connect connects to the manager of s; tests replace it. The
-// connection lives as long as ctx.
+// connection lives as long as ctx. Making it takes handshake at most:
+// past that, it is given up on, and closed if it is made after all.
 var connect = func(ctx context.Context, s scope) (manager, error) {
-	// Never starting a bus where there is none, as go-systemd's own
-	// does: that runs dbus-launch, and leaves its daemon behind.
-	open := godbus.SessionBusPrivateNoAutoStartup
-	if s == system {
-		open = godbus.SystemBusPrivate
+	// One given up on that has not returned yet is waited for: a dial
+	// godbus cannot cancel, and another would only stall beside it.
+	if !stuck[s].CompareAndSwap(false, true) {
+		return nil, errHandshake
 	}
+	open, limit := buses[s], handshake
 	var mu sync.Mutex
 	var opened []*godbus.Conn
 	late := false
-	timer := time.AfterFunc(handshake, func() {
+	expired := make(chan struct{})
+	timer := time.AfterFunc(limit, func() {
 		mu.Lock()
 		defer mu.Unlock()
 		late = true
 		for _, c := range opened {
 			c.Close()
 		}
+		close(expired)
 	})
-	c, err := sd.NewConnection(func() (*godbus.Conn, error) {
-		conn, err := open(godbus.WithContext(ctx))
-		if err != nil {
-			return nil, err
-		}
-		mu.Lock()
-		opened = append(opened, conn)
-		if late {
-			conn.Close()
-		}
-		mu.Unlock()
-		return conn, handshakeOn(conn)
-	})
+	type made struct {
+		c   *sd.Conn
+		err error
+	}
+	res := make(chan made, 1)
+	go func() {
+		c, err := sd.NewConnection(func() (*godbus.Conn, error) {
+			conn, err := open(godbus.WithContext(ctx))
+			if err != nil {
+				return nil, err
+			}
+			mu.Lock()
+			opened = append(opened, conn)
+			if late {
+				conn.Close()
+			}
+			mu.Unlock()
+			return conn, handshakeOn(conn)
+		})
+		res <- made{c, err}
+		stuck[s].Store(false)
+	}()
+	var r made
+	select {
+	case r = <-res:
+	case <-expired:
+		go func() {
+			if r := <-res; r.err == nil {
+				r.c.Close()
+			}
+		}()
+		return nil, errHandshake
+	}
 	if !timer.Stop() {
-		if err == nil {
-			c.Close()
+		if r.err == nil {
+			r.c.Close()
 		}
 		return nil, errHandshake
 	}
-	if err != nil {
-		return nil, err
+	if r.err != nil {
+		return nil, r.err
 	}
-	m := &dbusManager{scope: s, conn: c, closed: make(chan struct{})}
+	m := &dbusManager{scope: s, conn: r.c, closed: make(chan struct{})}
 	// go-systemd makes two connections, one for calls and one for
 	// signals, a restart's end among them; either closing, as the bus
 	// went away, ends the manager, so a restart waiting knows.
 	for _, conn := range opened {
-		go func() {
-			select {
-			case <-conn.Context().Done():
-				m.close()
-			case <-m.closed:
-			}
-		}()
+		go watch(conn, m.closed, m.close)
 	}
 	return m, nil
+}
+
+// watch calls end when conn closes, unless closed is first.
+func watch(conn interface{ Context() context.Context }, closed <-chan struct{}, end func()) {
+	select {
+	case <-conn.Context().Done():
+		end()
+	case <-closed:
+	}
 }
 
 // handshakeOn authenticates on c, as go-systemd does, and closes it if
@@ -145,7 +187,7 @@ func (m *dbusManager) units(ctx context.Context, names []string) ([]unit, error)
 	if err != nil {
 		return nil, err
 	}
-	us, err := m.withSince(ctx, st)
+	us, err := m.withSince(ctx, st, len(st))
 	if err != nil {
 		return nil, err
 	}
@@ -187,8 +229,8 @@ func byName(ctx context.Context, names []string, list func(context.Context, []st
 }
 
 // refused reports whether err is the manager's refusal of a name, or
-// of so many at once, not a failure to reach it: the bus's own errors, such as ServiceUnknown
-// or NoReply, say nothing of the names.
+// of so many at once, not a failure to reach it: the bus's own errors,
+// such as ServiceUnknown or NoReply, say nothing of the names.
 func refused(err error) bool {
 	var e godbus.Error
 	if pe := (*godbus.Error)(nil); errors.As(err, &pe) {
@@ -203,20 +245,23 @@ func refused(err error) bool {
 	return strings.HasPrefix(e.Name, "org.freedesktop.systemd1.")
 }
 
-func (m *dbusManager) failed(ctx context.Context) ([]unit, error) {
+func (m *dbusManager) failed(ctx context.Context, ids []string) ([]unit, error) {
 	st, err := m.conn.ListUnitsFilteredContext(ctx, []string{"failed"})
 	if err != nil {
 		return nil, err
 	}
-	return m.withSince(ctx, st)
+	st = slices.DeleteFunc(st, func(s sd.UnitStatus) bool { return slices.Contains(ids, s.Name) })
+	// Since for as many as the list holds: past them, a unit costs a
+	// call, and shows not.
+	return m.withSince(ctx, st, maxItems)
 }
 
-// withSince is the statuses st with when each unit last changed state,
-// where its manager says. A unit it will not say of has none; a failure
+// withSince is the statuses st with when each of the first n last
+// changed state, where its manager says. A unit it will not say of has none; a failure
 // to ask, as the time ran out or the connection closed, fails it all.
-func (m *dbusManager) withSince(ctx context.Context, st []sd.UnitStatus) ([]unit, error) {
+func (m *dbusManager) withSince(ctx context.Context, st []sd.UnitStatus, n int) ([]unit, error) {
 	out := make([]unit, 0, len(st))
-	for _, s := range st {
+	for i, s := range st {
 		u := unit{
 			ref:         ref{scope: m.scope, name: s.Name},
 			id:          s.Name,
@@ -225,7 +270,7 @@ func (m *dbusManager) withSince(ctx context.Context, st []sd.UnitStatus) ([]unit
 			active:      s.ActiveState,
 			sub:         s.SubState,
 		}
-		if s.LoadState != "not-found" {
+		if i < n && s.LoadState != "not-found" {
 			p, err := m.conn.GetUnitPropertyContext(ctx, s.Name, "StateChangeTimestamp")
 			switch {
 			case err == nil:
@@ -245,32 +290,75 @@ func (m *dbusManager) withSince(ctx context.Context, st []sd.UnitStatus) ([]unit
 // not a failure to deliver the call.
 func answer(err error) bool {
 	var e godbus.Error
-	var pe *godbus.Error
-	return errors.As(err, &e) || errors.As(err, &pe)
+	if pe := (*godbus.Error)(nil); errors.As(err, &pe) {
+		e = *pe
+	} else if !errors.As(err, &e) {
+		return false
+	}
+	return !slices.Contains(undelivered, e.Name)
 }
 
-// errJobFailed is a restart whose job did not end done.
-var errJobFailed = errors.New("the restart did not complete")
+// undelivered are the bus's errors for a call it could not deliver, or
+// whose reply it could not: they say nothing of what the manager did.
+var undelivered = []string{
+	"org.freedesktop.DBus.Error.NoReply",
+	"org.freedesktop.DBus.Error.ServiceUnknown",
+	"org.freedesktop.DBus.Error.NameHasNoOwner",
+	"org.freedesktop.DBus.Error.Disconnected",
+	"org.freedesktop.DBus.Error.Timeout",
+	"org.freedesktop.DBus.Error.TimedOut",
+	"org.freedesktop.DBus.Error.NoServer",
+	"org.freedesktop.DBus.Error.NoNetwork",
+	"org.freedesktop.DBus.Error.IOError",
+	"org.freedesktop.DBus.Error.NoMemory",
+}
+
+// jobError is a restart whose job did not end done, but result.
+type jobError struct{ result string }
+
+func (e jobError) Error() string { return "the restart's job ended " + e.result }
 
 // errWaitLost is a restart asked for, whose end was not heard of: the
 // connection closed, or the time ran out, first.
 var errWaitLost = errors.New("the restart's end was not heard of")
 
 func (m *dbusManager) restart(ctx context.Context, name string) error {
+	return awaitJob(ctx, m.closed, func(ctx context.Context, done chan<- string) error {
+		_, err := m.conn.RestartUnitContext(ctx, name, "replace", done)
+		return err
+	})
+}
+
+// awaitJob starts a job and waits for its end, as told on done, while
+// the connection is not closed. A job whose start had no reply, or
+// whose end was not heard of, may have run: errWaitLost says so.
+func awaitJob(ctx context.Context, closed <-chan struct{}, start func(context.Context, chan<- string) error) error {
 	done := make(chan string, 1)
-	if _, err := m.conn.RestartUnitContext(ctx, name, "replace", done); err != nil {
+	if err := start(ctx, done); err != nil {
+		if !answer(err) {
+			return fmt.Errorf("%w: %v", errWaitLost, err)
+		}
 		return err
 	}
 	select {
 	case result := <-done:
 		if result != "done" {
-			return fmt.Errorf("%w: %s", errJobFailed, result)
+			return jobError{result}
 		}
 		return nil
-	case <-m.closed:
+	case <-closed:
 		return errWaitLost
 	case <-ctx.Done():
 		return fmt.Errorf("%w: %v", errWaitLost, ctx.Err())
+	}
+}
+
+func (m *dbusManager) alive() bool {
+	select {
+	case <-m.closed:
+		return false
+	default:
+		return true
 	}
 }
 

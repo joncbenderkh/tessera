@@ -18,6 +18,8 @@ import (
 	"sync"
 	"time"
 
+	godbus "github.com/godbus/dbus/v5"
+
 	"github.com/joncbenderkh/tessera"
 	"github.com/joncbenderkh/tessera/plugins/internal/metric"
 	"github.com/joncbenderkh/tessera/sdk"
@@ -31,7 +33,7 @@ var schema = `{
   "properties": {
     "units": {
       "type": "array",
-      "description": "The systemd units to show, such as sshd.service, or user:syncthing.service for one of your own; .service is added to a name without a type. Any other unit that has failed shows too.",
+      "description": "The systemd units to show, such as sshd.service, or user:syncthing.service for one of your own; .service is added to a name unless it ends in a unit type, such as .timer. Any other unit that has failed shows too.",
       "items": {"type": "string"}
     },
     ` + metric.IntervalSchema(defaultInterval) + `
@@ -50,7 +52,12 @@ type ref struct {
 	name  string
 }
 
-// String is the ref as the settings write it, and its key in the view.
+// key is the ref's key in the view and its actions: its manager, and
+// its name after a slash, which no unit name has, as a system unit's
+// name can start with user:.
+func (r ref) key() string { return r.scope.String() + "/" + r.name }
+
+// String is the ref as the settings write it.
 func (r ref) String() string {
 	if r.scope == user {
 		return "user:" + r.name
@@ -261,10 +268,11 @@ func (s *services) poll(ctx context.Context) time.Duration {
 			log.Printf("%s manager: %v", scope(i), err)
 		}
 	}
-	// A restart's failure is news until the unit changes state after.
-	for _, u := range rows {
-		key := u.ref.String()
-		if at, ok := s.failedAt[key]; ok && u.since.After(at) {
+	// A restart's failure is news until the unit changes state after,
+	// or is no longer listed.
+	for key, at := range s.failedAt {
+		i := slices.IndexFunc(rows, func(u unit) bool { return u.ref.key() == key })
+		if i < 0 || rows[i].since.After(at) {
 			delete(s.results, key)
 			delete(s.failedAt, key)
 		}
@@ -291,7 +299,11 @@ func (s *services) read(ctx context.Context, sc scope, names []string, limit tim
 	}
 	var r read
 	if r.named, r.err = m.units(rctx, names); r.err == nil {
-		r.failed, r.err = m.failed(rctx)
+		ids := make([]string, len(r.named))
+		for i, u := range r.named {
+			ids[i] = u.id
+		}
+		r.failed, r.err = m.failed(rctx, ids)
 	}
 	if r.err == nil {
 		return r
@@ -311,8 +323,11 @@ func (s *services) read(ctx context.Context, sc scope, names []string, limit tim
 func (s *services) manager(ctx context.Context, sc scope) (manager, error) {
 	s.mu.Lock()
 	if m := s.managers[sc]; m != nil {
-		s.mu.Unlock()
-		return m, nil
+		if m.alive() {
+			s.mu.Unlock()
+			return m, nil
+		}
+		s.managers[sc] = nil // closed, as its bus went away
 	}
 	d := s.dialing[sc]
 	if d == nil {
@@ -369,7 +384,7 @@ func (s *services) activate(_ context.Context, id string) error {
 		s.selected = ""
 	case strings.HasPrefix(id, restartPrefix):
 		key := strings.TrimPrefix(id, restartPrefix)
-		i := slices.IndexFunc(s.rows, func(u unit) bool { return u.ref.String() == key })
+		i := slices.IndexFunc(s.rows, func(u unit) bool { return u.ref.key() == key })
 		// Only a user's own service, listed now, and not being restarted.
 		if i < 0 || !restartable(s.rows[i]) || s.busy[key] {
 			return nil
@@ -393,15 +408,16 @@ func restartable(u unit) bool {
 	return u.ref.scope == user && unitType(u.ref.name) == "service" && u.load != "not-found" && u.load != "masked"
 }
 
-// restartTimeout bounds a restart, which waits for its job to end.
-const restartTimeout = 90 * time.Second
+// restartTimeout bounds a restart, which waits for its job to end: a
+// stop and a start, each by default allowed 90 s.
+const restartTimeout = 4 * time.Minute
 
 // restart restarts r, then shows how it went and polls again.
 func (s *services) restart(r ref) {
 	ctx, cancel := context.WithTimeout(context.Background(), restartTimeout)
 	defer cancel()
-	asked := time.Now()
 	m, err := s.manager(ctx, r.scope)
+	asked := time.Now()
 	if err == nil {
 		err = m.restart(ctx, r.name)
 	}
@@ -409,15 +425,49 @@ func (s *services) restart(r ref) {
 		err = nil
 	}
 	s.mu.Lock()
-	delete(s.busy, r.String())
+	delete(s.busy, r.key())
 	if err != nil {
 		log.Printf("restart %s: %v", r, err)
-		s.results[r.String()] = err.Error()
-		s.failedAt[r.String()] = time.Now()
+		s.results[r.key()] = brief(err)
+		s.failedAt[r.key()] = time.Now()
 	}
 	s.show()
 	s.mu.Unlock()
 	s.repoll()
+}
+
+// brief is why a restart failed, in few words: the details have little
+// room.
+func brief(err error) string {
+	var job jobError
+	var e godbus.Error
+	pe := (*godbus.Error)(nil)
+	switch {
+	case errors.Is(err, errWaitLost):
+		return "no word came of its end"
+	case errors.As(err, &job):
+		switch job.result {
+		case "canceled":
+			return "its job was canceled"
+		case "timeout":
+			return "its job timed out"
+		case "dependency":
+			return "a dependency failed"
+		case "skipped":
+			return "its job was skipped"
+		}
+		return "its job " + job.result
+	case errors.As(err, &pe):
+		e = *pe
+	case !errors.As(err, &e):
+		return err.Error()
+	}
+	if len(e.Body) > 0 {
+		if msg, ok := e.Body[0].(string); ok {
+			return msg // systemd's own, such as "Unit x.service not found."
+		}
+	}
+	return err.Error()
 }
 
 // restartedSince reports whether r, read again, is running and has

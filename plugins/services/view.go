@@ -57,7 +57,7 @@ func view(now time.Time, s panelState) sdk.View {
 		if i < maxItems {
 			list.Add(item(u, now))
 		}
-		if key := u.ref.String(); key == s.selected {
+		if key := u.ref.key(); key == s.selected {
 			details = unitDetails(u, now, s.busy[key], s.results[key])
 		}
 	}
@@ -94,13 +94,15 @@ func item(u unit, now time.Time) *sdk.ListItemSpec {
 	if !u.since.IsZero() {
 		detail = append(detail, "since "+since(u.since, now))
 	}
-	return sdk.Item(u.ref.name).Leading(state(u)).Detail(strings.Join(nonEmpty(detail), " · ")).Action(unitPrefix + u.ref.String())
+	return sdk.Item(u.ref.name).Leading(state(u)).Detail(strings.Join(nonEmpty(detail), " · ")).Action(unitPrefix + u.ref.key())
 }
 
 // state names u's state in a word.
 func state(u unit) string {
 	switch {
-	case u.load == "not-found":
+	case u.active == "failed":
+		return "failed" // and kept so, though since uninstalled
+	case u.load == "not-found" && (u.active == "inactive" || u.active == ""):
 		return "missing"
 	case u.load == "masked":
 		return "masked"
@@ -120,12 +122,6 @@ func state(u unit) string {
 // service's Restart, unless it is being restarted.
 func unitDetails(u unit, now time.Time, busy bool, result string) sdk.Widget {
 	col := sdk.Column(sdk.Text(u.ref.String())).Gap(sdk.SpacingSmall)
-	if u.id != "" && u.id != u.ref.name {
-		col.Add(sdk.Text("An alias of " + u.id).Size(sdk.SizeSmall).Tone(sdk.ToneMuted))
-	}
-	if u.description != "" && u.description != u.ref.name {
-		col.Add(sdk.Text(u.description).Size(sdk.SizeSmall).Tone(sdk.ToneMuted))
-	}
 	line := fmt.Sprintf("%s (%s)", u.active, u.sub)
 	if !u.since.IsZero() {
 		line += " since " + since(u.since, now)
@@ -140,14 +136,23 @@ func unitDetails(u unit, now time.Time, busy bool, result string) sdk.Widget {
 	case result != "":
 		col.Add(sdk.Text("Not restarted: " + result).Size(sdk.SizeSmall).Tone(sdk.ToneError))
 	}
+	// The actions before the alias and description, so a tile too short
+	// for those cuts them, not these.
 	items := sdk.List()
 	if restartable(u) && !busy {
-		items.Add(sdk.Item("Restart").Action(restartPrefix + u.ref.String()))
+		items.Add(sdk.Item("Restart").Action(restartPrefix + u.ref.key()))
 	}
 	// An item rather than activating the unit again: the host keeps the
 	// item last activated highlighted, which this one takes away with it.
 	items.Add(sdk.Item("Hide details").Action(hideAction))
-	return col.Add(items)
+	col.Add(items)
+	if u.id != "" && u.id != u.ref.name {
+		col.Add(sdk.Text("An alias of " + u.id).Size(sdk.SizeSmall).Tone(sdk.ToneMuted))
+	}
+	if u.description != "" && u.description != u.ref.name {
+		col.Add(sdk.Text(u.description).Size(sdk.SizeSmall).Tone(sdk.ToneMuted))
+	}
+	return col
 }
 
 // since is when t was: its time today, its weekday and time within a

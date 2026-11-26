@@ -53,11 +53,21 @@ type fakeManager struct {
 	aliases   map[string]string
 	err       error // what every call returns, if set
 	restarted []string
+	gone      bool // closed, as its bus went away
+}
+
+func (f *fakeManager) alive() bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return !f.gone
 }
 
 func (f *fakeManager) units(_ context.Context, names []string) ([]unit, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.gone {
+		return nil, errors.New("connection closed")
+	}
 	if f.err != nil {
 		return nil, f.err
 	}
@@ -77,7 +87,7 @@ func (f *fakeManager) units(_ context.Context, names []string) ([]unit, error) {
 	return out, nil
 }
 
-func (f *fakeManager) failed(context.Context) ([]unit, error) {
+func (f *fakeManager) failed(context.Context, []string) ([]unit, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.err != nil {
@@ -252,7 +262,7 @@ func TestRestart(t *testing.T) {
 	fakes[user].known["media.mount"] = unit{id: "media.mount", load: "loaded", active: "failed", sub: "failed"}
 	s, _ := panel(t, "sshd", "user:backup")
 	s.poll(t.Context())
-	for _, id := range []string{restartPrefix + "sshd.service", restartPrefix + "user:nosuch.service", restartPrefix + "user:media.mount", restartPrefix + "user:backup.service"} {
+	for _, id := range []string{restartPrefix + "system/sshd.service", restartPrefix + "user/nosuch.service", restartPrefix + "user/media.mount", restartPrefix + "user/backup.service"} {
 		if err := s.activate(t.Context(), id); err != nil {
 			t.Fatal(err)
 		}
@@ -293,7 +303,7 @@ func TestView(t *testing.T) {
 	for _, w := range plugintest.Widgets(v.Proto().GetBody()) {
 		items = append(items, w.GetList().GetItems()...)
 	}
-	if len(items) != 2 || items[1].GetLeading() != "failed" || items[1].GetDetail() != "user · failed · since 09:30" || items[1].GetActionId() != unitPrefix+"user:backup.service" {
+	if len(items) != 2 || items[1].GetLeading() != "failed" || items[1].GetDetail() != "user · failed · since 09:30" || items[1].GetActionId() != unitPrefix+"user/backup.service" {
 		t.Errorf("items %v", items)
 	}
 
@@ -308,21 +318,21 @@ func TestView(t *testing.T) {
 		}
 		return out
 	}
-	s.selected = "user:backup.service"
-	if got := actions(s); !slices.Contains(got, restartPrefix+"user:backup.service") || !slices.Contains(got, hideAction) {
+	s.selected = "user/backup.service"
+	if got := actions(s); !slices.Contains(got, restartPrefix+"user/backup.service") || !slices.Contains(got, hideAction) {
 		t.Errorf("user unit's actions %q", got)
 	}
-	s.busy["user:backup.service"] = true
-	if got := actions(s); slices.Contains(got, restartPrefix+"user:backup.service") {
+	s.busy["user/backup.service"] = true
+	if got := actions(s); slices.Contains(got, restartPrefix+"user/backup.service") {
 		t.Errorf("Restart offered while restarting: %q", got)
 	}
 	mount := unit{ref: ref{user, "media.mount"}, id: "media.mount", load: "loaded", active: "failed", sub: "failed"}
-	s.rows, s.selected = append(s.rows, mount), "user:media.mount"
+	s.rows, s.selected = append(s.rows, mount), "user/media.mount"
 	if got := actions(s); slices.ContainsFunc(got, func(a string) bool { return strings.HasPrefix(a, restartPrefix) }) {
 		t.Errorf("a user's mount's actions %q", got)
 	}
 	s.rows = s.rows[:2]
-	s.selected = "dbus.service"
+	s.selected = "system/dbus.service"
 	if got := actions(s); slices.ContainsFunc(got, func(a string) bool { return strings.HasPrefix(a, restartPrefix) }) {
 		t.Errorf("system unit's actions %q", got)
 	}
@@ -385,7 +395,8 @@ func TestMinBody(t *testing.T) {
 		view(now, panelState{}),
 		view(now, panelState{polled: true}),
 		view(now, panelState{polled: true, rows: rows, errs: [2]error{errors.New("connection refused"), errors.New("no bus")}}),
-		view(now, panelState{polled: true, rows: rows, selected: long.ref.String(), results: map[string]string{long.ref.String(): "Access denied"}}),
+		view(now, panelState{polled: true, rows: rows, selected: long.ref.key(), results: map[string]string{long.ref.key(): "Access denied"}}),
+		view(now, panelState{polled: true, rows: rows, selected: long.ref.key(), results: map[string]string{long.ref.key(): brief(fmt.Errorf("%w: %v", errWaitLost, context.DeadlineExceeded))}}),
 	}
 	for _, width := range []int{200, 300, 432, 600} {
 		for i, v := range views {
@@ -630,7 +641,7 @@ func TestByName(t *testing.T) {
 // failingFailed is a fake whose failed units cannot be read.
 type failingFailed struct{ *fakeManager }
 
-func (failingFailed) failed(context.Context) ([]unit, error) {
+func (failingFailed) failed(context.Context, []string) ([]unit, error) {
 	return nil, errors.New("no reply")
 }
 
@@ -663,12 +674,12 @@ func TestActionNames(t *testing.T) {
 	useFakes(fakes)
 	s, _ := panel(t, "restart:foo.service")
 	s.poll(t.Context())
-	if err := s.activate(t.Context(), unitPrefix+"restart:foo.service"); err != nil {
+	if err := s.activate(t.Context(), unitPrefix+"system/restart:foo.service"); err != nil {
 		t.Fatal(err)
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.selected != "restart:foo.service" || len(s.busy) != 0 {
+	if s.selected != "system/restart:foo.service" || len(s.busy) != 0 {
 		t.Errorf("selected %q, busy %v", s.selected, s.busy)
 	}
 }
@@ -713,12 +724,13 @@ func TestHandshake(t *testing.T) {
 // heard of; ran says whether the restart ran.
 type lostWait struct {
 	*fakeManager
-	ran bool
+	ran, closes bool
 }
 
 func (l lostWait) restart(_ context.Context, name string) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
+	l.gone = l.closes
 	if u, ok := l.known[name]; ok && l.ran {
 		u.active, u.sub, u.since = "active", "running", time.Now().Add(time.Millisecond)
 		l.known[name] = u
@@ -729,23 +741,46 @@ func (l lostWait) restart(_ context.Context, name string) error {
 // A restart whose end was not heard of is read again: it failed only
 // if the unit is not running anew.
 func TestLostWait(t *testing.T) {
-	for _, ran := range []bool{true, false} {
+	for _, tc := range []struct{ ran, closes bool }{{true, false}, {false, false}, {true, true}} {
 		fakes := newFakes()
+		dials := 0
 		connect = func(_ context.Context, sc scope) (manager, error) {
-			if sc == user {
-				return lostWait{fakes[sc], ran}, nil
+			if sc != user {
+				return fakes[sc], nil
 			}
-			return fakes[sc], nil
+			dials++
+			if dials == 1 {
+				return lostWait{fakes[sc], tc.ran, tc.closes}, nil
+			}
+			// The bus back: a new connection to the same manager.
+			f := &fakeManager{sc: user, known: fakes[sc].known}
+			return f, nil
 		}
 		s, _ := panel(t, "user:syncthing")
 		s.poll(t.Context())
 		s.restart(ref{user, "syncthing.service"})
 		s.mu.Lock()
-		result := s.results["user:syncthing.service"]
+		result := s.results["user/syncthing.service"]
 		s.mu.Unlock()
-		if ran && result != "" || !ran && result == "" {
-			t.Errorf("ran %v: result %q", ran, result)
+		if tc.ran && result != "" || !tc.ran && result == "" {
+			t.Errorf("%+v: result %q", tc, result)
 		}
+	}
+}
+
+// A restart's failure goes when its unit is no longer listed.
+func TestFailureGoes(t *testing.T) {
+	useFakes(newFakes())
+	s, _ := panel(t, "sshd")
+	key := "user/gone.service"
+	s.mu.Lock()
+	s.results[key], s.failedAt[key] = "Access denied", time.Now()
+	s.mu.Unlock()
+	s.poll(t.Context())
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.results) != 0 || len(s.failedAt) != 0 {
+		t.Errorf("failure kept for a unit not listed: %v %v", s.results, s.failedAt)
 	}
 }
 
@@ -772,7 +807,7 @@ func TestFailureClears(t *testing.T) {
 	fakes := newFakes()
 	useFakes(fakes)
 	s, _ := panel(t, "user:syncthing")
-	key := "user:syncthing.service"
+	key := "user/syncthing.service"
 	s.mu.Lock()
 	s.results[key], s.failedAt[key] = "Access denied", changed.Add(-time.Hour)
 	s.mu.Unlock()
@@ -781,5 +816,186 @@ func TestFailureClears(t *testing.T) {
 	defer s.mu.Unlock()
 	if _, ok := s.results[key]; ok {
 		t.Errorf("failure kept after the unit changed state: %v", s.results)
+	}
+}
+
+// The bus's own errors are no answer of the manager's.
+func TestAnswer(t *testing.T) {
+	for _, tc := range []struct {
+		err  error
+		want bool
+	}{
+		{godbus.Error{Name: "org.freedesktop.systemd1.NoSuchUnit"}, true},
+		{&godbus.Error{Name: "org.freedesktop.DBus.Error.InvalidArgs"}, true},
+		{godbus.Error{Name: "org.freedesktop.DBus.Error.NoReply"}, false},
+		{&godbus.Error{Name: "org.freedesktop.DBus.Error.ServiceUnknown"}, false},
+		{errors.New("connection closed"), false},
+	} {
+		if got := answer(tc.err); got != tc.want {
+			t.Errorf("answer(%v) = %v", tc.err, got)
+		}
+	}
+}
+
+// A job is waited on until its end, the connection's, or the time's;
+// all but a reply of the manager's may have left it run.
+func TestAwaitJob(t *testing.T) {
+	never := make(chan struct{})
+	closed := make(chan struct{})
+	close(closed)
+	ended := func(result string) func(context.Context, chan<- string) error {
+		return func(_ context.Context, done chan<- string) error {
+			done <- result
+			return nil
+		}
+	}
+	queued := func(context.Context, chan<- string) error { return nil }
+	failing := func(err error) func(context.Context, chan<- string) error {
+		return func(context.Context, chan<- string) error { return err }
+	}
+	short, cancel := context.WithTimeout(t.Context(), 10*time.Millisecond)
+	defer cancel()
+	for _, tc := range []struct {
+		name   string
+		ctx    context.Context
+		closed <-chan struct{}
+		start  func(context.Context, chan<- string) error
+		lost   bool
+		ok     bool
+	}{
+		{"done", t.Context(), never, ended("done"), false, true},
+		{"failed", t.Context(), never, ended("failed"), false, false},
+		{"closed", t.Context(), closed, queued, true, false},
+		{"timed out", short, never, queued, true, false},
+		{"no reply", t.Context(), never, failing(godbus.Error{Name: "org.freedesktop.DBus.Error.NoReply"}), true, false},
+		{"refused", t.Context(), never, failing(godbus.Error{Name: "org.freedesktop.systemd1.NoSuchUnit"}), false, false},
+	} {
+		err := awaitJob(tc.ctx, tc.closed, tc.start)
+		if errors.Is(err, errWaitLost) != tc.lost || (err == nil) != tc.ok {
+			t.Errorf("%s: %v", tc.name, err)
+		}
+	}
+}
+
+// contextConn is a connection that is only its context.
+type contextConn struct{ ctx context.Context }
+
+func (c contextConn) Context() context.Context { return c.ctx }
+
+// A manager ends when either of its connections does.
+func TestWatch(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	closed, ended := make(chan struct{}), make(chan struct{})
+	go watch(contextConn{ctx}, closed, func() { close(ended) })
+	select {
+	case <-ended:
+		t.Fatal("ended before its connection")
+	case <-time.After(20 * time.Millisecond):
+	}
+	cancel()
+	select {
+	case <-ended:
+	case <-time.After(5 * time.Second):
+		t.Fatal("not ended with its connection")
+	}
+}
+
+// A bus whose very dial stalls is given up on in handshake's time.
+func TestStalledDial(t *testing.T) {
+	release := make(chan struct{})
+	defer close(release)
+	old := buses[user]
+	defer func() { buses[user] = old }()
+	var mu sync.Mutex
+	dials := 0
+	buses[user] = func(...godbus.ConnOption) (*godbus.Conn, error) {
+		mu.Lock()
+		dials++
+		mu.Unlock()
+		<-release
+		return nil, errors.New("released")
+	}
+	defer func(d time.Duration) { handshake = d }(handshake)
+	handshake = 50 * time.Millisecond
+	done := make(chan error, 1)
+	go func() {
+		_, err := realConnect(context.Background(), user)
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if !errors.Is(err, errHandshake) {
+			t.Errorf("connect = %v, want %v", err, errHandshake)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("connect waited on a dial that stalls")
+	}
+	// While that dial is stuck, no other starts.
+	if _, err := realConnect(context.Background(), user); !errors.Is(err, errHandshake) {
+		t.Errorf("connect while stuck = %v", err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if dials != 1 {
+		t.Errorf("%d dials, want 1", dials)
+	}
+}
+
+// A unit failed and since uninstalled still counts, and shows, as failed.
+func TestFailedMissing(t *testing.T) {
+	if got := state(unit{load: "not-found", active: "failed"}); got != "failed" {
+		t.Errorf("state = %q", got)
+	}
+	// And one whose file went while it ran runs still.
+	if got := state(unit{load: "not-found", active: "active", sub: "running"}); got != "active" {
+		t.Errorf("state = %q", got)
+	}
+}
+
+// A system unit named as a user's is a row of its own, and so are its
+// actions.
+func TestKeys(t *testing.T) {
+	sys, usr := ref{system, "user:foo.service"}, ref{user, "foo.service"}
+	if sys.key() == usr.key() {
+		t.Errorf("one key, %q, for both", sys.key())
+	}
+	if sys.String() != usr.String() {
+		t.Errorf("settings names %q and %q", sys, usr)
+	}
+}
+
+// A restart's failure is said in few words.
+func TestBrief(t *testing.T) {
+	for _, tc := range []struct {
+		err  error
+		want string
+	}{
+		{fmt.Errorf("%w: %v", errWaitLost, context.DeadlineExceeded), "no word came of its end"},
+		{jobError{"timeout"}, "its job timed out"},
+		{jobError{"failed"}, "its job failed"},
+		{godbus.Error{Name: "org.freedesktop.systemd1.NoSuchUnit", Body: []any{"Unit x.service not found."}}, "Unit x.service not found."},
+		{errHandshake, errHandshake.Error()},
+	} {
+		if got := brief(tc.err); got != tc.want {
+			t.Errorf("brief(%v) = %q, want %q", tc.err, got, tc.want)
+		}
+	}
+}
+
+// The details' actions come before their longest lines, which a short
+// tile then cuts instead.
+func TestDetailsOrder(t *testing.T) {
+	u := unit{ref: ref{user, "a.service"}, id: "b.service", description: "A description", load: "loaded", active: "active", sub: "running"}
+	var order []string
+	for _, w := range plugintest.Widgets(sdk.View{Body: unitDetails(u, time.Now(), false, "")}.Proto().GetBody()) {
+		if l := w.GetList(); l != nil && len(l.GetItems()) > 0 {
+			order = append(order, "actions")
+		}
+		if txt := w.GetText().GetValue(); txt == "A description" || txt == "An alias of b.service" {
+			order = append(order, txt)
+		}
+	}
+	if len(order) != 3 || order[0] != "actions" {
+		t.Errorf("order %q", order)
 	}
 }
