@@ -310,6 +310,8 @@ func TestGoBuildStoppedCleans(t *testing.T) {
 	tmp := t.TempDir()
 	t.Setenv("TMPDIR", tmp)
 	t.Setenv("GOTMPDIR", "")
+	// Nor from go's env file.
+	t.Setenv("GOENV", "off")
 	root := t.TempDir()
 	var src strings.Builder
 	src.WriteString("package main\n\nfunc main() {}\n")
@@ -459,6 +461,65 @@ func TestGoBuildGoEnvGOTMPDIR(t *testing.T) {
 	}
 	if err := goBuild(context.Background(), root, []string{"GOCACHE=" + t.TempDir()}, "-o", filepath.Join(root, "out"), "."); err != nil {
 		t.Fatalf("build with GOTMPDIR in the go env file: %v", err)
+	}
+}
+
+// A relative TMPDIR, with no GOTMPDIR, is relative to root too.
+func TestGoBuildRelativeTMPDIR(t *testing.T) {
+	if testing.Short() {
+		t.Skip("runs go build")
+	}
+	t.Chdir(t.TempDir())
+	t.Setenv("GOTMPDIR", "")
+	t.Setenv("GOENV", "off")
+	t.Setenv("TMPDIR", "tmp")
+	root := t.TempDir()
+	if err := os.Mkdir(filepath.Join(root, "tmp"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for name, content := range map[string]string{
+		"go.mod":  "module example.com/reltmp\n\ngo 1.25.0\n",
+		"main.go": "package main\n\nfunc main() {}\n",
+	} {
+		if err := os.WriteFile(filepath.Join(root, name), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := goBuild(context.Background(), root, []string{"GOCACHE=" + t.TempDir()}, "-o", filepath.Join(root, "out"), "."); err != nil {
+		t.Fatalf("build with a relative TMPDIR: %v", err)
+	}
+}
+
+// A GOTMPDIR with ".." after a symbolic link is taken as the system
+// takes it, not cleaned.
+func TestGoBuildGOTMPDIRLinkDotDot(t *testing.T) {
+	if testing.Short() {
+		t.Skip("runs go build")
+	}
+	base := t.TempDir()
+	for _, dir := range []string{"real/sub", "real/tmp"} {
+		if err := os.MkdirAll(filepath.Join(base, dir), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Symlink(filepath.Join(base, "real", "sub"), filepath.Join(base, "link")); err != nil {
+		t.Fatal(err)
+	}
+	// base/link/../tmp is base/real/tmp; cleaned, it is base/tmp, which
+	// does not exist.
+	t.Setenv("GOTMPDIR", base+"/link/../tmp")
+	t.Setenv("TMPDIR", filepath.Join(t.TempDir(), "missing"))
+	root := t.TempDir()
+	for name, content := range map[string]string{
+		"go.mod":  "module example.com/link\n\ngo 1.25.0\n",
+		"main.go": "package main\n\nfunc main() {}\n",
+	} {
+		if err := os.WriteFile(filepath.Join(root, name), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := goBuild(context.Background(), root, []string{"GOCACHE=" + t.TempDir()}, "-o", filepath.Join(root, "out"), "."); err != nil {
+		t.Fatalf("build with GOTMPDIR %s: %v", base+"/link/../tmp", err)
 	}
 }
 
