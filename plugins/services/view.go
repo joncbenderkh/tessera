@@ -32,7 +32,7 @@ func view(now time.Time, s panelState) sdk.View {
 			failed++
 		}
 	}
-	summary := count(len(s.rows), "service")
+	summary := listed(len(s.rows))
 	if failed > 0 {
 		summary += fmt.Sprintf(" · %d failed", failed)
 	}
@@ -42,7 +42,13 @@ func view(now time.Time, s panelState) sdk.View {
 			body.Add(sdk.Text(fmt.Sprintf("Cannot read the %s's services: %v", managerName(scope(sc)), err)).Size(sdk.SizeSmall).Tone(sdk.ToneWarn))
 		}
 	}
-	list := sdk.List().ID("units").Empty("No failed services")
+	// The units named always have rows once read, so with none, only
+	// failed ones were looked for.
+	empty := "No failed services"
+	if len(s.named) > 0 {
+		empty = "No units read"
+	}
+	list := sdk.List().ID("units").Empty(empty)
 	if !s.polled {
 		list.Loading()
 	}
@@ -88,7 +94,7 @@ func item(u unit, now time.Time) *sdk.ListItemSpec {
 	if !u.since.IsZero() {
 		detail = append(detail, "since "+since(u.since, now))
 	}
-	return sdk.Item(u.ref.name).Leading(state(u)).Detail(strings.Join(nonEmpty(detail), " · ")).Action(u.ref.String())
+	return sdk.Item(u.ref.name).Leading(state(u)).Detail(strings.Join(nonEmpty(detail), " · ")).Action(unitPrefix + u.ref.String())
 }
 
 // state names u's state in a word.
@@ -110,8 +116,8 @@ func state(u unit) string {
 	return u.active
 }
 
-// unitDetails shows all the panel knows of u, and a user's own unit's
-// Restart, unless it is being restarted.
+// unitDetails shows all the panel knows of u, and a user's own
+// service's Restart, unless it is being restarted.
 func unitDetails(u unit, now time.Time, busy bool, result string) sdk.Widget {
 	col := sdk.Column(sdk.Text(u.ref.String())).Gap(sdk.SpacingSmall)
 	if u.id != "" && u.id != u.ref.name {
@@ -135,7 +141,7 @@ func unitDetails(u unit, now time.Time, busy bool, result string) sdk.Widget {
 		col.Add(sdk.Text("Not restarted: " + result).Size(sdk.SizeSmall).Tone(sdk.ToneError))
 	}
 	items := sdk.List()
-	if u.ref.scope == user && !busy {
+	if restartable(u) && !busy {
 		items.Add(sdk.Item("Restart").Action(restartPrefix + u.ref.String()))
 	}
 	// An item rather than activating the unit again: the host keeps the
@@ -155,6 +161,15 @@ func since(t, now time.Time) string {
 		return t.Format("Mon 15:04")
 	}
 	return t.Format("Jan 2")
+}
+
+// listed says how many units there are, and how many the list holds
+// if not all.
+func listed(n int) string {
+	if n > maxItems {
+		return fmt.Sprintf("%d of %s", maxItems, count(n, "unit"))
+	}
+	return count(n, "unit")
 }
 
 // count is n of noun, in the plural unless n is 1.

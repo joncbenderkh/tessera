@@ -3,7 +3,7 @@
 // Command services is the services panel: the state of the systemd
 // units the settings name, of the system's manager or the user's, and
 // of any other that has failed. Activating one shows its details, and,
-// for a user's own unit, a Restart; system units are read-only, as
+// for a user's own service, a Restart; system units are read-only, as
 // restarting one needs root.
 package main
 
@@ -65,20 +65,35 @@ func parseRef(s string) (ref, error) {
 	if rest, ok := strings.CutPrefix(name, "user:"); ok {
 		r.scope, name = user, rest
 	}
-	if !strings.Contains(name, ".") {
+	bare := name == "" || strings.HasPrefix(name, ".") || strings.HasSuffix(name, ".")
+	if !bare && !slices.Contains(unitTypes, unitType(name)) {
 		name += ".service"
 	}
-	if !validName(name) {
+	if bare || !validName(name) {
 		return ref{}, fmt.Errorf("setting \"units\": want unit names, such as sshd.service or user:syncthing.service, not %q", s)
 	}
 	r.name = name
 	return r, nil
 }
 
-// validName reports whether name is a systemd unit name: letters,
-// digits, and :-_.\@, a type after a dot, and no longer than 255.
+// unitTypes are the types a unit name can end in.
+var unitTypes = []string{"service", "socket", "target", "device", "mount", "automount", "swap", "timer", "path", "slice", "scope"}
+
+// unitType is what follows name's last dot, or "" if it has none.
+func unitType(name string) string {
+	if i := strings.LastIndexByte(name, '.'); i >= 0 {
+		return name[i+1:]
+	}
+	return ""
+}
+
+// validName reports whether name is a systemd unit name, as systemd
+// checks one: letters, digits, and :-_.\@, no longer than 255, a type
+// after the last dot, and, after an @, an instance, as the manager
+// reports nothing of a template.
 func validName(name string) bool {
-	if name == "" || len(name) > 255 || strings.HasPrefix(name, ".") || strings.HasSuffix(name, ".") {
+	dot := strings.LastIndexByte(name, '.')
+	if len(name) > 255 || dot <= 0 || !slices.Contains(unitTypes, name[dot+1:]) {
 		return false
 	}
 	for _, c := range name {
@@ -87,7 +102,8 @@ func validName(name string) bool {
 			return false
 		}
 	}
-	return true
+	at := strings.IndexByte(name, '@')
+	return at != 0 && (at < 0 || at+1 < dot)
 }
 
 // config is the settings, checked.
@@ -114,8 +130,10 @@ func check(s settings) (config, error) {
 	return cfg, nil
 }
 
-// Action IDs: a unit's row is its ref; these name the details' items.
+// Action IDs: a unit's row is its ref after unitPrefix, as a ref
+// itself can start with restart:; the others name the details' items.
 const (
+	unitPrefix    = "unit:"
 	hideAction    = "hide"
 	restartPrefix = "restart:"
 )
@@ -133,17 +151,19 @@ type services struct {
 	cfg      config
 	gen      int // counts the settings, so a poll of old ones is dropped
 	managers [2]manager
+	dialing  [2]*dial // connections being made
 	rows     []unit
 	errs     [2]error // why each manager could not be read, or nil
 	polled   bool
-	selected string            // the ref of the unit whose details show
-	busy     map[string]bool   // units being restarted
-	results  map[string]string // why a unit's last restart failed
+	selected string               // the ref of the unit whose details show
+	busy     map[string]bool      // units being restarted
+	results  map[string]string    // why a unit's last restart failed
+	failedAt map[string]time.Time // and when
 }
 
 func main() {
 	views := make(chan sdk.View)
-	s := &services{views: views, busy: map[string]bool{}, results: map[string]string{}}
+	s := &services{views: views, busy: map[string]bool{}, results: map[string]string{}, failedAt: map[string]time.Time{}}
 	s.repoll = func() { s.poller.Start(s.poll) }
 	sdk.Serve(sdk.Plugin{
 		Name:         "services",
@@ -186,12 +206,11 @@ func (s *services) poll(ctx context.Context) time.Duration {
 	s.mu.Lock()
 	cfg, gen := s.cfg, s.gen
 	s.mu.Unlock()
-	ctx, cancel := context.WithTimeout(ctx, metric.Limit(cfg.interval))
-	defer cancel()
 
-	var rows []unit
-	var errs [2]error
-	var failed []unit
+	// Each manager in its own time, so one slow to answer does not use
+	// up the other's.
+	var reads [2]read
+	var wg sync.WaitGroup
 	for _, sc := range []scope{system, user} {
 		var names []string
 		for _, r := range cfg.units {
@@ -199,22 +218,15 @@ func (s *services) poll(ctx context.Context) time.Duration {
 				names = append(names, r.name)
 			}
 		}
-		m, err := s.manager(ctx, sc)
-		if err == nil {
-			var named, bad []unit
-			if named, err = m.units(ctx, names); err == nil {
-				bad, err = m.failed(ctx)
-			}
-			if err == nil {
-				rows = append(rows, named...)
-				failed = append(failed, bad...)
-			} else {
-				s.drop(sc, m)
-			}
-		}
-		if err != nil {
-			errs[sc] = err
-		}
+		wg.Go(func() { reads[sc] = s.read(ctx, sc, names, metric.Limit(cfg.interval)) })
+	}
+	wg.Wait()
+	var rows, failed []unit
+	var errs [2]error
+	for sc, r := range reads {
+		rows = append(rows, r.named...)
+		failed = append(failed, r.failed...)
+		errs[sc] = r.err
 	}
 	if errors.Is(ctx.Err(), context.Canceled) {
 		return 0 // the settings changed; the poller was woken
@@ -225,12 +237,13 @@ func (s *services) poll(ctx context.Context) time.Duration {
 		return 0
 	}
 	// A manager that could not be read keeps its units as last read,
-	// under its warning.
+	// under its warning: those still named, and the others failed.
 	for _, u := range s.rows {
 		if errs[u.ref.scope] != nil {
-			if slices.Contains(cfg.units, u.ref) {
+			switch {
+			case slices.Contains(cfg.units, u.ref):
 				rows = append(rows, u)
-			} else {
+			case u.active == "failed":
 				failed = append(failed, u)
 			}
 		}
@@ -248,33 +261,93 @@ func (s *services) poll(ctx context.Context) time.Duration {
 			log.Printf("%s manager: %v", scope(i), err)
 		}
 	}
+	// A restart's failure is news until the unit changes state after.
+	for _, u := range rows {
+		key := u.ref.String()
+		if at, ok := s.failedAt[key]; ok && u.since.After(at) {
+			delete(s.results, key)
+			delete(s.failedAt, key)
+		}
+	}
 	s.rows, s.errs, s.polled = rows, errs, true
 	s.show()
 	return cfg.interval
 }
 
+// read is what a poll read of one manager.
+type read struct {
+	named, failed []unit
+	err           error
+}
+
+// read reads the units named, and those failed, from sc's manager,
+// within limit.
+func (s *services) read(ctx context.Context, sc scope, names []string, limit time.Duration) read {
+	rctx, cancel := context.WithTimeout(ctx, limit)
+	defer cancel()
+	m, err := s.manager(rctx, sc)
+	if err != nil {
+		return read{err: err}
+	}
+	var r read
+	if r.named, r.err = m.units(rctx, names); r.err == nil {
+		r.failed, r.err = m.failed(rctx)
+	}
+	if r.err == nil {
+		return r
+	}
+	// A poll cut short, as the settings changed, says nothing of the
+	// connection, which a restart may be waiting on.
+	if ctx.Err() == nil {
+		s.drop(sc, m)
+	}
+	// Half a read is none: the manager's units stay as last read.
+	return read{err: r.err}
+}
+
 // manager is the connection to sc's manager, made if there is none.
+// Only one is made at a time: those who need it meanwhile wait for it,
+// each as long as its ctx lets it.
 func (s *services) manager(ctx context.Context, sc scope) (manager, error) {
 	s.mu.Lock()
-	m := s.managers[sc]
-	s.mu.Unlock()
-	if m != nil {
+	if m := s.managers[sc]; m != nil {
+		s.mu.Unlock()
 		return m, nil
 	}
-	// The connection lives on after this poll or restart, and closes
-	// when the context it was made with ends: not when ctx does.
-	m, err := connect(context.WithoutCancel(ctx), sc)
-	if err != nil {
-		return nil, err
+	d := s.dialing[sc]
+	if d == nil {
+		d = &dial{done: make(chan struct{})}
+		s.dialing[sc] = d
+		go s.dial(sc, d)
 	}
+	s.mu.Unlock()
+	select {
+	case <-d.done:
+		return d.m, d.err
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
+// dial is a connection being made.
+type dial struct {
+	done chan struct{} // closed when made, or failed
+	m    manager
+	err  error
+}
+
+// dial connects to sc's manager, which can take as long as the bus
+// does: neither it nor the connection, which lives on after the poll or
+// restart that wanted it, is bound to theirs.
+func (s *services) dial(sc scope, d *dial) {
+	d.m, d.err = connect(context.Background(), sc)
 	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.managers[sc] != nil {
-		m.close()
-		return s.managers[sc], nil
+	if d.err == nil {
+		s.managers[sc] = d.m
 	}
-	s.managers[sc] = m
-	return m, nil
+	s.dialing[sc] = nil
+	s.mu.Unlock()
+	close(d.done)
 }
 
 // drop closes m, sc's connection, which failed, so the next poll makes
@@ -297,18 +370,27 @@ func (s *services) activate(_ context.Context, id string) error {
 	case strings.HasPrefix(id, restartPrefix):
 		key := strings.TrimPrefix(id, restartPrefix)
 		i := slices.IndexFunc(s.rows, func(u unit) bool { return u.ref.String() == key })
-		// Only a user's own unit, listed now, and not being restarted.
-		if i < 0 || s.rows[i].ref.scope != user || s.busy[key] {
+		// Only a user's own service, listed now, and not being restarted.
+		if i < 0 || !restartable(s.rows[i]) || s.busy[key] {
 			return nil
 		}
 		s.busy[key] = true
 		delete(s.results, key)
 		go s.restart(s.rows[i].ref)
+	case strings.HasPrefix(id, unitPrefix):
+		s.selected = strings.TrimPrefix(id, unitPrefix)
 	default:
-		s.selected = id
+		return nil
 	}
 	s.show()
 	return nil
+}
+
+// restartable reports whether the panel restarts u: a user's own
+// service, there to restart; system units need root, and other types
+// are not restarted.
+func restartable(u unit) bool {
+	return u.ref.scope == user && unitType(u.ref.name) == "service" && u.load != "not-found" && u.load != "masked"
 }
 
 // restartTimeout bounds a restart, which waits for its job to end.
@@ -318,19 +400,41 @@ const restartTimeout = 90 * time.Second
 func (s *services) restart(r ref) {
 	ctx, cancel := context.WithTimeout(context.Background(), restartTimeout)
 	defer cancel()
+	asked := time.Now()
 	m, err := s.manager(ctx, r.scope)
 	if err == nil {
 		err = m.restart(ctx, r.name)
+	}
+	if errors.Is(err, errWaitLost) && s.restartedSince(r, asked) {
+		err = nil
 	}
 	s.mu.Lock()
 	delete(s.busy, r.String())
 	if err != nil {
 		log.Printf("restart %s: %v", r, err)
 		s.results[r.String()] = err.Error()
+		s.failedAt[r.String()] = time.Now()
 	}
 	s.show()
 	s.mu.Unlock()
 	s.repoll()
+}
+
+// restartedSince reports whether r, read again, is running and has
+// changed state since t: a restart whose end was not heard of.
+func (s *services) restartedSince(r ref, t time.Time) bool {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	m, err := s.manager(ctx, r.scope)
+	if err != nil {
+		return false
+	}
+	us, err := m.units(ctx, []string{r.name})
+	if err != nil {
+		s.drop(r.scope, m)
+		return false
+	}
+	return len(us) == 1 && us[0].active == "active" && us[0].since.After(t)
 }
 
 // show sends the view. s.mu is held.
