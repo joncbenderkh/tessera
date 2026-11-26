@@ -251,8 +251,11 @@ runs the builds without publishing.
 
 ## Status
 
-The module and source skeleton exist (#4). The backlog is tracked as
-GitHub issues. CI (#5), the release workflow (#6), the config file
+The module and source skeleton exist (#4). The backlog is tracked in
+itsaplan, the self-hosted tracker, as project `TESS` (`TESS-<n>`,
+through the `itsaplan` MCP server); GitHub issues are closed and not
+used for new work. The `#n` numbers in this section are the earlier
+GitHub issues and PRs. CI (#5), the release workflow (#6), the config file
 (#7), and plugin protocol v1 (#8) are in place. The host launches,
 describes, and configures each enabled panel's plugin and shuts them
 all down on exit (#12), and
