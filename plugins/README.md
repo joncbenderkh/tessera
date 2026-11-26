@@ -28,6 +28,7 @@ builds the host as well.
 | `network` | Download and upload rates, in bits per second, each with a sparkline | `interface` (default: the physical interfaces added up, or every one but loopback if there is none); `interval` (default `2s`) |
 | `processes` | A table of processes; activating a row shows the process's details below the table, and activating it again hides them, though the row stays highlighted until another is activated | `sort`: `cpu` (default), `memory`, `pid`, or `name`; `rows`, 1 to 100 (default 10); `interval` (default `2s`) |
 | `weather` | The temperature now, the sky, how warm it feels, and the humidity at one place, from [Open-Meteo](https://open-meteo.com), with when they are for; the title names the place found, with its region or country | `location`: a place to look up by name, such as `Berlin`, optionally followed by its region or country after commas to pick among places of that name, as in `Springfield, Illinois`; or `latitude` and `longitude` instead, in degrees (not both). `label` (default: the place found, with its region or country); `units`: `metric` (°C, the default) or `imperial` (°F); `refresh` (`5m`–`6h`, default `15m`) |
+| `services` | The state of systemd units (active, failed, starting…, and since when): those the settings name, of the system's manager or your own, then any other that has failed; activating one shows its details, with a Restart for one of your own services | `units`: unit names, such as `sshd.service`, or `user:syncthing.service` for one of your user manager's; `.service` is added to a name unless it ends in a unit type, such as `.timer`; `interval` (default `10s`) |
 
 `interval` is a duration from `1s` to `1h`, such as `2s` or `1m`.
 Changing it, or what a panel shows, clears its sparklines. A process's
@@ -61,6 +62,18 @@ few words why they were not updated (the panel's logs say more), and
 tries again after a minute, then after
 twice as long each time, up to `refresh`; conditions older than twice
 `refresh` and 15 minutes show as not updated even without a failure.
+
+The `services` panel reads systemd over D-Bus, through
+`github.com/coreos/go-systemd/v22`, from the system's manager and the
+user's own. It never restarts a system unit, which would need root or
+a polkit prompt; a user service's Restart waits for the job to end
+and shows why if it failed. Where the user has no session bus, the
+panel never starts one. A unit named by an alias, such as
+`dbus.service`, keeps that name, and its details say which unit it
+names. A manager that cannot be reached shows as a warning only if a
+unit named is its, or neither can be reached; its units stay listed
+as last read until it can be again. Each manager is read in its own
+time, so one slow to answer leaves the other's units current.
 
 Text settings are strings: quote one that would read as a number or
 boolean, such as `title: "2026"`, or the panel rejects it.

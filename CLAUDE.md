@@ -95,6 +95,11 @@ dialogs). Edit mode must be able to re-enable any disabled panel.
   API key or sign-up, worldwide, current conditions and a place-name
   search in one service. Its free tier is for non-commercial use, and
   its data is CC BY 4.0, which the panel credits.
+- **Services panel:** the `services` plugin reads systemd over D-Bus
+  with `github.com/coreos/go-systemd/v22` (Apache-2.0), the owner's
+  choice (#23): the system's and the user's managers, the units the
+  settings name and any other that has failed; Restart for the user's
+  own services only, never system units.
 - **Module path:** `github.com/joncbenderkh/tessera`.
 
 ## Layout
@@ -157,8 +162,8 @@ dialogs). Edit mode must be able to re-enable any disabled panel.
   through `internal/pluginhost`; the author guide is `docs/plugins.md`.
 - `plugins/<name>`: first-party panels, each its own `main` package.
   `plugins/internal/zones` holds the time zone names the clocks accept.
-  The system panels (`system`, `disk`, `network`, `processes`) share
-  `plugins/internal/metric`.
+  The panels that poll (`system`, `disk`, `network`, `processes`,
+  `services`) share `plugins/internal/metric`.
 
 ## Commands
 
@@ -292,7 +297,8 @@ configuring it (#16). The weather panel shows the current conditions
 at a place from Open-Meteo (#22). A click on the header's plugin
 status lists the panels needing attention, each with its Restart and
 Logs; a window 1000 dp wide or narrower shows the status's dot alone
-(#17).
+(#17). The services panel shows the state of systemd units, the
+system's and the user's, and restarts the user's own (#23).
 
 ## Git workflow
 

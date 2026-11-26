@@ -103,9 +103,9 @@ host turns into cells for the row height and column width at the time.
 Edit mode keeps a panel at least that large (see below); a panel the
 file makes smaller is shown as it is, its view fading out where it is
 cut off. With the default row height of 180, the system, disk,
-network, calendar, month, and processes panels need two rows, as
-they have by default; at a row height of 150, the world clock and
-weather panels do too.
+network, calendar, month, processes, and services panels need two
+rows, as they have by default; at a row height of 150, the world clock
+and weather panels do too, and the services panel needs three.
 
 ### Editing the layout
 
