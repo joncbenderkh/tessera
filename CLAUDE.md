@@ -99,7 +99,7 @@ dialogs). Edit mode must be able to re-enable any disabled panel.
   with `github.com/coreos/go-systemd/v22` (Apache-2.0), the owner's
   choice (#23): the system's and the user's managers, the units the
   settings name and any other that has failed; Restart for the user's
-  own units only, never system ones.
+  own services only, never system units.
 - **Module path:** `github.com/joncbenderkh/tessera`.
 
 ## Layout
