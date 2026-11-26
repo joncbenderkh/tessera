@@ -191,8 +191,8 @@ func modulePath(goMod []byte) string {
 func goBuild(ctx context.Context, root string, env []string, args ...string) error {
 	// go build's work directory is its own, and removed here: a stopped
 	// go build does not remove it itself. It is made where go's
-	// GOTMPDIR says, as go build would, else in the temporary
-	// directory; only a kill of this command leaves it, empty once go
+	// GOTMPDIR says, else in the temporary directory, as go build
+	// would; only a kill of this command leaves it, empty once go
 	// build ends.
 	parent, err := goTmpDir(ctx, root, env)
 	if err != nil {
@@ -203,10 +203,6 @@ func goBuild(ctx context.Context, root string, env []string, args ...string) err
 		return err
 	}
 	defer os.RemoveAll(work)
-	// go build runs in root, so a relative one must not reach it.
-	if work, err = filepath.Abs(work); err != nil {
-		return err
-	}
 	cmd := exec.CommandContext(ctx, "go", append([]string{"build"}, args...)...)
 	cmd.Dir = root
 	cmd.Env = append(append(os.Environ(), env...), "GOTMPDIR="+work)
@@ -225,13 +221,21 @@ func goBuild(ctx context.Context, root string, env []string, args ...string) err
 	if ctx.Err() != nil && cmd.Process != nil {
 		// Any of them that ignored the interrupt must not outlive its
 		// work directory.
-		syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+		group := -cmd.Process.Pid
+		syscall.Kill(group, syscall.SIGKILL)
+		// Kill does not wait for them, and a write they are in the middle
+		// of would land after the removal.
+		for end := time.Now().Add(time.Second); time.Now().Before(end) && syscall.Kill(group, 0) == nil; {
+			time.Sleep(5 * time.Millisecond)
+		}
 	}
 	return err
 }
 
-// goTmpDir is GOTMPDIR as go in root sees it, from the environment or
-// its env file (go env -w), relative to root; "" if unset.
+// goTmpDir is where go build in root makes its work directory: GOTMPDIR
+// from the environment or go's env file (go env -w), else the temporary
+// directory, either relative to root. It is absolute, and never cleaned:
+// that would take a ".." after a symbolic link elsewhere.
 func goTmpDir(ctx context.Context, root string, env []string) (string, error) {
 	cmd := exec.CommandContext(ctx, "go", "env", "GOTMPDIR")
 	cmd.Dir = root
@@ -243,8 +247,11 @@ func goTmpDir(ctx context.Context, root string, env []string) (string, error) {
 	}
 	// Only the newline go adds: the path itself may end in spaces.
 	dir := strings.TrimSuffix(string(out), "\n")
-	if dir != "" && !filepath.IsAbs(dir) {
-		dir = filepath.Join(root, dir)
+	if dir == "" {
+		dir = os.TempDir()
+	}
+	if !filepath.IsAbs(dir) {
+		dir = root + string(filepath.Separator) + dir
 	}
 	return dir, nil
 }
