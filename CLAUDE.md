@@ -170,7 +170,7 @@ dialogs). Edit mode must be able to re-enable any disabled panel.
 Use the local toolchain: `export PATH=/usr/local/go/bin:$PATH`.
 
 - Build the host as `./tessera` and install every plugin in
-  `plugins/` into the plugins directory, each renamed into place:
+  `plugins/` into the plugins directory, all renamed into place:
   `go run ./cmd/build`. `--no-host` skips the host, `--dest` picks
   another plugins directory, and `--run` starts the host afterwards
   with that directory as its `--plugins` (arguments after `--` go

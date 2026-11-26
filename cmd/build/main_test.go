@@ -3,6 +3,7 @@
 package main
 
 import (
+	"context"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -160,6 +161,51 @@ func TestInstallReplaces(t *testing.T) {
 	if got, err := os.ReadFile(filepath.Join(dest, "clock")); err != nil || string(got) != "new" {
 		t.Errorf("clock holds %q, %v; want new", got, err)
 	}
+}
+
+// The host replaces the old one only once it is built, and a stopped
+// build (here, one stopped before go build starts) leaves the old one
+// and no staging behind.
+func TestBuildHost(t *testing.T) {
+	if testing.Short() {
+		t.Skip("runs go build")
+	}
+	root := t.TempDir()
+	for name, content := range map[string]string{
+		"go.mod":              "module example.com/host\n\ngo 1.25.0\n",
+		"cmd/tessera/main.go": "package main\n\nfunc main() {}\n",
+	} {
+		if err := os.MkdirAll(filepath.Dir(filepath.Join(root, name)), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(root, name), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	host := filepath.Join(root, "tessera")
+	if err := os.WriteFile(host, []byte("old"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	checkHost := func(wantOld bool) {
+		t.Helper()
+		got, err := os.ReadFile(host)
+		if err != nil || (string(got) == "old") != wantOld {
+			t.Errorf("host holds %d bytes, %v; want old: %v", len(got), err, wantOld)
+		}
+		if left, _ := filepath.Glob(filepath.Join(root, ".build-*")); len(left) > 0 {
+			t.Errorf("staging left: %q", left)
+		}
+	}
+	stopped, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := buildHost(stopped, root, host); err == nil {
+		t.Error("stopped buildHost succeeded")
+	}
+	checkHost(true)
+	if err := buildHost(context.Background(), root, host); err != nil {
+		t.Fatal(err)
+	}
+	checkHost(false)
 }
 
 // The host runs on the installed plugins, by an absolute path, unless

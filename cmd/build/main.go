@@ -89,7 +89,7 @@ func build(noHost, run bool, dest string, extra []string) {
 	}
 	host := filepath.Join(root, "tessera")
 	if !noHost {
-		if err := goBuild(ctx, root, nil, "-o", host, "./cmd/tessera"); err != nil {
+		if err := buildHost(ctx, root, host); err != nil {
 			fatalUnlessStopped(ctx, "building the host", err)
 		}
 		log.Printf("host: %s", host)
@@ -193,11 +193,26 @@ func goBuild(ctx context.Context, root string, env []string, args ...string) err
 	cmd.Dir = root
 	cmd.Env = append(os.Environ(), env...)
 	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
-	// Interrupted, go build finishes writing its output, which a kill
-	// could leave half copied; it is killed if it lingers.
+	// Interrupted, go build is asked to stop, so it can clean up its
+	// work directory, and killed if it lingers.
 	cmd.Cancel = func() error { return cmd.Process.Signal(os.Interrupt) }
 	cmd.WaitDelay = 10 * time.Second
 	return cmd.Run()
+}
+
+// buildHost builds the host beside host and renames it into place, so
+// a build stopped or failed partway leaves the old one whole.
+func buildHost(ctx context.Context, root, host string) error {
+	staging, err := os.MkdirTemp(root, ".build-")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(staging)
+	built := filepath.Join(staging, filepath.Base(host))
+	if err := goBuild(ctx, root, nil, "-o", built, "./cmd/tessera"); err != nil {
+		return err
+	}
+	return os.Rename(built, host)
 }
 
 // installPlugins builds every plugin under root's plugins directory,
