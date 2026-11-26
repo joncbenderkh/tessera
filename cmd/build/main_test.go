@@ -4,11 +4,14 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"os/signal"
 	"path/filepath"
 	"slices"
 	"strconv"
+	"strings"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -163,9 +166,8 @@ func TestInstallReplaces(t *testing.T) {
 	}
 }
 
-// The host replaces the old one only once it is built, and a stopped
-// build (here, one stopped before go build starts) leaves the old one
-// and no staging behind.
+// The host replaces the old one only once it is built, and a build
+// stopped before go build starts leaves the old one and no staging.
 func TestBuildHost(t *testing.T) {
 	if testing.Short() {
 		t.Skip("runs go build")
@@ -269,5 +271,217 @@ func TestRunHostInBackground(t *testing.T) {
 	t.Setenv("BUILD_TEST_HOST_BACKGROUND", "1")
 	if got := runHost(os.Args[0], nil, nil); got != 0 {
 		t.Errorf("host can be stopped by the terminal (exit %d)", got)
+	}
+}
+
+// A build stopped partway, its output half written, leaves the old host
+// whole and no staging behind.
+func TestStageHostStopped(t *testing.T) {
+	root := t.TempDir()
+	host := filepath.Join(root, "tessera")
+	if err := os.WriteFile(host, []byte("old"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	err := stageHost(ctx, root, host, func(ctx context.Context, out string) error {
+		if err := os.WriteFile(out, []byte("half"), 0o755); err != nil {
+			return err
+		}
+		cancel()
+		<-ctx.Done()
+		return ctx.Err()
+	})
+	if err == nil {
+		t.Error("stopped build succeeded")
+	}
+	if got, err := os.ReadFile(host); err != nil || string(got) != "old" {
+		t.Errorf("host holds %q, %v; want the old one", got, err)
+	}
+	if left, _ := filepath.Glob(filepath.Join(root, ".build-*")); len(left) > 0 {
+		t.Errorf("staging left: %q", left)
+	}
+}
+
+// A go build stopped partway leaves no work directory behind.
+func TestGoBuildStoppedCleans(t *testing.T) {
+	if testing.Short() {
+		t.Skip("runs go build")
+	}
+	tmp := t.TempDir()
+	t.Setenv("TMPDIR", tmp)
+	t.Setenv("GOTMPDIR", "")
+	root := t.TempDir()
+	var src strings.Builder
+	src.WriteString("package main\n\nfunc main() {}\n")
+	for i := range 20000 {
+		fmt.Fprintf(&src, "func f%d(x int) int { return x*%d + %d }\n", i, i, i)
+	}
+	for name, content := range map[string]string{
+		"go.mod":  "module example.com/slow\n\ngo 1.25.0\n",
+		"main.go": src.String(),
+	} {
+		if err := os.WriteFile(filepath.Join(root, name), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Stopped once the slow package compiles, so the stop lands partway
+	// through.
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var compiling atomic.Bool
+	go func() {
+		for ctx.Err() == nil {
+			for _, p := range processesWith(tmp) {
+				if strings.Contains(p, "/compile ") && strings.Contains(p, filepath.Join(root, "main.go")) {
+					compiling.Store(true)
+					cancel()
+					return
+				}
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
+	}()
+	// The compilers ignore the interrupt, as a -toolexec wrapper may
+	// make them, and are stopped all the same.
+	toolexec := filepath.Join(t.TempDir(), "noint")
+	if err := os.WriteFile(toolexec, []byte("#!/bin/sh\ntrap '' INT\nexec \"$@\"\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	err := goBuild(ctx, root, []string{"GOCACHE=" + t.TempDir()}, "-toolexec", toolexec, "-o", filepath.Join(root, "out"), ".")
+	if err == nil {
+		t.Skip("the build finished before it could be stopped")
+	}
+	if !compiling.Load() {
+		t.Fatalf("go build failed before it was stopped: %v", err)
+	}
+	if left, _ := filepath.Glob(filepath.Join(tmp, "*")); len(left) > 0 {
+		t.Errorf("left in TMPDIR: %q", left)
+	}
+	// Nor any compiler it ran, once they have had a moment to stop.
+	for deadline := time.Now().Add(250 * time.Millisecond); ; time.Sleep(25 * time.Millisecond) {
+		running := processesWith(tmp)
+		if len(running) == 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Errorf("still running: %q", running)
+			break
+		}
+	}
+}
+
+// processesWith is the command lines of the processes whose own
+// mention s.
+func processesWith(s string) []string {
+	var out []string
+	cmdlines, _ := filepath.Glob("/proc/[0-9]*/cmdline")
+	for _, f := range cmdlines {
+		b, err := os.ReadFile(f)
+		if err == nil && strings.Contains(string(b), s) {
+			out = append(out, strings.ReplaceAll(string(b), "\x00", " "))
+		}
+	}
+	return out
+}
+
+// go build's work directory goes where GOTMPDIR says.
+func TestGoBuildGOTMPDIR(t *testing.T) {
+	if testing.Short() {
+		t.Skip("runs go build")
+	}
+	gotmp := t.TempDir()
+	t.Setenv("GOTMPDIR", gotmp)
+	t.Setenv("TMPDIR", filepath.Join(t.TempDir(), "missing"))
+	root := t.TempDir()
+	for name, content := range map[string]string{
+		"go.mod":  "module example.com/tmp\n\ngo 1.25.0\n",
+		"main.go": "package main\n\nfunc main() {}\n",
+	} {
+		if err := os.WriteFile(filepath.Join(root, name), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := goBuild(context.Background(), root, []string{"GOCACHE=" + t.TempDir()}, "-o", filepath.Join(root, "out"), "."); err != nil {
+		t.Fatalf("build with TMPDIR missing and GOTMPDIR set: %v", err)
+	}
+	if left, _ := filepath.Glob(filepath.Join(gotmp, "*")); len(left) > 0 {
+		t.Errorf("left in GOTMPDIR: %q", left)
+	}
+}
+
+// A GOTMPDIR whose name ends in a space is used as it is.
+func TestGoBuildGOTMPDIRSpace(t *testing.T) {
+	if testing.Short() {
+		t.Skip("runs go build")
+	}
+	gotmp := filepath.Join(t.TempDir(), "tmp ")
+	if err := os.Mkdir(gotmp, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("GOTMPDIR", gotmp)
+	t.Setenv("TMPDIR", filepath.Join(t.TempDir(), "missing"))
+	root := t.TempDir()
+	for name, content := range map[string]string{
+		"go.mod":  "module example.com/space\n\ngo 1.25.0\n",
+		"main.go": "package main\n\nfunc main() {}\n",
+	} {
+		if err := os.WriteFile(filepath.Join(root, name), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := goBuild(context.Background(), root, []string{"GOCACHE=" + t.TempDir()}, "-o", filepath.Join(root, "out"), "."); err != nil {
+		t.Fatalf("build with GOTMPDIR %q: %v", gotmp, err)
+	}
+}
+
+// A GOTMPDIR set with go env -w is where go build works too.
+func TestGoBuildGoEnvGOTMPDIR(t *testing.T) {
+	if testing.Short() {
+		t.Skip("runs go build")
+	}
+	gotmp := t.TempDir()
+	goenv := filepath.Join(t.TempDir(), "env")
+	if err := os.WriteFile(goenv, []byte("GOTMPDIR="+gotmp+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("GOENV", goenv)
+	t.Setenv("GOTMPDIR", "")
+	os.Unsetenv("GOTMPDIR")
+	t.Setenv("TMPDIR", filepath.Join(t.TempDir(), "missing"))
+	root := t.TempDir()
+	for name, content := range map[string]string{
+		"go.mod":  "module example.com/env\n\ngo 1.25.0\n",
+		"main.go": "package main\n\nfunc main() {}\n",
+	} {
+		if err := os.WriteFile(filepath.Join(root, name), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := goBuild(context.Background(), root, []string{"GOCACHE=" + t.TempDir()}, "-o", filepath.Join(root, "out"), "."); err != nil {
+		t.Fatalf("build with GOTMPDIR in the go env file: %v", err)
+	}
+}
+
+// A relative GOTMPDIR is relative to root, where go runs.
+func TestGoBuildRelativeGOTMPDIR(t *testing.T) {
+	if testing.Short() {
+		t.Skip("runs go build")
+	}
+	t.Chdir(t.TempDir())
+	t.Setenv("GOTMPDIR", "tmp")
+	root := t.TempDir()
+	if err := os.Mkdir(filepath.Join(root, "tmp"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for name, content := range map[string]string{
+		"go.mod":  "module example.com/rel\n\ngo 1.25.0\n",
+		"main.go": "package main\n\nfunc main() {}\n",
+	} {
+		if err := os.WriteFile(filepath.Join(root, name), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := goBuild(context.Background(), root, []string{"GOCACHE=" + t.TempDir()}, "-o", filepath.Join(root, "out"), "."); err != nil {
+		t.Fatalf("build with a relative GOTMPDIR: %v", err)
 	}
 }
