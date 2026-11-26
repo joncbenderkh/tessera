@@ -162,8 +162,8 @@ dialogs). Edit mode must be able to re-enable any disabled panel.
   through `internal/pluginhost`; the author guide is `docs/plugins.md`.
 - `plugins/<name>`: first-party panels, each its own `main` package.
   `plugins/internal/zones` holds the time zone names the clocks accept.
-  The system panels (`system`, `disk`, `network`, `processes`) share
-  `plugins/internal/metric`.
+  The panels that poll (`system`, `disk`, `network`, `processes`,
+  `services`) share `plugins/internal/metric`.
 
 ## Commands
 
