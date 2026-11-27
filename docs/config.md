@@ -65,7 +65,8 @@ panels:
 | Field | Meaning |
 |---|---|
 | `version` | Schema version. Must be `1`. |
-| `theme` | `dark` or `light`. Defaults to `dark`. The header's theme toggle sets it. |
+| `theme` | The theme shown: `dark`, `light`, or the name of a custom theme under `themes`. Defaults to `dark`. The header's theme toggle sets it. |
+| `themes` | Colours for the built-in themes and custom themes, by name. See [Themes](#themes). |
 | `grid.columns` | Number of grid columns, from 1 to 24. |
 | `grid.row_height` | Height of one grid row in dp (logical pixels), from 150 to 2000. Large text makes rows taller where a panel's head and its buttons or menu need it, and the window keeps room for one such row. |
 | `panels[].id` | Unique name for this panel, read as written (`017` stays `017`). One plugin can back several panels. |
@@ -106,6 +107,65 @@ cut off. With the default row height of 180, the system, disk,
 network, calendar, month, processes, and services panels need two
 rows, as they have by default; at a row height of 150, the world clock
 and weather panels do too, and the services panel needs three.
+
+### Themes
+
+`themes` replaces colours of the built-in `dark` and `light` themes and
+adds custom themes. Each entry under it names a theme and gives any of
+the colour tokens below; a token left out keeps the colour of the
+theme's base. A custom theme's `base` is `dark` or `light` (default
+`dark`), with any colours `themes` gives that theme, so `dusk` below
+has the accent given to `dark`. The built-in themes are their own
+base, so they take no `base`.
+
+```yaml
+theme: dusk
+themes:
+  dark:
+    accent: oklch(0.7 0.15 300)
+  dusk:
+    base: dark
+    bg: "#1e1e2e"
+    surface: "#252536"
+    fg: "#cdd6f4"
+```
+
+| Token | Used for |
+|---|---|
+| `bg` | The window's background. |
+| `surface` | Tiles, dialogs, menus, and the header. |
+| `fg` | Text. |
+| `muted` | Secondary text, such as captions and units. |
+| `border` | Borders, dividers, and gauge tracks. |
+| `accent` | Focus rings, highlights, and accent-toned text. |
+| `ok`, `warn`, `error` | Text and marks in those tones, such as a panel's status. |
+| `hover` | The background of a button, or a table or list row, under the pointer. |
+| `inset` | Sunken areas: the Logs text, the Configure dialog's groups, and a tile's plugin details. |
+
+A colour is CSS hex, `#rgb` or `#rrggbb`, or `oklch(L C H)`: lightness
+from 0 to 1 (or 0% to 100%), chroma from 0 to 1, and hue in degrees, as in
+`oklch(0.72 0.14 150)`. Colours outside sRGB are clamped into it.
+Quote hex colours: `#` starts a YAML comment, so `bg: #1e1e2e` leaves
+`bg` empty, which is an error.
+
+A custom theme's name is lowercase letters, digits, and hyphens,
+starting with a letter, at most 32 characters. The header's theme
+toggle steps through `dark`, `light`, and then the custom themes in
+order of name; with the pointer over it, a tip names the theme it
+switches to. Removing the theme shown from the file shows the one
+`theme` names.
+
+tessera warns, in the window and the log, of a theme whose text is hard
+to read: `fg`, `muted`, `ok`, `warn`, and `error` with a contrast below
+4.5:1 against `bg` or `surface`, and `accent` below 3:1 (WCAG AA's
+ratios for text and for large text and marks). `accent` is held to
+3:1 since it mostly draws marks, so text a plugin sets in the accent
+tone can be below 4.5:1 without a warning. The theme is still
+applied. The built-in themes meet these ratios.
+
+Releases before `themes` was added refuse a config that uses it, or
+whose `theme` names a custom theme, as a whole; go back to one only
+after removing them.
 
 ### Editing the layout
 

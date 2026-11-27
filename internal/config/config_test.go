@@ -345,8 +345,8 @@ func TestParseTheme(t *testing.T) {
 		{"light", ThemeLight, ""},
 		{"dark", ThemeDark, ""},
 		{`""`, "", ""},
-		{"blue", "", `theme must be "dark" or "light"`},
-		{"Light", "", `theme must be "dark" or "light"`},
+		{"blue", "", `theme must be "dark", "light", or a theme under themes`},
+		{"Light", "", `theme must be "dark", "light", or a theme under themes`},
 	} {
 		t.Run(tt.value, func(t *testing.T) {
 			c, err := Parse([]byte("version: 1\ntheme: " + tt.value + "\ngrid:\n  columns: 1\n  row_height: 180\npanels: []\n"))

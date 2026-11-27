@@ -82,6 +82,7 @@ func start(configPath, pluginsDir, debugSocket string) error {
 	}
 	saver := &themeSaver{path: configPath, done: make(chan error, 1), invalidate: window.Invalidate}
 	layouts := &layoutSaver{path: configPath, done: make(chan error, 1), invalidate: window.Invalidate}
+	saver.watched = layouts.watched
 	signals := make(chan os.Signal, 1)
 	// SIGHUP too: plugins run in their own process groups, so a closed
 	// terminal reaches only the host.

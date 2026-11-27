@@ -91,13 +91,13 @@ func brief(err error) string {
 	return line
 }
 
-// themeOnReload is the theme to show, dark or not, after a reload
-// changes the file's theme from was to now. Only a change in the file
-// counts, so an edit elsewhere in it keeps a theme whose save failed,
-// and a save of the host's own still pending means the file is about
-// to hold the theme shown.
-func themeOnReload(shown, was, now, saving bool) bool {
-	if now == was || saving {
+// themeOnReload is the theme to show after a reload changes the file's
+// theme from was to now. Only a change in the file counts, so an edit
+// elsewhere in it keeps a theme whose save failed, and a save of the
+// host's own still pending means the file is about to hold the theme
+// shown; but a theme the file no longer offers gives way to the file's.
+func themeOnReload(shown, was, now config.Theme, saving bool, offers func(config.Theme) bool) config.Theme {
+	if (now == was || saving) && offers(shown) {
 		return shown
 	}
 	return now
@@ -128,8 +128,8 @@ func run(window *app.Window, plugins *pluginhost.Manager, pluginDir string, cfg 
 	var toast ui.Toaster
 	w := &windowConfig{
 		cfg:         cfg,
-		dark:        cfg.Theme != config.ThemeLight,
-		fileDark:    cfg.Theme != config.ThemeLight,
+		theme:       cfg.Theme.OrDefault(),
+		fileTheme:   cfg.Theme.OrDefault(),
 		reloads:     reloads,
 		layouts:     layouts,
 		themes:      saver,
@@ -138,8 +138,9 @@ func run(window *app.Window, plugins *pluginhost.Manager, pluginDir string, cfg 
 		reconfigure: plugins.Reconfigure,
 		redraw:      window.Invalidate,
 	}
-	dark := w.dark // the theme th has
-	th := theme.New(dark, shaper)
+	w.warnContrast()
+	look := -1 // the w.look th was made for
+	var th *theme.Theme
 
 	shortest := minHeight // the window's least height, which large text raises
 	mode := app.Windowed
@@ -178,9 +179,13 @@ func run(window *app.Window, plugins *pluginhost.Manager, pluginDir string, cfg 
 			return e.Err
 		case app.FrameEvent:
 			gtx := app.NewContext(&ops, e)
+			w.takeReload()
 			select {
 			case err := <-saver.done:
-				toast.Show("Theme not saved; it applies until tessera restarts: " + err.Error())
+				// Unless a reload has shown another theme since.
+				if failed := (*themeSaveError)(nil); !errors.As(err, &failed) || failed.theme == w.theme {
+					toast.Show("Theme not saved; it applies until tessera restarts: " + err.Error())
+				}
 			default:
 			}
 			select {
@@ -188,14 +193,13 @@ func run(window *app.Window, plugins *pluginhost.Manager, pluginDir string, cfg 
 				toast.Show("Change not saved to the config file: " + err.Error())
 			default:
 			}
-			w.takeReload()
 			behind := gtx
 			if dialog.IsOpen() || configure.IsOpen() {
 				behind = gtx.Disabled()
 			}
 			if header.Theme.Clicked(behind) {
-				w.dark = !w.dark
-				saver.save(w.dark)
+				w.setTheme(w.cfg.NextTheme(w.theme))
+				saver.save(w.theme)
 			}
 			if header.Status.Clicked(behind) {
 				attention.Toggle(behind.Focused(&header.Status.Clickable))
@@ -218,9 +222,9 @@ func run(window *app.Window, plugins *pluginhost.Manager, pluginDir string, cfg 
 			}
 			header.Edit.Toggle, header.Edit.Pressed = true, editing
 			grid.Edit = editing
-			if w.dark != dark {
-				dark = w.dark
-				th = theme.New(dark, shaper)
+			if look != w.look {
+				look = w.look
+				th, header.NextTheme, header.NextDark = w.themeLook(shaper)
 			}
 			paint.Fill(gtx.Ops, th.Bg)
 			states := plugins.States()
@@ -265,6 +269,7 @@ func run(window *app.Window, plugins *pluginhost.Manager, pluginDir string, cfg 
 			}
 			listed := attention.IsOpen()
 			actions = append(actions, attention.Layout(behind, th, states, header.StatusAnchor(), &header.Status)...)
+			header.LayoutTip(behind, th)
 			if listed && !attention.IsOpen() {
 				// The grid was drawn covered: drawn again, uncovered.
 				gtx.Execute(op.InvalidateCmd{})
@@ -410,11 +415,15 @@ type themeSaver struct {
 	path       string
 	done       chan error // a failed save's error
 	invalidate func()
-	write      func(path string, dark bool) error // saveTheme if nil
+	write      func(path string, t config.Theme) error // saveTheme if nil
+	// watched reports whether the file is watched; if nil, it is. While
+	// it is, a theme the file has dropped is not reported as not saved:
+	// the reload that dropped it shows the file's theme instead.
+	watched func() bool
 
 	mu      sync.Mutex // held while saving
-	want    sync.Mutex // guards dark, asked, handled, written and closed
-	dark    bool
+	want    sync.Mutex // guards theme, asked, handled, written and closed
+	theme   config.Theme
 	asked   int // saves asked for so far
 	handled int // saves asked for when the latest write began
 	written int // saves asked for when the latest write ended
@@ -438,13 +447,13 @@ func (s *themeSaver) pending() bool {
 	return s.asked != s.written
 }
 
-func (s *themeSaver) save(dark bool) {
+func (s *themeSaver) save(t config.Theme) {
 	s.want.Lock()
 	defer s.want.Unlock()
 	if s.closed {
 		return
 	}
-	s.dark = dark
+	s.theme = t
 	s.asked++
 	s.running.Add(1)
 	go func() {
@@ -452,7 +461,7 @@ func (s *themeSaver) save(dark bool) {
 		s.mu.Lock()
 		defer s.mu.Unlock()
 		s.want.Lock()
-		dark, asked := s.dark, s.asked
+		t, asked := s.theme, s.asked
 		if asked == s.handled {
 			// An earlier goroutine already wrote this theme.
 			s.want.Unlock()
@@ -464,14 +473,17 @@ func (s *themeSaver) save(dark bool) {
 		if write == nil {
 			write = saveTheme
 		}
-		err := write(s.path, dark)
+		err := write(s.path, t)
+		if errors.Is(err, errThemeDropped) && (s.watched == nil || s.watched()) {
+			err = nil
+		}
 		s.want.Lock()
 		superseded := s.asked != asked
 		s.written = asked
 		s.want.Unlock()
 		if err != nil && !superseded {
 			select {
-			case s.done <- err:
+			case s.done <- &themeSaveError{theme: t, err: err}:
 			default: // one error is enough to show
 			}
 			s.invalidate()
@@ -479,12 +491,27 @@ func (s *themeSaver) save(dark bool) {
 	}()
 }
 
-func saveTheme(path string, dark bool) error {
+// themeSaveError is a failed save of theme.
+type themeSaveError struct {
+	theme config.Theme
+	err   error
+}
+
+func (e *themeSaveError) Error() string { return e.err.Error() }
+func (e *themeSaveError) Unwrap() error { return e.err }
+
+// errThemeDropped is saveTheme's refusal of a theme the file no longer
+// defines.
+var errThemeDropped = errors.New("the theme is no longer defined")
+
+// saveTheme writes t as the file's theme, unless the file has dropped
+// t since: then it returns errThemeDropped.
+func saveTheme(path string, t config.Theme) error {
 	return update(path, func(c *config.Config) error {
-		c.Theme = config.ThemeLight
-		if dark {
-			c.Theme = config.ThemeDark
+		if !c.Offers(t) {
+			return errThemeDropped
 		}
+		c.Theme = t
 		return nil
 	})
 }

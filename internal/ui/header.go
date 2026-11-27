@@ -5,9 +5,11 @@ package ui
 import (
 	"image"
 	"image/color"
+	"time"
 
 	"gioui.org/font"
 	"gioui.org/layout"
+	"gioui.org/op"
 	"gioui.org/op/clip"
 	"gioui.org/op/paint"
 	"gioui.org/unit"
@@ -39,8 +41,21 @@ type Header struct {
 	Theme  Button
 	Status Button
 
+	// NextTheme names the theme Theme switches to, and NextDark says
+	// whether it is dark, which picks Theme's icon. Without a name, it
+	// switches between the built-in dark and light themes.
+	NextTheme string
+	NextDark  bool
+
 	placed   []image.Rectangle // the items' bounds in the last Layout
 	statusAt image.Rectangle   // where Status was drawn
+	themeAt  image.Rectangle   // where Theme was drawn
+	// tipBlocked keeps the tip down after a disabled frame until the
+	// pointer is seen off the toggle: a disabled frame hears no leave,
+	// so Theme may still read as hovered once the pointer has gone.
+	tipBlocked bool
+	tipSince   time.Time       // when the tip went up
+	tipAt      image.Rectangle // where LayoutTip last drew; for tests
 }
 
 // StatusAnchor is where the status was drawn in the last Layout, which
@@ -84,13 +99,19 @@ func (h *Header) Layout(gtx layout.Context, th *theme.Theme, status Status) layo
 		editLabel = "Done editing"
 	}
 	// The Go fonts have ☼ but no ◐, so the half disc is drawn.
+	next, nextDark := h.NextTheme, h.NextDark
+	if next == "" {
+		next, nextDark = "dark", true
+		if th.Dark {
+			next, nextDark = "light", false
+		}
+	}
 	glyph := ""
 	h.Theme.Draw = halfDisc
-	h.Theme.Description = "Switch to dark theme"
-	if th.Dark {
+	if !nextDark {
 		glyph, h.Theme.Draw = "☼", nil
-		h.Theme.Description = "Switch to light theme"
 	}
+	h.Theme.Description = "Switch to " + next + " theme"
 
 	// Each variant is laid out; only the ones placed are drawn.
 	brandFull := record(gtx, func(gtx layout.Context) layout.Dimensions { return brand(gtx, th, true) })
@@ -188,9 +209,59 @@ func (h *Header) Layout(gtx layout.Context, th *theme.Theme, status Status) layo
 		place(end[i], ex)
 		ex -= endGap
 	}
+	// The theme toggle is the last of the end's items, placed first.
+	h.themeAt = h.placed[len(h.placed)-len(end)]
 	// The status is the first of the end's items.
 	h.statusAt = h.placed[len(h.placed)-1]
 	return layout.Dimensions{Size: size}
+}
+
+// TipFor is how long the theme toggle's tip stays up.
+const TipFor = 5 * time.Second
+
+// LayoutTip shows, below the theme toggle while the pointer is over
+// it, what the toggle does: the theme it switches to. It is deferred,
+// so it shows over the grid and the tiles' popovers drawn before it,
+// and takes no input, as CSS pointer-events: none. Call it after
+// Layout, in the same frame.
+func (h *Header) LayoutTip(gtx layout.Context, th *theme.Theme) {
+	h.tipAt = image.Rectangle{}
+	switch {
+	case !gtx.Enabled():
+		h.tipBlocked = true
+		return
+	case !h.Theme.Hovered():
+		h.tipBlocked, h.tipSince = false, time.Time{}
+		return
+	case h.tipBlocked || h.Theme.Description == "":
+		return
+	}
+	// It goes after TipFor, since a pointer that leaves the window from
+	// the toggle may never be heard leaving it.
+	if h.tipSince.IsZero() {
+		h.tipSince = gtx.Now
+	}
+	if end := h.tipSince.Add(TipFor); gtx.Now.Before(end) {
+		gtx.Execute(op.InvalidateCmd{At: end})
+	} else {
+		return
+	}
+	padX, padY := gtx.Dp(10), gtx.Dp(6)
+	lgtx := gtx
+	lgtx.Constraints = layout.Constraints{Max: image.Pt(max(gtx.Constraints.Max.X-2*padX, 0), gtx.Constraints.Max.Y)}
+	text := recordLabel(lgtx, th, h.Theme.Description, theme.TextSmall, th.Fg, theme.Body)
+	box := image.Rectangle{Max: text.dims.Size.Add(image.Pt(2*padX, 2*padY))}
+	// Its end lines up with the toggle's, inside the window.
+	at := image.Pt(max(h.themeAt.Max.X-box.Dx(), 0), h.themeAt.Max.Y+gtx.Dp(theme.Space8))
+	h.tipAt = box.Add(at)
+	m := op.Record(gtx.Ops)
+	off := op.Offset(at).Push(gtx.Ops)
+	rr := gtx.Dp(theme.RadiusSmall)
+	paint.FillShape(gtx.Ops, th.Inset, clip.UniformRRect(box, rr).Op(gtx.Ops))
+	strokeRRect(gtx, box, rr, gtx.Dp(1), th.Border)
+	text.at(gtx, image.Pt(padX, padY))
+	off.Pop()
+	op.Defer(gtx.Ops, m.Stop())
 }
 
 // brand is the tessera mark, a 2×2 grid of squares, and, if name is
