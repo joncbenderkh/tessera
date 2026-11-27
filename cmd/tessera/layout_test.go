@@ -347,16 +347,16 @@ func TestWindowConfigChange(t *testing.T) {
 	var added []string
 	redraws := 0
 	w := &windowConfig{
-		cfg:      layoutConfig(),
-		dark:     true,
-		fileDark: true,
-		reloads:  reloads,
-		layouts:  layouts,
-		themes:   &themeSaver{},
-		toast:    &ui.Toaster{},
-		apply:    func(c config.Config) { applied = append(applied, c) },
-		redraw:   func() { redraws++ },
-		added:    func(id string) { added = append(added, id) },
+		cfg:       layoutConfig(),
+		theme:     config.ThemeDark,
+		fileTheme: config.ThemeDark,
+		reloads:   reloads,
+		layouts:   layouts,
+		themes:    &themeSaver{},
+		toast:     &ui.Toaster{},
+		apply:     func(c config.Config) { applied = append(applied, c) },
+		redraw:    func() { redraws++ },
+		added:     func(id string) { added = append(added, id) },
 	}
 	if !w.change(ui.Action{Kind: ui.ActionAdd, Plugin: "clock"}) {
 		t.Fatal("Add changed nothing")
@@ -374,8 +374,8 @@ func TestWindowConfigChange(t *testing.T) {
 	if got, want := strings.Join(ids(w.cfg), " "), "a b clock clock-2"; got != want {
 		t.Errorf("panels %s, want %s", got, want)
 	}
-	if w.dark {
-		t.Error("dark after a reload to the light theme")
+	if w.theme != config.ThemeLight {
+		t.Errorf("theme %q after a reload to the light theme", w.theme)
 	}
 	if len(applied) != 2 || !reflect.DeepEqual(applied[1], w.cfg) {
 		t.Errorf("applied %d configs, the last not the window's", len(applied))

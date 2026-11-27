@@ -24,7 +24,7 @@ func TestSaveThemeKeepsTheFile(t *testing.T) {
 	if err := config.Save(path, edited); err != nil {
 		t.Fatal(err)
 	}
-	if err := saveTheme(path, false); err != nil {
+	if err := saveTheme(path, config.ThemeLight); err != nil {
 		t.Fatal(err)
 	}
 	got, err := config.Load(path)
@@ -36,13 +36,40 @@ func TestSaveThemeKeepsTheFile(t *testing.T) {
 	}
 }
 
+// A custom theme is saved by name, and one the file has dropped since
+// is refused rather than written as a theme the file does not define.
+func TestSaveThemeCustom(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	c := config.Default()
+	c.Themes = map[config.Theme]config.ThemeColours{"dusk": {Base: config.ThemeLight, Bg: "#fdf6e3"}}
+	if err := config.Save(path, c); err != nil {
+		t.Fatal(err)
+	}
+	if err := saveTheme(path, "dusk"); err != nil {
+		t.Fatal(err)
+	}
+	got, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Theme != "dusk" || got.Themes["dusk"].Bg != "#fdf6e3" {
+		t.Fatalf("got theme %q and themes %v, want dusk kept", got.Theme, got.Themes)
+	}
+	if err := saveTheme(path, "gone"); !errors.Is(err, errThemeDropped) {
+		t.Fatalf("a theme the file has dropped: %v, want errThemeDropped", err)
+	}
+	if again, err := config.Load(path); err != nil || again.Theme != "dusk" {
+		t.Fatalf("after the refused save: theme %q, %v; want dusk", again.Theme, err)
+	}
+}
+
 func TestSaveThemeLeavesABrokenFile(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.yaml")
 	broken := []byte("version: 1\ngrid: [\n")
 	if err := os.WriteFile(path, broken, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := saveTheme(path, true); err == nil {
+	if err := saveTheme(path, config.ThemeDark); err == nil {
 		t.Fatal("saving over a file that does not parse succeeded")
 	}
 	data, err := os.ReadFile(path)
@@ -60,7 +87,7 @@ func TestThemeSaverWaits(t *testing.T) {
 		t.Fatal(err)
 	}
 	s := themeSaver{path: path, done: make(chan error, 1), invalidate: func() {}}
-	s.save(false)
+	s.save(config.ThemeLight)
 	s.wait()
 	got, err := config.Load(path)
 	if err != nil {
@@ -78,7 +105,7 @@ func TestThemeSaverIgnoresSavesAfterWait(t *testing.T) {
 	}
 	s := themeSaver{path: path, done: make(chan error, 1), invalidate: func() {}}
 	s.wait()
-	s.save(false)
+	s.save(config.ThemeLight)
 	s.running.Wait()
 	got, err := config.Load(path)
 	if err != nil {
@@ -93,7 +120,7 @@ func TestThemeSaverDropsASupersededError(t *testing.T) {
 	started, release := make(chan struct{}), make(chan struct{})
 	calls := 0
 	s := themeSaver{done: make(chan error, 1), invalidate: func() {}}
-	s.write = func(string, bool) error {
+	s.write = func(string, config.Theme) error {
 		calls++
 		if calls == 1 {
 			close(started)
@@ -102,9 +129,9 @@ func TestThemeSaverDropsASupersededError(t *testing.T) {
 		}
 		return nil
 	}
-	s.save(false)
+	s.save(config.ThemeLight)
 	<-started
-	s.save(true)
+	s.save(config.ThemeDark)
 	close(release)
 	s.wait()
 	select {
@@ -117,14 +144,14 @@ func TestThemeSaverDropsASupersededError(t *testing.T) {
 func TestThemeSaverWritesQueuedSavesOnce(t *testing.T) {
 	writes := 0
 	s := themeSaver{done: make(chan error, 1), invalidate: func() {}}
-	s.write = func(string, bool) error {
+	s.write = func(string, config.Theme) error {
 		writes++
 		return nil
 	}
 	// Both saves are asked for before either goroutine starts writing.
 	s.mu.Lock()
-	s.save(false)
-	s.save(true)
+	s.save(config.ThemeLight)
+	s.save(config.ThemeDark)
 	s.mu.Unlock()
 	s.wait()
 	if writes != 1 {
@@ -152,30 +179,75 @@ func TestQueueKeepsValidConfig(t *testing.T) {
 }
 
 func TestThemeOnReload(t *testing.T) {
+	const dark, light, dusk = config.ThemeDark, config.ThemeLight, config.Theme("dusk")
+	all := func(config.Theme) bool { return true }
+	noDusk := func(t config.Theme) bool { return t != dusk }
 	for _, tt := range []struct {
-		name                    string
-		shown, was, now, saving bool
-		want                    bool
+		name            string
+		shown, was, now config.Theme
+		saving          bool
+		offers          func(config.Theme) bool
+		want            config.Theme
 	}{
-		{"the file's theme changed", false, false, true, false, true},
-		{"an edit elsewhere keeps a toggle whose save failed", true, false, false, false, true},
-		{"a pending save wins over the file", true, true, false, true, true},
-		{"the host's own save arrives", true, false, true, false, true},
+		{"the file's theme changed", light, light, dark, false, all, dark},
+		{"an edit elsewhere keeps a toggle whose save failed", dark, light, light, false, all, dark},
+		{"a pending save wins over the file", dusk, dark, light, true, all, dusk},
+		{"the host's own save arrives", dark, light, dark, false, all, dark},
+		{"a custom theme removed gives way to the file's", dusk, light, light, false, noDusk, light},
+		{"even with a save pending", dusk, light, light, true, noDusk, light},
 	} {
-		if got := themeOnReload(tt.shown, tt.was, tt.now, tt.saving); got != tt.want {
-			t.Errorf("%s: dark %t, want %t", tt.name, got, tt.want)
+		if got := themeOnReload(tt.shown, tt.was, tt.now, tt.saving, tt.offers); got != tt.want {
+			t.Errorf("%s: %q, want %q", tt.name, got, tt.want)
 		}
+	}
+}
+
+// A theme the file has dropped is reported as not saved only when the
+// file is not watched; when it is, the reload that dropped it shows the
+// file's theme.
+func TestThemeSaverDroppedTheme(t *testing.T) {
+	for _, watched := range []bool{true, false} {
+		s := themeSaver{done: make(chan error, 1), invalidate: func() {},
+			write:   func(string, config.Theme) error { return errThemeDropped },
+			watched: func() bool { return watched }}
+		s.save("dusk")
+		s.wait()
+		select {
+		case err := <-s.done:
+			if watched {
+				t.Errorf("watched: reported %v", err)
+			}
+			var failed *themeSaveError
+			if !errors.As(err, &failed) || failed.theme != "dusk" || !errors.Is(err, errThemeDropped) {
+				t.Errorf("reported %#v, want dusk's errThemeDropped", err)
+			}
+		default:
+			if !watched {
+				t.Error("not watched: the theme not saved was not reported")
+			}
+		}
+	}
+}
+
+func TestNewSaversWatched(t *testing.T) {
+	saver, layouts := newSavers(filepath.Join(t.TempDir(), "config.yaml"), func() {})
+	if !saver.watched() {
+		t.Fatal("not watched before unwatch")
+	}
+	layouts.unwatch()
+	if saver.watched() {
+		t.Error("the theme saver still reads the file as watched after unwatch")
 	}
 }
 
 func TestThemeSaverPending(t *testing.T) {
 	release := make(chan struct{})
 	s := &themeSaver{done: make(chan error, 1), invalidate: func() {},
-		write: func(string, bool) error { <-release; return nil }}
+		write: func(string, config.Theme) error { <-release; return nil }}
 	if s.pending() {
 		t.Fatal("pending before any save")
 	}
-	s.save(true)
+	s.save(config.ThemeDark)
 	if !s.pending() {
 		t.Error("not pending while writing")
 	}

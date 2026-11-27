@@ -27,17 +27,20 @@ const FileName = "config.yaml"
 
 // Config is the whole user config file.
 type Config struct {
-	Version int     `yaml:"version"`
-	Theme   Theme   `yaml:"theme,omitempty"`
-	Grid    Grid    `yaml:"grid"`
-	Panels  []Panel `yaml:"panels"`
+	Version int   `yaml:"version"`
+	Theme   Theme `yaml:"theme,omitempty"`
+	// Themes overrides the built-in themes' colours and adds custom
+	// themes, by name.
+	Themes map[Theme]ThemeColours `yaml:"themes,omitempty"`
+	Grid   Grid                   `yaml:"grid"`
+	Panels []Panel                `yaml:"panels"`
 }
 
-// Theme is the window's colour theme. The zero value means the default,
-// ThemeDark.
+// Theme names a colour theme: a built-in one or one under the config's
+// themes. The zero value means the default, ThemeDark.
 type Theme string
 
-// The themes a config may name.
+// The built-in themes.
 const (
 	ThemeDark  Theme = "dark"
 	ThemeLight Theme = "light"
@@ -105,6 +108,9 @@ func Parse(data []byte) (Config, error) {
 	if err := rejectSharing(file); err != nil {
 		return Config{}, err
 	}
+	if err := checkThemes(file); err != nil {
+		return Config{}, err
+	}
 	fields, err := extractPanels(file)
 	if err != nil {
 		return Config{}, err
@@ -119,6 +125,9 @@ func Parse(data []byte) (Config, error) {
 	}
 	if len(fields) != len(c.Panels) {
 		return Config{}, errors.New("panels: syntax tree and decoded config disagree")
+	}
+	if len(c.Themes) == 0 {
+		c.Themes = nil // as Marshal leaves out themes: {}
 	}
 	for i, f := range fields {
 		p := &c.Panels[i]
@@ -169,6 +178,7 @@ func Marshal(c Config) ([]byte, error) {
 	if c.Theme != "" {
 		fmt.Fprintf(&b, "theme: %s\n", scalarString(string(c.Theme)))
 	}
+	writeThemes(&b, c.Themes)
 	fmt.Fprintf(&b, "grid:\n  columns: %d\n  row_height: %d\n", c.Grid.Columns, c.Grid.RowHeight)
 	if len(c.Panels) == 0 {
 		b.WriteString("panels: []\n")

@@ -30,6 +30,7 @@ func configureWindow(t *testing.T) (*windowConfig, *layoutSaver, *[]config.Confi
 		toast:   &ui.Toaster{},
 		apply:   func(c config.Config) { applied = append(applied, c) },
 		redraw:  func() {},
+		logf:    t.Logf,
 	}
 	return w, layouts, &applied
 }

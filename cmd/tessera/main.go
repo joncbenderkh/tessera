@@ -80,8 +80,7 @@ func start(configPath, pluginsDir, debugSocket string) error {
 			return fmt.Errorf("--debug-socket: %w", err)
 		}
 	}
-	saver := &themeSaver{path: configPath, done: make(chan error, 1), invalidate: window.Invalidate}
-	layouts := &layoutSaver{path: configPath, done: make(chan error, 1), invalidate: window.Invalidate}
+	saver, layouts := newSavers(configPath, window.Invalidate)
 	signals := make(chan os.Signal, 1)
 	// SIGHUP too: plugins run in their own process groups, so a closed
 	// terminal reaches only the host.

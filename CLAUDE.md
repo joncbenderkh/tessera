@@ -65,10 +65,11 @@ dialogs). Edit mode must be able to re-enable any disabled panel.
     launches them with `github.com/hashicorp/go-plugin` itself.
 - **Config:** one YAML file, `tessera/config.yaml` in the user config
   directory (`$XDG_CONFIG_HOME`, or `~/.config`), holds the
-  theme, the grid, panel placement and enabled state, and per-panel
-  settings. YAML was the owner's choice over TOML and JSON: compact for
-  a list of panels with nested settings, and it allows comments. It is
-  parsed with `github.com/goccy/go-yaml` and decoded strictly so unknown
+  theme and the themes' colours, the grid, panel placement and
+  enabled state, and per-panel settings. YAML was the owner's
+  choice over TOML and JSON: compact for a list of panels with
+  nested settings, and it allows comments. It is parsed with
+  `github.com/goccy/go-yaml` and decoded strictly so unknown
   fields are errors. goccy resolves some plain scalars by YAML 1.1 rules
   (`017` as octal, `<<` as a merge), so panel settings are taken out of
   its syntax tree and resolved by YAML 1.2's core schema in
@@ -137,8 +138,11 @@ dialogs). Edit mode must be able to re-enable any disabled panel.
   `modalLayer`, under which `uidebug` takes what was drawn before for
   covered (markers named in `internal/uimark`).
   `internal/ui/theme`
-  holds the design tokens (dark and light palettes, spacing, radius, and
+  holds the design tokens (the palette shown, spacing, radius, and
   type scales) taken from `docs/design`.
+- `internal/palette`: the colour tokens without the GUI: the built-in
+  dark and light palettes, the colour syntax themes are written in,
+  and the contrast check, shared by `internal/config` and the window.
 - `internal/pluginhost`: finding, launching, describing, configuring,
   supervising, and shutting down plugins, one process per enabled
   panel: restarts with backoff, panel states, each panel's logs, its
@@ -301,7 +305,10 @@ at a place from Open-Meteo (#22). A click on the header's plugin
 status lists the panels needing attention, each with its Restart and
 Logs; a window 1000 dp wide or narrower shows the status's dot alone
 (#17). The services panel shows the state of systemd units, the
-system's and the user's, and restarts the user's own (#23).
+system's and the user's, and restarts the user's own (#23). The config's
+`themes` overrides the built-in themes' colours and adds named custom
+themes, which the header's theme toggle steps through; colours hard to
+read are warned of, not refused (TESS-3).
 
 ## Git workflow
 

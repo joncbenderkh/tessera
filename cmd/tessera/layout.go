@@ -3,6 +3,7 @@
 package main
 
 import (
+	"fmt"
 	"log"
 	"os"
 	"path/filepath"
@@ -10,8 +11,11 @@ import (
 	"slices"
 	"sync"
 
+	"gioui.org/text"
+
 	"github.com/joncbenderkh/tessera/internal/config"
 	"github.com/joncbenderkh/tessera/internal/ui"
+	"github.com/joncbenderkh/tessera/internal/ui/theme"
 )
 
 // saveMu keeps the host's writes to the config file apart: Update gives
@@ -191,6 +195,13 @@ func (s *layoutSaver) forget(n int) {
 	s.log = slices.DeleteFunc(s.log, func(c numbered) bool { return c.n <= n })
 }
 
+// watched reports whether the file is watched, as until unwatch.
+func (s *layoutSaver) watched() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return !s.unwatched
+}
+
 // unwatch stops keeping changes for reloads, which no longer come.
 func (s *layoutSaver) unwatch() {
 	s.mu.Lock()
@@ -256,14 +267,17 @@ func reloaded(c config.Config, err error, layouts *layoutSaver, apply func(confi
 // current: the reloads of the config file and the layout changes made
 // in the window, which go to the plugins and the file.
 type windowConfig struct {
-	cfg      config.Config
-	dark     bool // the theme showing
-	fileDark bool // the theme the config file held at the latest reload
-	reloads  <-chan reload
-	layouts  *layoutSaver
-	themes   *themeSaver
-	toast    *ui.Toaster
-	apply    func(config.Config) // gives the plugins a config
+	cfg       config.Config
+	theme     config.Theme                     // the theme showing
+	fileTheme config.Theme                     // the theme the config file held at the latest reload
+	look      int                              // counts changes to the theme showing or its colours
+	warned    []string                         // the contrast warnings reported for cfg's themes
+	logf      func(format string, args ...any) // log.Printf if nil
+	reloads   <-chan reload
+	layouts   *layoutSaver
+	themes    *themeSaver
+	toast     *ui.Toaster
+	apply     func(config.Config) // gives the plugins a config
 	// reconfigure has the panel's plugin configured again from the
 	// config, as after a trial whose settings were not saved.
 	reconfigure func(id string)
@@ -303,10 +317,68 @@ func (w *windowConfig) takeReloadLocked() {
 	// Applied again, since a change the plugins got with the reload may
 	// have failed to save since.
 	w.apply(w.cfg)
-	was := w.fileDark
-	w.fileDark = w.cfg.Theme != config.ThemeLight
-	w.dark = themeOnReload(w.dark, was, w.fileDark, w.themes.pending())
+	was := w.fileTheme
+	w.fileTheme = w.cfg.Theme.OrDefault()
+	w.setTheme(themeOnReload(w.theme, was, w.fileTheme, w.themes.pending(), w.cfg.Offers))
+	w.warnContrast()
 }
+
+// setTheme shows theme t, with the colours cfg gives it; a reload
+// that changes them is a new look even when t stays.
+func (w *windowConfig) setTheme(t config.Theme) {
+	w.theme = t
+	w.look++
+}
+
+// themeLook is the theme to draw with, the theme showing in cfg's
+// colours, and the name of the theme the header's toggle switches to
+// and whether that one is dark.
+func (w *windowConfig) themeLook(shaper *text.Shaper) (*theme.Theme, string, bool) {
+	p, dark := w.cfg.Palette(w.theme)
+	next := w.cfg.NextTheme(w.theme)
+	_, nextDark := w.cfg.Palette(next)
+	return &theme.Theme{Palette: p, Shaper: shaper, Dark: dark}, string(next), nextDark
+}
+
+// warnContrast reports the contrast warnings for cfg's themes, in the
+// log and a toast, when they differ from those reported last.
+func (w *windowConfig) warnContrast() {
+	warnings := w.cfg.ContrastWarnings()
+	if slices.Equal(warnings, w.warned) {
+		return
+	}
+	logf := w.logf
+	if logf == nil {
+		logf = log.Printf
+	}
+	// The log gets what changed: new warnings, how many are left when
+	// only some went, and the end of them all.
+	added := false
+	for _, line := range warnings {
+		if !slices.Contains(w.warned, line) {
+			logf("hard to read: %s", line)
+			added = true
+		}
+	}
+	if !added && len(warnings) > 0 {
+		logf("%d theme colour warnings remain, as logged before", len(warnings))
+	}
+	w.warned = warnings
+	if len(warnings) == 0 {
+		logf("theme colours are readable again")
+		w.toast.Drop(contrastToast)
+		return
+	}
+	text := "Hard to read: " + warnings[0]
+	if more := len(warnings) - 1; more > 0 {
+		text += fmt.Sprintf(" (and %d more; see the log)", more)
+	}
+	w.toast.Put(contrastToast, text)
+}
+
+// contrastToast is the kind of toast that warns of theme colours hard
+// to read.
+const contrastToast = "contrast"
 
 // change applies the layout change a asks for at once, and saves it,
 // and reports whether it changed the grid shown. One that does not is

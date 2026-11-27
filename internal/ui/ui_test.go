@@ -97,6 +97,101 @@ func TestHeaderLayout(t *testing.T) {
 	}
 }
 
+func TestHeaderThemeToggle(t *testing.T) {
+	var r input.Router
+	light := theme.New(false, theme.NewShaper(false))
+	for _, tt := range []struct {
+		name     string
+		th       *theme.Theme
+		next     string
+		nextDark bool
+		desc     string
+		halfDisc bool
+	}{
+		{"built-in dark", testTheme, "", false, "Switch to light theme", false},
+		{"built-in light", light, "", false, "Switch to dark theme", true},
+		{"to a light custom theme", testTheme, "paper", false, "Switch to paper theme", false},
+		{"to a dark custom theme", light, "dusk", true, "Switch to dusk theme", true},
+		{"from a custom theme to dark", light, "dark", true, "Switch to dark theme", true},
+	} {
+		h := Header{NextTheme: tt.next, NextDark: tt.nextDark}
+		h.Layout(context(&r, image.Pt(1440, 900), time.Now()), tt.th, Status{})
+		if h.Theme.Description != tt.desc || (h.Theme.Draw != nil) != tt.halfDisc {
+			t.Errorf("%s: %q, half disc %t; want %q, %t", tt.name, h.Theme.Description, h.Theme.Draw != nil, tt.desc, tt.halfDisc)
+		}
+	}
+}
+
+func TestHeaderThemeTip(t *testing.T) {
+	var r input.Router
+	h := Header{NextTheme: "paper"}
+	size := image.Pt(1440, 900)
+	frame := func() {
+		gtx := context(&r, size, time.Now())
+		h.Layout(gtx, testTheme, Status{})
+		h.LayoutTip(gtx, testTheme)
+		r.Frame(gtx.Ops)
+	}
+	frame()
+	if !h.tipAt.Empty() {
+		t.Fatalf("a tip at %v with no pointer over the toggle", h.tipAt)
+	}
+	c := h.themeAt.Min.Add(h.themeAt.Size().Div(2))
+	r.Queue(pointer.Event{Kind: pointer.Move, Source: pointer.Mouse, Position: f32.Pt(float32(c.X), float32(c.Y))})
+	frame()
+	if h.tipAt.Empty() || h.tipAt.Max.X != h.themeAt.Max.X || h.tipAt.Min.Y <= h.themeAt.Max.Y || h.tipAt.Min.X < 0 {
+		t.Fatalf("tip at %v, want it below the toggle at %v, their ends lined up", h.tipAt, h.themeAt)
+	}
+	if h.Theme.Description != "Switch to paper theme" {
+		t.Errorf("the tip says %q", h.Theme.Description)
+	}
+	// It goes after TipFor.
+	late := context(&r, size, time.Now().Add(TipFor))
+	h.Layout(late, testTheme, Status{})
+	h.LayoutTip(late, testTheme)
+	r.Frame(late.Ops)
+	if !h.tipAt.Empty() {
+		t.Errorf("a tip at %v after TipFor", h.tipAt)
+	}
+	// A click that changes the next theme puts it up again.
+	h.NextTheme = "dusk"
+	h.Layout(late, testTheme, Status{})
+	h.LayoutTip(late, testTheme)
+	if h.tipAt.Empty() || h.Theme.Description != "Switch to dusk theme" {
+		t.Errorf("tip at %v saying %q, want it back for dusk", h.tipAt, h.Theme.Description)
+	}
+	r.Queue(pointer.Event{Kind: pointer.Move, Source: pointer.Mouse, Position: f32.Pt(10, 400)})
+	frame()
+	if !h.tipAt.Empty() {
+		t.Errorf("a tip at %v once the pointer left the toggle", h.tipAt)
+	}
+
+	// Under a dialog, the header is disabled and hears no pointer, not
+	// even leaving: the tip stays down once the dialog closes.
+	r.Queue(pointer.Event{Kind: pointer.Move, Source: pointer.Mouse, Position: f32.Pt(float32(c.X), float32(c.Y))})
+	frame()
+	if h.tipAt.Empty() {
+		t.Fatal("no tip back over the toggle")
+	}
+	disabled := func() {
+		gtx := context(&r, size, time.Now()).Disabled()
+		h.Layout(gtx, testTheme, Status{})
+		h.LayoutTip(gtx, testTheme)
+		r.Frame(gtx.Ops)
+	}
+	disabled()
+	if !h.tipAt.Empty() {
+		t.Errorf("a tip at %v under a dialog", h.tipAt)
+	}
+	r.Queue(pointer.Event{Kind: pointer.Move, Source: pointer.Mouse, Position: f32.Pt(10, 400)})
+	disabled()
+	frame()
+	frame()
+	if !h.tipAt.Empty() {
+		t.Errorf("a tip at %v after the dialog closed, the pointer elsewhere", h.tipAt)
+	}
+}
+
 func TestButtonFitsLargeText(t *testing.T) {
 	var r input.Router
 	gtx := context(&r, image.Pt(400, 400), time.Now())
