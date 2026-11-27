@@ -55,6 +55,7 @@ type Header struct {
 	// so Theme may still read as hovered once the pointer has gone.
 	tipBlocked bool
 	tipSince   time.Time       // when the tip went up
+	tipText    string          // what the tip said then
 	tipAt      image.Rectangle // where LayoutTip last drew; for tests
 }
 
@@ -238,8 +239,9 @@ func (h *Header) LayoutTip(gtx layout.Context, th *theme.Theme) {
 	}
 	// It goes after TipFor, since a pointer that leaves the window from
 	// the toggle may never be heard leaving it.
-	if h.tipSince.IsZero() {
-		h.tipSince = gtx.Now
+	// A click that changes the next theme puts it up again.
+	if h.tipSince.IsZero() || h.tipText != h.Theme.Description {
+		h.tipSince, h.tipText = gtx.Now, h.Theme.Description
 	}
 	if end := h.tipSince.Add(TipFor); gtx.Now.Before(end) {
 		gtx.Execute(op.InvalidateCmd{At: end})

@@ -153,6 +153,13 @@ func TestHeaderThemeTip(t *testing.T) {
 	if !h.tipAt.Empty() {
 		t.Errorf("a tip at %v after TipFor", h.tipAt)
 	}
+	// A click that changes the next theme puts it up again.
+	h.NextTheme = "dusk"
+	h.Layout(late, testTheme, Status{})
+	h.LayoutTip(late, testTheme)
+	if h.tipAt.Empty() || h.Theme.Description != "Switch to dusk theme" {
+		t.Errorf("tip at %v saying %q, want it back for dusk", h.tipAt, h.Theme.Description)
+	}
 	r.Queue(pointer.Event{Kind: pointer.Move, Source: pointer.Mouse, Position: f32.Pt(10, 400)})
 	frame()
 	if !h.tipAt.Empty() {
