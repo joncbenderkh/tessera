@@ -101,6 +101,8 @@ func TestParseThemesErrors(t *testing.T) {
 		{"merge key", "themes:\n  dusk:\n    <<: {fg: '#111'}\n", "merge keys are not supported"},
 		{"tagged name", "themes:\n  !!null x: {}\n", "line 7: themes: a theme's name may not use the !!null tag"},
 		{"hex as a number", "themes:\n  dark:\n    bg: 0x1e1e2e\n", "line 8: themes.dark.bg: 0x1e1e2e is not a colour; quote it"},
+		{"tagged string number", "themes:\n  dark:\n    bg: !!str 0x1e\n", "line 8: themes.dark.bg: 0x1e is not a colour; quote it"},
+		{"tagged number", "themes:\n  dark:\n    bg: !!int 5\n", "line 8: themes.dark.bg: 5 is not a colour; quote it"},
 		{"number base", "themes:\n  dusk:\n    base: 1\n", `line 8: themes.dusk.base: 1 must be "dark" or "light"`},
 		{"yes base", "themes:\n  dusk:\n    base: yes\n", `base must be "dark" or "light", got "yes"`},
 		{"empty base", "themes:\n  dusk:\n    base: \"\"\n", "line 8: themes.dusk.base is empty; leave it out to use dark"},

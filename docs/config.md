@@ -145,6 +145,8 @@ themes:
 A colour is CSS hex, `#rgb` or `#rrggbb`, or `oklch(L C H)`: lightness
 from 0 to 1 (or 0% to 100%), chroma from 0 to 1, and hue in degrees, as in
 `oklch(0.72 0.14 150)`. Colours outside sRGB are clamped into it.
+This is a subset of CSS: `oklch` is written in lowercase, chroma takes
+no `%`, hue takes no unit such as `deg`, and there is no alpha.
 Quote hex colours: `#` starts a YAML comment, so `bg: #1e1e2e` leaves
 `bg` empty, which is an error.
 

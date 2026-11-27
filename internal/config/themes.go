@@ -258,7 +258,7 @@ func checkThemes(file *ast.File) error {
 			case !isString:
 				// The decoder would turn 0x1e1e2e into 1973806, which the
 				// file does not say.
-				if text := asWritten(pair.Value); text != nil {
+				if text := asWritten(v); text != nil {
 					want := "is not a colour; quote it"
 					if key == "base" {
 						want = `must be "dark" or "light"`
