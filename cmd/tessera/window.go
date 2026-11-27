@@ -182,8 +182,7 @@ func run(window *app.Window, plugins *pluginhost.Manager, pluginDir string, cfg 
 			w.takeReload()
 			select {
 			case err := <-saver.done:
-				// Unless a reload has shown another theme since.
-				if failed := (*themeSaveError)(nil); !errors.As(err, &failed) || failed.theme == w.theme {
+				if w.reportSaveError(err) {
 					toast.Show("Theme not saved; it applies until tessera restarts: " + err.Error())
 				}
 			default:
@@ -491,10 +490,28 @@ func (s *themeSaver) save(t config.Theme) {
 	}()
 }
 
+// newSavers returns the savers of the config file at path, the theme's
+// told whether the layout saver still watches the file.
+func newSavers(path string, invalidate func()) (*themeSaver, *layoutSaver) {
+	layouts := &layoutSaver{path: path, done: make(chan error, 1), invalidate: invalidate}
+	return &themeSaver{path: path, done: make(chan error, 1), invalidate: invalidate, watched: layouts.watched}, layouts
+}
+
 // themeSaveError is a failed save of theme.
 type themeSaveError struct {
 	theme config.Theme
 	err   error
+}
+
+// reportSaveError reports whether the theme saver's err is still worth
+// showing: not once a reload shows another theme, nor once the file
+// holds the theme anyway.
+func (w *windowConfig) reportSaveError(err error) bool {
+	var failed *themeSaveError
+	if !errors.As(err, &failed) {
+		return true
+	}
+	return failed.theme == w.theme && failed.theme != w.fileTheme
 }
 
 func (e *themeSaveError) Error() string { return e.err.Error() }

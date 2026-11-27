@@ -229,6 +229,17 @@ func TestThemeSaverDroppedTheme(t *testing.T) {
 	}
 }
 
+func TestNewSaversWatched(t *testing.T) {
+	saver, layouts := newSavers(filepath.Join(t.TempDir(), "config.yaml"), func() {})
+	if !saver.watched() {
+		t.Fatal("not watched before unwatch")
+	}
+	layouts.unwatch()
+	if saver.watched() {
+		t.Error("the theme saver still reads the file as watched after unwatch")
+	}
+}
+
 func TestThemeSaverPending(t *testing.T) {
 	release := make(chan struct{})
 	s := &themeSaver{done: make(chan error, 1), invalidate: func() {},

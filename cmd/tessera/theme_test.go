@@ -3,6 +3,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"image"
 	"image/color"
@@ -140,5 +141,30 @@ func TestWarnContrastOnce(t *testing.T) {
 	w.warnContrast()
 	if len(logged) != 1 || !strings.Contains(logged[0], "readable again") {
 		t.Fatalf("logged %q, want one line saying the colours are readable again", logged)
+	}
+}
+
+func TestReportSaveError(t *testing.T) {
+	w := &windowConfig{theme: config.ThemeLight, fileTheme: config.ThemeDark}
+	failed := func(th config.Theme) error {
+		return &themeSaveError{theme: th, err: errors.New("disk full")}
+	}
+	for _, tc := range []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"theme showing", failed(config.ThemeLight), true},
+		{"another theme showing since", failed("dusk"), false},
+		{"not a theme save", errors.New("cannot read"), true},
+	} {
+		if got := w.reportSaveError(tc.err); got != tc.want {
+			t.Errorf("%s: reportSaveError = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+	// An edit has put the theme showing in the file, so it is saved.
+	w.fileTheme = config.ThemeLight
+	if w.reportSaveError(failed(config.ThemeLight)) {
+		t.Error("reportSaveError = true for a theme the file holds")
 	}
 }
